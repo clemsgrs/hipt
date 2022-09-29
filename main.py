@@ -4,6 +4,7 @@ import hydra
 import numpy as np
 from PIL import Image
 from pathlib import Path
+from torchvision import transforms
 
 from models import HIPT_4096
 from utils import extract_coord_from_path
@@ -48,6 +49,9 @@ def main(cfg):
             stacked_patches[i] = patch_arr
     
     print(f'stacked_patches.shape: {stacked_patches.shape}')
+
+    logits, preds, y_hat = hipt(transforms.ToTensor(stacked_patches))
+    print(preds)
 
 if __name__ == '__main__':
 	

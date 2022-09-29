@@ -2,7 +2,7 @@ data_dir: '../hs2p/output/'
 
 size: 'small'
 dropout: 0.25
-num_classes: 4
+num_classes: 2
 
 pretrain_256: 'checkpoints/vit_256_small_dino.pth'
 freeze_256: False

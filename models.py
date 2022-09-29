@@ -1,9 +1,11 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
 from pathlib import Path
 from typing import Optional
 from functools import partial
+from torchvision import transforms
 
 from vision_transformer import vit_small, vit4k_xs
 from model_utils import Attn_Net_Gated
@@ -359,7 +361,8 @@ class HIPT_4096(nn.Module):
         for m in range(M):
             # region = [3, 4096, 4096]
             region = x[m]
-            batch_256, w_256, h_256 = self.prepare_img_tensor(region)               # 1. [1, 3, W, H] 
+            # batch_256 = region.unsqueeze(0)                                       # 1. [1, 3, W, H] 
+            batch_256, _, _ = self.prepare_img_tensor(region.unsqueeze(0))          # 1. [1, 3, W, H] 
             batch_256 = batch_256.unfold(2, 256, 256).unfold(3, 256, 256)           # 2. [1, 3, 16, 16, 256, 256] 
             batch_256 = rearrange(batch_256, 'b c p1 p2 w h -> (b p1 p2) c w h')    # 3. [256, 3, 256, 256]
 
@@ -387,3 +390,11 @@ class HIPT_4096(nn.Module):
         logits = self.classifier(features_WSI)
         Y_hat = torch.topk(logits, 1, dim = 1)[1]
         return logits, F.softmax(logits, dim=1), Y_hat
+    
+    def prepare_img_tensor(self, img: torch.Tensor, patch_size=256):
+        make_divisble = lambda l, patch_size: (l - (l % patch_size))
+        b, c, w, h = img.shape
+        load_size = make_divisble(w, patch_size), make_divisble(h, patch_size)
+        w_256, h_256 = w // patch_size, h // patch_size
+        img_new = transforms.CenterCrop(load_size)(img)
+        return img_new, w_256, h_256
