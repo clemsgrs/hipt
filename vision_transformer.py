@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 from pathlib import Path
 from functools import partial
+from typing import Optional, Callable
 
 
 def _no_grad_trunc_normal_(tensor, mean, std, a, b):
@@ -45,7 +46,6 @@ def _no_grad_trunc_normal_(tensor, mean, std, a, b):
 def trunc_normal_(tensor, mean=0., std=1., a=-2., b=2.):
     # type: (Tensor, float, float, float, float) -> Tensor
     return _no_grad_trunc_normal_(tensor, mean, std, a, b)
-
 
 
 def drop_path(x, drop_prob: float = 0., training: bool = False):
@@ -151,6 +151,7 @@ class PatchEmbed(nn.Module):
 
     def forward(self, x):
         B, C, H, W = x.shape
+        x = x.to(torch.float32)
         x = self.proj(x).flatten(2).transpose(1, 2)
         return x
 
@@ -320,28 +321,28 @@ class VisionTransformer4K(nn.Module):
     """ Vision Transformer 4K """
     def __init__(
         self,
-        num_classes=0,
-        img_size=224,
-        input_embed_dim=384,
-        output_embed_dim=192,
-        depth=12,
-        num_heads=12,
-        mlp_ratio=4.,
-        qkv_bias=False,
-        qk_scale=None,
-        drop_rate=0.,
-        attn_drop_rate=0.,
-        drop_path_rate=0.,
-        norm_layer=nn.LayerNorm,
-        num_prototypes=64,
+        num_classes: int = 0,
+        img_size: int = 4096,
+        patch_size: int = 16,
+        input_embed_dim: int = 384,
+        output_embed_dim: int = 192,
+        depth: int = 12,
+        num_heads: int = 12,
+        mlp_ratio: float = 4.,
+        qkv_bias: bool = False,
+        qk_scale: Optional[float] = None,
+        drop_rate: float = 0.,
+        attn_drop_rate: float = 0.,
+        drop_path_rate: float = 0.,
+        norm_layer: Callable = nn.LayerNorm,
         ):
 
         super().__init__()
         embed_dim = output_embed_dim
         self.num_features = self.embed_dim = embed_dim
         self.phi = nn.Sequential(*[nn.Linear(input_embed_dim, output_embed_dim), nn.GELU(), nn.Dropout(p=drop_rate)])
-        num_patches = int(img_size // 16)**2
-        print("# of Patches:", num_patches)
+        num_patches = int(img_size // patch_size)**2
+        print(f'Number of [{patch_size},{patch_size}] patches in [{img_size},{img_size}] image num_patches: {num_patches}')
         
         self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
         self.pos_embed = nn.Parameter(torch.zeros(1, num_patches + 1, embed_dim))
@@ -440,6 +441,7 @@ class VisionTransformer4K(nn.Module):
 
 def vit4k_xs(
     img_size: int = 4096,
+    patch_size: int = 16,
     input_embed_dim: int = 384,
     output_embed_dim: int = 192,
     num_classes: int = 0,
@@ -449,6 +451,7 @@ def vit4k_xs(
         input_embed_dim=input_embed_dim,
         output_embed_dim=output_embed_dim,
         img_size=img_size,
+        patch_size=patch_size,
         depth=6,
         num_heads=6,
         mlp_ratio=4, 

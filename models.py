@@ -4,11 +4,13 @@ import torch.nn.functional as F
 
 from pathlib import Path
 from typing import Optional
+from einops import rearrange
 from functools import partial
 from torchvision import transforms
 
 from vision_transformer import vit_small, vit4k_xs
 from model_utils import Attn_Net_Gated
+from utils import update_state_dict
 
 
 class GlobalHIPT(nn.Module):
@@ -286,9 +288,10 @@ class HIPT_4096(nn.Module):
         super(HIPT_4096, self).__init__()
         self.size_dict_path = {"small": [384, 192, 192], "big": [1024, 512, 384]}
         size = self.size_dict_path[size_arg]
+        checkpoint_key = 'teacher'
 
-        device_256 = torch.device('cuda:0')
-        device_4096 = torch.device('cuda:1')
+        self.device_256 = torch.device('cuda:0')
+        self.device_4096 = torch.device('cuda:1')
 
         self.vit_256 = vit_small(img_size=256, patch_size=16, embed_dim=384)
 
@@ -302,17 +305,22 @@ class HIPT_4096(nn.Module):
             state_dict = {k.replace('module.', ''): v for k, v in state_dict.items()}
             # remove `backbone.` prefix induced by multicrop wrapper
             state_dict = {k.replace('backbone.', ''): v for k, v in state_dict.items()}
-            msg = self.vit_256.load_state_dict(state_dict, strict=False)
-            print(f'Pretrained weights found at {pretrain_256} and loaded with msg: {msg}')
+            state_dict, msg = update_state_dict(self.vit_256.state_dict(), state_dict)
+            self.vit_256.load_state_dict(state_dict, strict=False)
+            print(f'Pretrained weights found at {pretrain_256}')
+            print(msg)
         
         if freeze_256:
             print('Freezing pretrained ViT_256 model')
             for param in self.vit_256.parameters():
                 param.requires_grad = False
             print('Done')
+        
+        self.vit_256.to(self.device_256)
 
         self.vit_4096 = vit4k_xs(
             img_size=4096,
+            patch_size=256,
             input_embed_dim=384,
             output_embed_dim=192,
             num_classes=0,
@@ -328,56 +336,71 @@ class HIPT_4096(nn.Module):
             state_dict = {k.replace('module.', ''): v for k, v in state_dict.items()}
             # remove `backbone.` prefix induced by multicrop wrapper
             state_dict = {k.replace('backbone.', ''): v for k, v in state_dict.items()}
-            msg = self.vit_4096.load_state_dict(state_dict, strict=False)
-            print(f'Pretrained weights found at {pretrain_4096} and loaded with msg: {msg}')
+            state_dict, msg = update_state_dict(self.vit_4096.state_dict(), state_dict)
+            self.vit_4096.load_state_dict(state_dict, strict=False)
+            print(f'Pretrained weights found at {pretrain_4096}')
+            print(msg)
 
         if freeze_4096:
             print('Freezing pretrained ViT_4096 model')
             for param in self.vit_4096.parameters():
                 param.requires_grad = False
             print('Done')
+        
+        self.vit_4096.to(self.device_4096)
 
         # Global aggregation
         
-        self.global_phi = nn.Sequential(nn.Linear(192, 192), nn.ReLU(), nn.Dropout(0.25))
+        self.global_phi = nn.Sequential(nn.Linear(192, 192), nn.ReLU(), nn.Dropout(0.25)).to(self.device_4096)
         self.global_transformer = nn.TransformerEncoder(
             nn.TransformerEncoderLayer(
                 d_model=192, nhead=3, dim_feedforward=192, dropout=0.25, activation='relu'
             ), 
             num_layers=2
-        )
-        self.global_attn_pool = Attn_Net_Gated(L=size[1], D=size[1], dropout=0.25, num_classes=1)
-        self.global_rho = nn.Sequential(*[nn.Linear(size[1], size[1]), nn.ReLU(), nn.Dropout(0.25)])
+        ).to(self.device_4096)
+        self.global_attn_pool = Attn_Net_Gated(L=size[1], D=size[1], dropout=0.25, num_classes=1).to(self.device_4096)
+        self.global_rho = nn.Sequential(*[nn.Linear(size[1], size[1]), nn.ReLU(), nn.Dropout(0.25)]).to(self.device_4096)
 
-        self.classifier = nn.Linear(size[1], num_classes)
+        self.classifier = nn.Linear(size[1], num_classes).to(self.device_4096)
         
 
     def forward(self, x):
         
         # x = [M, 3, 4096, 4096]
         M = x.shape[0]
+        # print(f'x.shape: {x.shape}')
         
         features_4096 = []
         for m in range(M):
             # region = [3, 4096, 4096]
             region = x[m]
-            # batch_256 = region.unsqueeze(0)                                       # 1. [1, 3, W, H] 
-            batch_256, _, _ = self.prepare_img_tensor(region.unsqueeze(0))          # 1. [1, 3, W, H] 
-            batch_256 = batch_256.unfold(2, 256, 256).unfold(3, 256, 256)           # 2. [1, 3, 16, 16, 256, 256] 
+            # print(f'region.shape: {region.shape}')
+            batch_256 = region.unsqueeze(0)                               # 1. [1, 3, 4096, 4096]
+            # print(f'batch_256.shape: {batch_256.shape}')
+            batch_256, _, _ = self.prepare_img_tensor(batch_256)          # 1. [1, 3, 4096, 4096]
+            # print(f'batch_256.shape: {batch_256.shape}')
+            batch_256 = batch_256.unfold(2, 256, 256).unfold(3, 256, 256)           # 2. [1, 3, 16, 16, 256, 256]
+            # print(f'batch_256.shape: {batch_256.shape}')
             batch_256 = rearrange(batch_256, 'b c p1 p2 w h -> (b p1 p2) c w h')    # 3. [256, 3, 256, 256]
-
+            # print(f'batch_256.shape: {batch_256.shape}')
+            batch_256 = batch_256.to(self.device_256, non_blocking=True)
+            
             features_256 = self.vit_256(batch_256).detach().cpu() # [256, 384]
-        
+            # print(f'features_256.shape: {features_256.shape}')
+
             features_256 = features_256.reshape(16, 16, 384)
             features_256 = features_256.transpose(0,1)
             features_256 = features_256.transpose(0,2)
             features_256 = features_256.unsqueeze(0)
+            # print(f'features_256.shape: {features_256.shape}')
             features_256 = features_256.to(self.device_4096, non_blocking=True)
 
             feature_4096 = self.vit_4096.forward(features_256)
+            # print(f'feature_4096.shape: {feature_4096.shape}')
             features_4096.append(feature_4096) # [1, 192]
         
         features_4096 = torch.vstack(features_4096) # [M, 192]
+        print(f'features_4096.shape: {features_4096.shape}')
         
         features_4096 = self.global_phi(features_4096)
         features_4096 = self.global_transformer(features_4096.unsqueeze(1)).squeeze(1)
@@ -388,8 +411,8 @@ class HIPT_4096(nn.Module):
         features_WSI = self.global_rho(features_4096_att)
 
         logits = self.classifier(features_WSI)
-        Y_hat = torch.topk(logits, 1, dim = 1)[1]
-        return logits, F.softmax(logits, dim=1), Y_hat
+
+        return logits
     
     def prepare_img_tensor(self, img: torch.Tensor, patch_size=256):
         make_divisble = lambda l, patch_size: (l - (l % patch_size))
