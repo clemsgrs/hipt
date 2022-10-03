@@ -351,17 +351,17 @@ class HIPT_4096(nn.Module):
 
         # Global aggregation
         
-        self.global_phi = nn.Sequential(nn.Linear(192, 192), nn.ReLU(), nn.Dropout(0.25)).to(self.device_4096)
+        self.global_phi = nn.Sequential(nn.Linear(192, 192), nn.ReLU(), nn.Dropout(0.25)).to(self.device_256)
         self.global_transformer = nn.TransformerEncoder(
             nn.TransformerEncoderLayer(
                 d_model=192, nhead=3, dim_feedforward=192, dropout=0.25, activation='relu'
             ), 
             num_layers=2
-        ).to(self.device_4096)
-        self.global_attn_pool = Attn_Net_Gated(L=size[1], D=size[1], dropout=0.25, num_classes=1).to(self.device_4096)
-        self.global_rho = nn.Sequential(*[nn.Linear(size[1], size[1]), nn.ReLU(), nn.Dropout(0.25)]).to(self.device_4096)
+        ).to(self.device_256)
+        self.global_attn_pool = Attn_Net_Gated(L=size[1], D=size[1], dropout=0.25, num_classes=1).to(self.device_256)
+        self.global_rho = nn.Sequential(*[nn.Linear(size[1], size[1]), nn.ReLU(), nn.Dropout(0.25)]).to(self.device_256)
 
-        self.classifier = nn.Linear(size[1], num_classes).to(self.device_4096)
+        self.classifier = nn.Linear(size[1], num_classes).to(self.device_256)
         
 
     def forward(self, x):
@@ -399,6 +399,7 @@ class HIPT_4096(nn.Module):
         features_4096 = torch.stack(features_4096, dim=1) # [B, M, 192]
         # print(f'features_4096.shape: {features_4096.shape}')
         
+        features_4096 = features_4096.to(self.device_256, non_blocking=True)
         features_4096 = self.global_phi(features_4096.squeeze(0))
         # print(f'features_4096.shape: {features_4096.shape}')
         features_4096 = self.global_transformer(features_4096.unsqueeze(1)).squeeze(1)

@@ -106,7 +106,7 @@ def train(
 
             optimizer.zero_grad()
             idx, stacked_tiles, label = batch
-            stacked_tiles, label = stacked_tiles.cuda(device='cuda:1'), label.cuda(device='cuda:1')
+            stacked_tiles, label = stacked_tiles.cuda(device='cuda:1'), label.cuda(device='cuda:0')
             logits = model(stacked_tiles)
             loss = criterion(logits, label)
             loss.backward()
@@ -154,7 +154,7 @@ def tune(
         unit=' tensor',
         ncols=80,
         unit_scale=batch_size,
-        position=0,
+        position=1,
         leave=True) as t:
 
         with torch.no_grad():
@@ -162,7 +162,7 @@ def tune(
             for i, batch in enumerate(t):
 
                 idx, stacked_tiles, label = batch
-                stacked_tiles, label = stacked_tiles.cuda(device='cuda:1'), label.cuda(device='cuda:1')
+                stacked_tiles, label = stacked_tiles.cuda(device='cuda:1'), label.cuda(device='cuda:0')
                 logits = model(stacked_tiles)
                 loss = criterion(logits, label.float())
                 

@@ -40,9 +40,9 @@ class StackedTilesDataset(torch.utils.data.Dataset):
             tiles_list,
             desc=(f'{slide_id}'),
             unit=' tiles',
-            ncols=100,
-            position=1,
-            leave=True) as t:
+            ncols=40,
+            position=2,
+            leave=False) as t:
 
             for i, tp in enumerate(t):
                 
