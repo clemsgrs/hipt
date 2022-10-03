@@ -1,10 +1,20 @@
 data_dir: 'data/'
+output_dir: 'output/'
 
 size: 'small'
-num_classes: 2
+num_classes: 1
+nepochs: 20
+eval_every: 1
+lr: 0.0001
+lr_scheduler:
+lr_step: 15
 dropout: 0.25
 
 train_batch_size: 1
+tune_batch_size: 1
+
+tracking: 'loss'
+metric_objective: 'max'
 
 pretrain_256: 'checkpoints/vit_256_small_dino.pth'
 freeze_256: True

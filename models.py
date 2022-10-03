@@ -366,26 +366,23 @@ class HIPT_4096(nn.Module):
 
     def forward(self, x):
         
-        # x = [M, 3, 4096, 4096]
-        M = x.shape[0]
+        # x = [B, M, 3, 4096, 4096]
+        M = x.shape[1]
         # print(f'x.shape: {x.shape}')
         
         features_4096 = []
         for m in range(M):
-            # region = [3, 4096, 4096]
-            region = x[m]
-            # print(f'region.shape: {region.shape}')
-            batch_256 = region.unsqueeze(0)                               # 1. [1, 3, 4096, 4096]
+            batch_256 = x[:, m, ...]                                        # 1. [B, 3, 4096, 4096]
             # print(f'batch_256.shape: {batch_256.shape}')
-            batch_256, _, _ = self.prepare_img_tensor(batch_256)          # 1. [1, 3, 4096, 4096]
+            batch_256, _, _ = self.prepare_img_tensor(batch_256)            # 1. [B, 3, 4096, 4096]
             # print(f'batch_256.shape: {batch_256.shape}')
-            batch_256 = batch_256.unfold(2, 256, 256).unfold(3, 256, 256)           # 2. [1, 3, 16, 16, 256, 256]
+            batch_256 = batch_256.unfold(2, 256, 256).unfold(3, 256, 256)           # 2. [B, 3, 16, 16, 256, 256]
             # print(f'batch_256.shape: {batch_256.shape}')
-            batch_256 = rearrange(batch_256, 'b c p1 p2 w h -> (b p1 p2) c w h')    # 3. [256, 3, 256, 256]
+            batch_256 = rearrange(batch_256, 'b c p1 p2 w h -> (b p1 p2) c w h')    # 3. [B*256, 3, 256, 256]
             # print(f'batch_256.shape: {batch_256.shape}')
             batch_256 = batch_256.to(self.device_256, non_blocking=True)
             
-            features_256 = self.vit_256(batch_256).detach().cpu() # [256, 384]
+            features_256 = self.vit_256(batch_256).detach().cpu() # [B*256, 384]
             # print(f'features_256.shape: {features_256.shape}')
 
             features_256 = features_256.reshape(16, 16, 384)
@@ -397,13 +394,15 @@ class HIPT_4096(nn.Module):
 
             feature_4096 = self.vit_4096.forward(features_256)
             # print(f'feature_4096.shape: {feature_4096.shape}')
-            features_4096.append(feature_4096) # [1, 192]
+            features_4096.append(feature_4096) # [B, 192]
         
-        features_4096 = torch.vstack(features_4096) # [M, 192]
-        print(f'features_4096.shape: {features_4096.shape}')
+        features_4096 = torch.stack(features_4096, dim=1) # [B, M, 192]
+        # print(f'features_4096.shape: {features_4096.shape}')
         
-        features_4096 = self.global_phi(features_4096)
+        features_4096 = self.global_phi(features_4096.squeeze(0))
+        # print(f'features_4096.shape: {features_4096.shape}')
         features_4096 = self.global_transformer(features_4096.unsqueeze(1)).squeeze(1)
+        # print(f'features_4096.shape: {features_4096.shape}')
         att_4096, features_4096 = self.global_attn_pool(features_4096)  
         att_4096 = torch.transpose(att_4096, 1, 0)
         att_4096 = F.softmax(att_4096, dim=1) 
