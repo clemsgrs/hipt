@@ -66,7 +66,7 @@ def get_metrics(probs, labels, threshold: float = 0.5):
     auc = metrics.roc_auc_score(labels, probs)
     precision = metrics.precision_score(labels, preds, zero_division=0)
     recall = metrics.recall_score(labels, preds)
-    
+
     metrics_dict = {'acc': acc, 'auc': auc, 'precision': precision, 'recall': recall}
     return metrics_dict
 
@@ -106,7 +106,8 @@ def train(
 
             optimizer.zero_grad()
             idx, stacked_tiles, label = batch
-            stacked_tiles, label = stacked_tiles.cuda(device='cuda:1'), label.cuda(device='cuda:0')
+            stacked_tiles, label = stacked_tiles.cuda(), label.cuda()
+            # stacked_tiles, label = stacked_tiles.cuda(device='cuda:1'), label.cuda(device='cuda:0')
             logits = model(stacked_tiles)
             loss = criterion(logits, label)
             loss.backward()
@@ -118,12 +119,12 @@ def train(
             idxs.extend(list(idx))
 
             epoch_loss += loss.item()
-            
+
             train_dataset.df.loc[idxs, 'training_prob'] = probs
 
         metrics = get_metrics(probs, labels, threshold)
         avg_loss = epoch_loss / len(train_loader)
-        
+
         return avg_loss, metrics
 
 
@@ -158,24 +159,25 @@ def tune(
         leave=True) as t:
 
         with torch.no_grad():
-            
+
             for i, batch in enumerate(t):
 
                 idx, stacked_tiles, label = batch
-                stacked_tiles, label = stacked_tiles.cuda(device='cuda:1'), label.cuda(device='cuda:0')
+                stacked_tiles, label = stacked_tiles.cuda(), label.cuda()
+                # stacked_tiles, label = stacked_tiles.cuda(device='cuda:1'), label.cuda(device='cuda:0')
                 logits = model(stacked_tiles)
                 loss = criterion(logits, label.float())
-                
+
                 prob = torch.sigmoid(logits)
                 probs.extend(prob[:,0].clone().tolist())
                 labels.extend(label.clone().tolist())
                 idxs.extend(list(idx))
 
                 epoch_loss += loss.item()
-        
+
         tune_dataset.df.loc[idxs, 'validation_prob'] = probs
 
         metrics = get_metrics(probs, labels, threshold)
         avg_loss = epoch_loss / len(tune_loader)
-        
+
         return avg_loss, metrics

@@ -1,5 +1,8 @@
 data_dir: 'data/'
 output_dir: 'output/'
+features_dir: 'output/features/'
+
+level: 'global'
 
 size: 'small'
 num_classes: 1
@@ -14,10 +17,4 @@ train_batch_size: 1
 tune_batch_size: 1
 
 tracking: 'loss'
-metric_objective: 'max'
-
-pretrain_256: 'checkpoints/vit_256_small_dino.pth'
-freeze_256: True
-
-pretrain_4096: 'checkpoints/vit_4096_xs_dino.pth'
-freeze_4096: True
+metric_objective: 'min'

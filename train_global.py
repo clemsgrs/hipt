@@ -10,31 +10,24 @@ import pandas as pd
 from PIL import Image
 from pathlib import Path
 
-from models import HIPT_4096, GlobalHIPT
-from dataset import StackedTilesDataset
+from models import GlobalHIPT
+from dataset import ExtractedFeaturesDataset
 from utils import create_train_tune_test_df, train, tune, epoch_time
 
-@hydra.main(version_base='1.2.0', config_path='config', config_name='default')
+@hydra.main(version_base='1.2.0', config_path='config', config_name='global')
 def main(cfg):
 
     output_dir = Path(cfg.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # model = HIPT_4096(
-    #     size_arg=cfg.size,
-    #     dropout=cfg.dropout,
-    #     num_classes=cfg.num_classes,
-    #     pretrain_256=cfg.pretrain_256,
-    #     freeze_256=cfg.freeze_256,
-    #     pretrain_4096=cfg.pretrain_4096,
-    #     freeze_4096=cfg.freeze_4096,
-    # )
+    features_dir = Path(cfg.features_dir)
 
     model = GlobalHIPT(
         size_arg=cfg.size,
         num_classes=cfg.num_classes,
         dropout=cfg.dropout,
     )
+    model = model.cuda()
 
     if Path(cfg.data_dir, 'train.csv').exists() and Path(cfg.data_dir, 'tune.csv').exists() and Path(cfg.data_dir, 'test.csv').exists():
         train_df_path = Path(cfg.data_dir, 'train.csv')
@@ -49,8 +42,8 @@ def main(cfg):
         train_df, tune_df, test_df = create_train_tune_test_df(label_df, save_csv=True, output_dir=cfg.data_dir)
 
     tiles_dir = Path(cfg.data_dir, 'patches')
-    train_dataset = StackedTilesDataset(train_df, tiles_dir, tile_size=4096)
-    tune_dataset = StackedTilesDataset(tune_df, tiles_dir, tile_size=4096)
+    train_dataset = ExtractedFeaturesDataset(train_df, features_dir, level=cfg.level)
+    tune_dataset = ExtractedFeaturesDataset(tune_df, features_dir, level=cfg.level)
 
     optimizer = optim.Adam(model.parameters(), lr=cfg.lr)
     if cfg.lr_scheduler:
@@ -125,7 +118,7 @@ def main(cfg):
 
 if __name__ == '__main__':
 
-    # python3 main.py
+    # python3 train_global.py
     main()
 
 

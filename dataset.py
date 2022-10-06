@@ -33,19 +33,19 @@ class StackedTilesDataset(torch.utils.data.Dataset):
         tiles_dir = Path(self.tiles_dir, slide_id, str(self.tile_size), 'imgs')
         tiles_list = list(tiles_dir.glob('*.png'))
         M = len(tiles_list)
-        
+
         stacked_tiles = torch.zeros((M, 3, self.tile_size, self.tile_size))
 
         with tqdm.tqdm(
             tiles_list,
             desc=(f'{slide_id}'),
             unit=' tiles',
-            ncols=40,
+            ncols=80,
             position=2,
             leave=False) as t:
 
             for i, tp in enumerate(t):
-                
+
                 tile = Image.open(tp)
                 if self.transform:
                     tile = self.transform(tile)
@@ -53,11 +53,39 @@ class StackedTilesDataset(torch.utils.data.Dataset):
                     tile = transforms.functional.to_tensor(tile)
                 tile = tile.unsqueeze(0)
                 stacked_tiles[i] = tile
-            
+
             label = np.array([row.label]).astype(float) if self.training else np.array([-1])
-            
+
             return index, stacked_tiles, label
 
     def __len__(self):
         return len(self.df)
 
+
+class ExtractedFeaturesDataset(torch.utils.data.Dataset):
+    def __init__(
+        self,
+        df: pd.DataFrame,
+        features_dir: Path,
+        level: str,
+        training: bool = True,
+        transform: Callable = None
+    ):
+        self.df = df
+        self.features_dir = features_dir
+        self.level = level
+        self.training = training
+        self.transform = transform
+
+    def __getitem__(self, index: int):
+        row = self.df.loc[index]
+        slide_id = row.id
+        fp = Path(self.features_dir, self.level, f'{slide_id}.pt')
+        features = torch.load(fp)
+
+        label = np.array([row.label]).astype(float) if self.training else np.array([-1])
+
+        return index, features, label
+
+    def __len__(self):
+        return len(self.df)
