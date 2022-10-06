@@ -1,6 +1,8 @@
 data_dir: 'data/'
 output_dir: 'output/'
-features_dir: 'output/features/'
+features_dir: 'output/features/tcga_brca'
+
+data_csv: 'data/tcga_brca.csv'
 
 level: 'global'
 

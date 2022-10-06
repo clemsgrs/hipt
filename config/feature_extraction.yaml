@@ -1,6 +1,8 @@
 data_dir: 'data/'
 output_dir: 'output/'
 
+dataset_name: 'tcga_brca'
+
 region_size: 4096
 level: 'local'
 

@@ -62,7 +62,7 @@ def main(cfg):
                         features.append(feature)
 
                 stacked_features = torch.stack(features, dim=0)
-                save_path = Path(cfg.output_dir, 'features', cfg.level, f'{slide_id}.pt')
+                save_path = Path(cfg.output_dir, 'features', cfg.dataset_name, cfg.level, f'{slide_id}.pt')
                 save_path.parent.mkdir(exist_ok=True, parents=True)
                 torch.save(stacked_features, save_path)
 

@@ -44,8 +44,7 @@ def main(cfg):
         tune_df = pd.read_csv(tune_df_path)
         test_df = pd.read_csv(test_df_path)
     else:
-        label_df_path = Path(cfg.data_dir, 'labels.csv')
-        label_df = pd.read_csv(label_df_path)
+        label_df = pd.read_csv(cfg.data_csv)
         train_df, tune_df, test_df = create_train_tune_test_df(label_df, save_csv=True, output_dir=cfg.data_dir)
 
     tiles_dir = Path(cfg.data_dir, 'patches')

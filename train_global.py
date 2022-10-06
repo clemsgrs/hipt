@@ -29,17 +29,19 @@ def main(cfg):
     )
     model = model.cuda()
 
-    if Path(cfg.data_dir, 'train.csv').exists() and Path(cfg.data_dir, 'tune.csv').exists() and Path(cfg.data_dir, 'test.csv').exists():
-        train_df_path = Path(cfg.data_dir, 'train.csv')
-        tune_df_path = Path(cfg.data_dir, 'tune.csv')
-        test_df_path = Path(cfg.data_dir, 'test.csv')
-        train_df = pd.read_csv(train_df_path)
-        tune_df = pd.read_csv(tune_df_path)
-        test_df = pd.read_csv(test_df_path)
-    else:
-        label_df_path = Path(cfg.data_dir, 'labels.csv')
-        label_df = pd.read_csv(label_df_path)
-        train_df, tune_df, test_df = create_train_tune_test_df(label_df, save_csv=True, output_dir=cfg.data_dir)
+    # if Path(cfg.data_dir, 'train.csv').exists() and Path(cfg.data_dir, 'tune.csv').exists() and Path(cfg.data_dir, 'test.csv').exists():
+    #     train_df_path = Path(cfg.data_dir, 'train.csv')
+    #     tune_df_path = Path(cfg.data_dir, 'tune.csv')
+    #     test_df_path = Path(cfg.data_dir, 'test.csv')
+    #     train_df = pd.read_csv(train_df_path)
+    #     tune_df = pd.read_csv(tune_df_path)
+    #     test_df = pd.read_csv(test_df_path)
+    # else:
+    #     label_df = pd.read_csv(cfg.data_csv)
+    #     train_df, tune_df, test_df = create_train_tune_test_df(label_df, save_csv=False, output_dir=cfg.data_dir)
+
+    label_df = pd.read_csv(cfg.data_csv)
+    train_df, tune_df, test_df = create_train_tune_test_df(label_df, save_csv=False, output_dir=cfg.data_dir)
 
     tiles_dir = Path(cfg.data_dir, 'patches')
     train_dataset = ExtractedFeaturesDataset(train_df, features_dir, level=cfg.level)
