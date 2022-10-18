@@ -11,7 +11,7 @@ from models import GlobalFeatureExtractor, LocalFeatureExtractor
 @hydra.main(version_base='1.2.0', config_path='config', config_name='feature_extraction')
 def main(cfg):
 
-    output_dir = Path(cfg.output_dir)
+    output_dir = Path(cfg.output_dir, cfg.dataset_name)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     if cfg.level == 'global':
@@ -26,8 +26,12 @@ def main(cfg):
     else:
         raise ValueError(f'cfg.level ({cfg.level} not supported')
 
-    patch_dir = Path(cfg.data_dir, 'patches')
+    patch_dir = Path(cfg.data_dir, cfg.dataset_name, 'patches')
     slide_list = [s.stem for s in patch_dir.iterdir()]
+
+    if Path(cfg.slide_list).is_file():
+        with open(Path(cfg.slide_list), 'r') as f:
+            slide_list = [Path(x.strip()).stem for x in f.readlines()]
 
     with tqdm.tqdm(
             slide_list,
@@ -39,8 +43,8 @@ def main(cfg):
 
             for slide_id in t1:
 
-                slide_patch_dir = Path(patch_dir, slide_id, str(cfg.region_size), 'imgs')
-                tiles = list(slide_patch_dir.glob('*.png'))
+                slide_patch_dir = Path(patch_dir, slide_id)
+                tiles = list(slide_patch_dir.glob(f'*.{cfg.format}'))
 
                 M = len(tiles)
                 features = []
@@ -49,8 +53,8 @@ def main(cfg):
                     tiles,
                     desc=(f'{slide_id}'),
                     unit=' tiles',
-                    ncols=80,
-                    position=2,
+                    ncols=80+len(slide_id),
+                    position=3,
                     leave=False) as t2:
 
                     for i, fp in enumerate(t2):
@@ -62,7 +66,7 @@ def main(cfg):
                         features.append(feature)
 
                 stacked_features = torch.stack(features, dim=0)
-                save_path = Path(cfg.output_dir, 'features', cfg.dataset_name, cfg.level, f'{slide_id}.pt')
+                save_path = Path(cfg.output_dir, 'features', cfg.level, f'{slide_id}.pt')
                 save_path.parent.mkdir(exist_ok=True, parents=True)
                 torch.save(stacked_features, save_path)
 

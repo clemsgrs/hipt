@@ -2,9 +2,11 @@ data_dir: 'data/'
 output_dir: 'output/'
 
 dataset_name: 'tcga_brca'
+slide_list: 'data/tcga_brca/toy_list.txt'
 
 region_size: 4096
-level: 'local'
+format: 'jpg'
+level: 'global'
 
 pretrain_256: 'checkpoints/vit_256_small_dino.pth'
 freeze_256: True
