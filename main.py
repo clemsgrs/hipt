@@ -10,9 +10,9 @@ import pandas as pd
 from PIL import Image
 from pathlib import Path
 
-from models import HIPT_4096, GlobalHIPT
-from dataset import StackedTilesDataset
-from utils import create_train_tune_test_df, train, tune, epoch_time
+from source.models import HIPT_4096, GlobalHIPT
+from source.dataset import StackedTilesDataset
+from source.utils import create_train_tune_test_df, train, tune, epoch_time
 
 @hydra.main(version_base='1.2.0', config_path='config', config_name='default')
 def main(cfg):

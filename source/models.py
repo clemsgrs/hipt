@@ -8,9 +8,9 @@ from einops import rearrange
 from functools import partial
 from torchvision import transforms
 
-from vision_transformer import vit_small, vit4k_xs
-from model_utils import Attn_Net_Gated
-from utils import update_state_dict
+from source.vision_transformer import vit_small, vit4k_xs
+from source.model_utils import Attn_Net_Gated
+from source.utils import update_state_dict
 
 
 class GlobalHIPT(nn.Module):

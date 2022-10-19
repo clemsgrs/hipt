@@ -1,4 +1,3 @@
-
 import tqdm
 import torch
 import hydra
@@ -6,7 +5,7 @@ from PIL import Image
 from pathlib import Path
 from torchvision import transforms
 
-from models import GlobalFeatureExtractor, LocalFeatureExtractor
+from source.models import GlobalFeatureExtractor, LocalFeatureExtractor
 
 @hydra.main(version_base='1.2.0', config_path='config', config_name='feature_extraction')
 def main(cfg):
@@ -38,13 +37,13 @@ def main(cfg):
             desc=(f'Slide Encoding'),
             unit=' slides',
             ncols=80,
-            position=1,
+            position=0,
             leave=True) as t1:
 
             for slide_id in t1:
 
-                slide_patch_dir = Path(patch_dir, slide_id)
-                tiles = list(slide_patch_dir.glob(f'*.{cfg.format}'))
+                slide_patch_dir = Path(patch_dir, slide_id, str(cfg.region_size), cfg.format)
+                tiles = [t for t in slide_patch_dir.glob(f'*.{cfg.format}')][:3]
 
                 M = len(tiles)
                 features = []
@@ -54,7 +53,7 @@ def main(cfg):
                     desc=(f'{slide_id}'),
                     unit=' tiles',
                     ncols=80+len(slide_id),
-                    position=3,
+                    position=1,
                     leave=False) as t2:
 
                     for i, fp in enumerate(t2):
@@ -66,7 +65,7 @@ def main(cfg):
                         features.append(feature)
 
                 stacked_features = torch.stack(features, dim=0)
-                save_path = Path(cfg.output_dir, 'features', cfg.level, f'{slide_id}.pt')
+                save_path = Path(output_dir, 'features', cfg.level, f'{slide_id}.pt')
                 save_path.parent.mkdir(exist_ok=True, parents=True)
                 torch.save(stacked_features, save_path)
 
