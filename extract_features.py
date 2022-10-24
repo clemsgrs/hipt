@@ -1,4 +1,7 @@
+import os
+import sys
 import tqdm
+import wandb
 import torch
 import hydra
 from PIL import Image
@@ -6,12 +9,19 @@ from pathlib import Path
 from torchvision import transforms
 
 from source.models import GlobalFeatureExtractor, LocalFeatureExtractor
+from source.utils import initialize_wandb, initialize_df
+
 
 @hydra.main(version_base='1.2.0', config_path='config', config_name='feature_extraction')
 def main(cfg):
 
     output_dir = Path(cfg.output_dir, cfg.dataset_name)
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    # set up wandb
+    key = os.environ.get('WANDB_API_KEY')
+    wandb_run = initialize_wandb(project=cfg.wandb.project, exp_name=cfg.wandb.exp_name, entity=cfg.wandb.username, key=key)
+    wandb_run.define_metric('processed', summary='max')
 
     if cfg.level == 'global':
         model = GlobalFeatureExtractor(
@@ -26,24 +36,51 @@ def main(cfg):
         raise ValueError(f'cfg.level ({cfg.level} not supported')
 
     patch_dir = Path(cfg.data_dir, cfg.dataset_name, 'patches')
-    slide_list = [s.stem for s in patch_dir.iterdir()]
+    slides = sorted([s.stem for s in patch_dir.iterdir()])
 
     if Path(cfg.slide_list).is_file():
         with open(Path(cfg.slide_list), 'r') as f:
-            slide_list = [Path(x.strip()).stem for x in f.readlines()]
+            slides = sorted([Path(x.strip()).stem for x in f.readlines()])
+
+    process_list_fp = None
+    if Path(output_dir, 'process_list.csv').is_file() and cfg.resume:
+        process_list_fp = Path(output_dir, 'process_list.csv')
+
+    if process_list_fp is None:
+        df = initialize_df(slides)
+    else:
+        df = pd.read_csv(process_list_fp)
+
+    mask = df['process'] == 1
+    process_stack = df[mask]
+    total = len(process_stack)
+    already_processed = len(df)-total
+
+    print()
+
+    tqdm_output_fp = None
+    tqdm_output_fp = Path('tqdm.log')
+    tqdm_output_fp.unlink(missing_ok=True)
+    tqdm_file = open(tqdm_output_fp, 'a+') if tqdm_output_fp is not None else sys.stderr
 
     with tqdm.tqdm(
-            slide_list,
+            range(total),
             desc=(f'Slide Encoding'),
-            unit=' slides',
+            unit=' slide',
+            initial=already_processed,
+		    total=total+already_processed,
             ncols=80,
             position=0,
-            leave=True) as t1:
+            leave=True,
+            file=tqdm_file) as t1:
 
-            for slide_id in t1:
+            for i in t1:
+
+                idx = process_stack.index[i]
+                slide_id = process_stack.loc[idx, 'slide_id']
 
                 slide_patch_dir = Path(patch_dir, slide_id, str(cfg.region_size), cfg.format)
-                tiles = [t for t in slide_patch_dir.glob(f'*.{cfg.format}')][:3]
+                tiles = [t for t in slide_patch_dir.glob(f'*.{cfg.format}')]
 
                 M = len(tiles)
                 features = []
@@ -54,9 +91,10 @@ def main(cfg):
                     unit=' tiles',
                     ncols=80+len(slide_id),
                     position=1,
-                    leave=False) as t2:
+                    leave=False,
+                    file=tqdm_file) as t2:
 
-                    for i, fp in enumerate(t2):
+                    for fp in t2:
 
                         tile = Image.open(fp)
                         tile = transforms.functional.to_tensor(tile)
@@ -68,6 +106,12 @@ def main(cfg):
                 save_path = Path(output_dir, 'features', cfg.level, f'{slide_id}.pt')
                 save_path.parent.mkdir(exist_ok=True, parents=True)
                 torch.save(stacked_features, save_path)
+
+                df.loc[idx, 'process'] = 0
+                df.loc[idx, 'status'] = 'processed'
+                df.to_csv(Path(output_dir, 'process_list.csv'), index=False)
+
+                wandb.log({'processed': i+1})
 
 
 

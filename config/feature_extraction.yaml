@@ -2,7 +2,8 @@ data_dir: 'data/'
 output_dir: 'output/'
 
 dataset_name: 'tcga_brca'
-slide_list: 'data/tcga_brca/toy_list.txt'
+slide_list: 'data/tcga_brca/slide_list.txt'
+resume: False
 
 region_size: 4096
 format: 'jpg'
@@ -13,3 +14,8 @@ freeze_256: True
 
 pretrain_4096: 'checkpoints/vit_4096_xs_dino.pth'
 freeze_4096: True
+
+wandb:
+  project: 'hipt'
+  exp_name: 'feature_extraction'
+  username: 'clemsg'

@@ -1,8 +1,8 @@
 data_dir: 'data/'
 output_dir: 'output/'
-features_dir: 'output/features/tcga_brca'
 
-data_csv: 'data/tcga_brca.csv'
+dataset_name: 'tcga_brca'
+data_csv: 'data/data.csv'
 
 level: 'global'
 
@@ -15,8 +15,15 @@ lr_scheduler:
 lr_step: 15
 dropout: 0.25
 
+pct: 0.1
+
 train_batch_size: 1
 tune_batch_size: 1
 
 tracking: 'loss'
 metric_objective: 'min'
+
+wandb:
+  project: 'hipt'
+  exp_name: 'training'
+  username: 'clemsg'

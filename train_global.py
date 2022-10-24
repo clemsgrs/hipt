@@ -1,5 +1,6 @@
 import time
 import tqdm
+import wandb
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -12,15 +13,20 @@ from pathlib import Path
 
 from source.models import GlobalHIPT
 from source.dataset import ExtractedFeaturesDataset
-from source.utils import create_train_tune_test_df, train, tune, epoch_time
+from source.utils import initialize_wandb, create_train_tune_test_df, train, tune, epoch_time
 
 @hydra.main(version_base='1.2.0', config_path='config', config_name='global')
 def main(cfg):
 
-    output_dir = Path(cfg.output_dir)
+    output_dir = Path(cfg.output_dir, cfg.dataset_name)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    features_dir = Path(cfg.features_dir)
+    # set up wandb
+    key = os.environ.get('WANDB_API_KEY')
+    wandb_run = initialize_wandb(project=cfg.wandb.project, exp_name=cfg.wandb.exp_name, entity=cfg.wandb.username, key=key)
+    wandb_run.define_metric('processed', summary='max')
+
+    features_dir = Path(output_dir, 'features')
 
     model = GlobalHIPT(
         size_arg=cfg.size,
@@ -29,21 +35,26 @@ def main(cfg):
     )
     model = model.cuda()
 
-    # if Path(cfg.data_dir, 'train.csv').exists() and Path(cfg.data_dir, 'tune.csv').exists() and Path(cfg.data_dir, 'test.csv').exists():
-    #     train_df_path = Path(cfg.data_dir, 'train.csv')
-    #     tune_df_path = Path(cfg.data_dir, 'tune.csv')
-    #     test_df_path = Path(cfg.data_dir, 'test.csv')
-    #     train_df = pd.read_csv(train_df_path)
-    #     tune_df = pd.read_csv(tune_df_path)
-    #     test_df = pd.read_csv(test_df_path)
-    # else:
-    #     label_df = pd.read_csv(cfg.data_csv)
-    #     train_df, tune_df, test_df = create_train_tune_test_df(label_df, save_csv=False, output_dir=cfg.data_dir)
+    fold_num = 0
+    fold_dir = Path(cfg.data_dir, cfg.dataset_name, 'splits', f'fold_{fold_num}')
 
-    label_df = pd.read_csv(cfg.data_csv)
-    train_df, tune_df, test_df = create_train_tune_test_df(label_df, save_csv=False, output_dir=cfg.data_dir)
+    if Path(fold_dir, 'train.csv').exists() and Path(fold_dir, 'tune.csv').exists() and Path(fold_dir, 'test.csv').exists():
+        print(f'Loading data for fold {fold_num}')
+        train_df_path = Path(fold_dir, 'train.csv')
+        tune_df_path = Path(fold_dir, 'tune.csv')
+        test_df_path = Path(fold_dir, 'test.csv')
+        train_df = pd.read_csv(train_df_path)
+        tune_df = pd.read_csv(tune_df_path)
+        test_df = pd.read_csv(test_df_path)
+    else:
+        label_df = pd.read_csv(cfg.data_csv)
+        train_df, tune_df, test_df = create_train_tune_test_df(label_df, save_csv=False, output_dir=cfg.data_dir)
 
-    tiles_dir = Path(cfg.data_dir, 'patches')
+    if cfg.pct:
+        print(f'Training & Tuning on {cfg.pct*100}% of the data')
+        train_df = train_df.sample(frac=cfg.pct).reset_index(drop=True)
+        tune_df = tune_df.sample(frac=cfg.pct).reset_index(drop=True)
+
     train_dataset = ExtractedFeaturesDataset(train_df, features_dir, level=cfg.level)
     tune_dataset = ExtractedFeaturesDataset(tune_df, features_dir, level=cfg.level)
 

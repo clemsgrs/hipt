@@ -1,5 +1,7 @@
 import tqdm
+import wandb
 import torch
+import subprocess
 import numpy as np
 import pandas as pd
 import torch.nn as nn
@@ -7,6 +9,27 @@ from pathlib import Path
 from typing import Optional, Callable
 from sklearn import metrics
 from sklearn.model_selection import train_test_split
+
+
+def initialize_wandb(project, exp_name, entity, key=''):
+	command = f'wandb login {key}'
+	subprocess.call(command, shell=True)
+	run = wandb.init(project=project, entity=entity, name=exp_name)
+	return run
+
+
+def initialize_df(slide_ids):
+
+    nslide = len(slide_ids)
+
+    df_dict = {
+        'slide_id': slide_ids,
+        'process': np.full((nslide), 1, dtype=np.uint8),
+        'status': np.full((nslide), 'tbp'),
+    }
+
+    df = pd.DataFrame(df_dict)
+    return df
 
 
 def extract_coord_from_path(path):

@@ -79,7 +79,7 @@ class ExtractedFeaturesDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, index: int):
         row = self.df.loc[index]
-        slide_id = row.id
+        slide_id = row.slide_id
         fp = Path(self.features_dir, self.level, f'{slide_id}.pt')
         features = torch.load(fp)
 
