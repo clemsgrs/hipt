@@ -1,13 +1,14 @@
-data_dir: 'data/'
-output_dir: 'output/'
+data_dir: 'data'
+output_dir: 'output'
 
 dataset_name: 'tcga_brca'
-slide_list: 'data/tcga_brca/slide_list.txt'
+slide_list:
+# slide_list: '${data_dir}/${dataset_name}/toy_list.txt'
 resume: False
 
 region_size: 4096
 format: 'jpg'
-level: 'global'
+level: 'local'
 
 pretrain_256: 'checkpoints/vit_256_small_dino.pth'
 freeze_256: True

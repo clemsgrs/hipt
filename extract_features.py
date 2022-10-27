@@ -4,8 +4,11 @@ import tqdm
 import wandb
 import torch
 import hydra
+import shutil
+import pandas as pd
 from PIL import Image
 from pathlib import Path
+from omegaconf import OmegaConf
 from torchvision import transforms
 
 from source.models import GlobalFeatureExtractor, LocalFeatureExtractor
@@ -18,9 +21,18 @@ def main(cfg):
     output_dir = Path(cfg.output_dir, cfg.dataset_name)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    features_dir = Path(output_dir, 'features', cfg.level)
+    if not cfg.resume:
+        if features_dir.exists():
+            shutil.rmtree(features_dir)
+            features_dir.mkdir(parents=False)
+        else:
+            features_dir.mkdir(parents=False, exist_ok=True)
+
     # set up wandb
     key = os.environ.get('WANDB_API_KEY')
-    wandb_run = initialize_wandb(project=cfg.wandb.project, exp_name=cfg.wandb.exp_name, entity=cfg.wandb.username, key=key)
+    config = OmegaConf.to_container(cfg, resolve=True, throw_on_missing=True)
+    wandb_run = initialize_wandb(project=cfg.wandb.project, exp_name=cfg.wandb.exp_name, entity=cfg.wandb.username, config=config, key=key)
     wandb_run.define_metric('processed', summary='max')
 
     if cfg.level == 'global':
@@ -36,18 +48,18 @@ def main(cfg):
         raise ValueError(f'cfg.level ({cfg.level} not supported')
 
     patch_dir = Path(cfg.data_dir, cfg.dataset_name, 'patches')
-    slides = sorted([s.stem for s in patch_dir.iterdir()])
+    slide_ids = sorted([s.name for s in patch_dir.iterdir()])
 
-    if Path(cfg.slide_list).is_file():
+    if cfg.slide_list:
         with open(Path(cfg.slide_list), 'r') as f:
-            slides = sorted([Path(x.strip()).stem for x in f.readlines()])
+            slide_ids = sorted([Path(x.strip()).stem for x in f.readlines()])
 
     process_list_fp = None
-    if Path(output_dir, 'process_list.csv').is_file() and cfg.resume:
-        process_list_fp = Path(output_dir, 'process_list.csv')
+    if Path(output_dir, f'process_list_{cfg.level}.csv').is_file() and cfg.resume:
+        process_list_fp = Path(output_dir, 'features', f'process_list_{cfg.level}.csv')
 
     if process_list_fp is None:
-        df = initialize_df(slides)
+        df = initialize_df(slide_ids)
     else:
         df = pd.read_csv(process_list_fp)
 
@@ -59,21 +71,21 @@ def main(cfg):
     print()
 
     tqdm_output_fp = None
-    tqdm_output_fp = Path('tqdm.log')
+    tqdm_output_fp = Path(f'tqdm_{wandb.run.id}.log')
     tqdm_output_fp.unlink(missing_ok=True)
     tqdm_file = open(tqdm_output_fp, 'a+') if tqdm_output_fp is not None else sys.stderr
 
     with tqdm.tqdm(
-            range(total),
-            desc=(f'Slide Encoding'),
-            unit=' slide',
-            initial=already_processed,
-		    total=total+already_processed,
-            ncols=80,
-            position=0,
-            leave=True,
-            file=tqdm_file) as t1:
-
+        range(total),
+        desc=(f'Slide Encoding'),
+        unit=' slide',
+        initial=already_processed,
+        total=total+already_processed,
+        ncols=80,
+        position=0,
+        leave=True,
+        file=tqdm_file) as t1:
+        
             for i in t1:
 
                 idx = process_stack.index[i]
@@ -102,16 +114,18 @@ def main(cfg):
                         feature = model(tile)
                         features.append(feature)
 
-                stacked_features = torch.stack(features, dim=0)
-                save_path = Path(output_dir, 'features', cfg.level, f'{slide_id}.pt')
-                save_path.parent.mkdir(exist_ok=True, parents=True)
+                stacked_features = torch.stack(features, dim=0).squeeze(1)
+                save_path = Path(features_dir, f'{slide_id}.pt')
                 torch.save(stacked_features, save_path)
 
                 df.loc[idx, 'process'] = 0
                 df.loc[idx, 'status'] = 'processed'
-                df.to_csv(Path(output_dir, 'process_list.csv'), index=False)
+                df.to_csv(Path(output_dir, 'features', f'process_list_{cfg.level}.csv'), index=False)
 
-                wandb.log({'processed': i+1})
+                wandb.log({'processed': already_processed+i+1})
+
+    tqdm_file.close()
+    tqdm_output_fp.unlink()
 
 
 

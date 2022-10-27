@@ -44,7 +44,6 @@ class GlobalHIPT(nn.Module):
     def forward(self, x):
 
         # x = [B, M, 192]
-
         x = self.global_phi(x)
         x = self.global_transformer(x).squeeze(0)
         att, x = self.global_attn_pool(x)
@@ -70,7 +69,7 @@ class LocalGlobalHIPT(nn.Module):
         pretrain_WSI='None',
         freeze_WSI=False,
     ):
-        
+
         super(LocalGlobalHIPT, self).__init__()
         self.size_dict_path = {"small": [384, 192, 192], "big": [1024, 512, 384]}
         size = self.size_dict_path[size_arg]
@@ -99,33 +98,32 @@ class LocalGlobalHIPT(nn.Module):
             self.global_transformer = nn.TransformerEncoder(
                 nn.TransformerEncoderLayer(
                     d_model=192, nhead=3, dim_feedforward=192, dropout=0.25, activation='relu'
-                ), 
+                ),
                 num_layers=2
             )
             self.global_attn_pool = Attn_Net_Gated(L=size[1], D=size[1], dropout=0.25, num_classes=1)
             self.global_rho = nn.Sequential(*[nn.Linear(size[1], size[1]), nn.ReLU(), nn.Dropout(0.25)])
 
         self.classifier = nn.Linear(size[1], num_classes)
-        
+
 
     def forward(self, x):
 
         # for a given WSI, x should be a tensor of shape [M, 256, 384]
         # where M = number for [4096,4096] regions in the WSI
 
-        
         ### Local
         h_4096 = self.local_vit(x.unfold(1, 16, 16).transpose(1,2))
-        
+
         ### Global
         if self.pretrain_WSI != 'None':
             h_WSI = self.global_vit(x.unsqueeze(dim=0))
         else:
             h_4096 = self.global_phi(x)
             h_4096 = self.global_transformer(h_4096.unsqueeze(1)).squeeze(1)
-            att_4096, h_4096 = self.global_attn_pool(h_4096)  
+            att_4096, h_4096 = self.global_attn_pool(h_4096)
             att_4096 = torch.transpose(att_4096, 1, 0)
-            att_4096 = F.softmax(att_4096, dim=1) 
+            att_4096 = F.softmax(att_4096, dim=1)
             h_4096_att = torch.mm(att_4096, h_4096)
             h_WSI = self.global_rho(h_4096_att)
 
@@ -145,7 +143,7 @@ class HIPT(nn.Module):
         pretrain_4096: Optional[str] = None,
         freeze_4096: bool = False,
     ):
-        
+
         super(HIPT, self).__init__()
         self.size_dict_path = {"small": [384, 192, 192], "big": [1024, 512, 384]}
         size = self.size_dict_path[size_arg]
@@ -175,7 +173,7 @@ class HIPT(nn.Module):
             state_dict = {k.replace('backbone.', ''): v for k, v in state_dict.items()}
             msg = self.vit_256.load_state_dict(state_dict, strict=False)
             print(f'Pretrained weights found at {pretrain_256} and loaded with msg: {msg}')
-        
+
         if freeze_256:
             print('Freezing pretrained ViT_256 model')
             for param in self.vit_256.parameters():
@@ -216,31 +214,31 @@ class HIPT(nn.Module):
             print('Done')
 
         # Global aggregation
-        
+
         self.global_phi = nn.Sequential(nn.Linear(192, 192), nn.ReLU(), nn.Dropout(0.25))
         self.global_transformer = nn.TransformerEncoder(
             nn.TransformerEncoderLayer(
                 d_model=192, nhead=3, dim_feedforward=192, dropout=0.25, activation='relu'
-            ), 
+            ),
             num_layers=2
         )
         self.global_attn_pool = Attn_Net_Gated(L=size[1], D=size[1], dropout=0.25, num_classes=1)
         self.global_rho = nn.Sequential(*[nn.Linear(size[1], size[1]), nn.ReLU(), nn.Dropout(0.25)])
 
         self.classifier = nn.Linear(size[1], num_classes)
-        
+
 
     def forward(self, x):
-        
+
         # x = [M, 256, 3, 256, 256]
         M = x.shape[0]
-        
+
         features_4096 = []
         for m in range(M):
             # region = [256, 3, 256, 256]
             region = x[m].to(self.device_256, non_blocking=True)
             features_256 = self.vit_256(region).detach().cpu() # [256, 384]
-        
+
             features_256 = features_256.reshape(16, 16, 384)
             features_256 = features_256.transpose(0,1)
             features_256 = features_256.transpose(0,2)
@@ -249,14 +247,14 @@ class HIPT(nn.Module):
 
             feature_4096 = self.vit_4096.forward(features_256)
             features_4096.append(feature_4096) # [1, 192]
-        
+
         features_4096 = torch.vstack(features_4096) # [M, 192]
-        
+
         features_4096 = self.global_phi(features_4096)
         features_4096 = self.global_transformer(features_4096.unsqueeze(1)).squeeze(1)
-        att_4096, features_4096 = self.global_attn_pool(features_4096)  
+        att_4096, features_4096 = self.global_attn_pool(features_4096)
         att_4096 = torch.transpose(att_4096, 1, 0)
-        att_4096 = F.softmax(att_4096, dim=1) 
+        att_4096 = F.softmax(att_4096, dim=1)
         features_4096_att = torch.mm(att_4096, features_4096)
         features_WSI = self.global_rho(features_4096_att)
 
@@ -553,11 +551,10 @@ class LocalFeatureExtractor(nn.Module):
     def forward(self, x):
 
         # x = [1, 3, 4096, 4096]
-
-        x = x.unfold(2, 256, 256).unfold(3, 256, 256)
+        x = x.unfold(2, 256, 256).unfold(3, 256, 256)           # [1, 3, 16, 4096, 256] -> [1, 3, 16, 16, 256, 256]
         x = rearrange(x, 'b c p1 p2 w h -> (b p1 p2) c w h')    # [256, 3, 256, 256]
         x = x.to(self.device_256, non_blocking=True)
 
-        feature_256 = self.vit_256(x)                           # [256, 384]
+        feature_256 = self.vit_256(x).detach().cpu()            # [256, 384]
 
         return feature_256

@@ -1,3 +1,4 @@
+import os
 import time
 import tqdm
 import wandb
@@ -10,10 +11,13 @@ import numpy as np
 import pandas as pd
 from PIL import Image
 from pathlib import Path
+from omegaconf import OmegaConf
+from collections import defaultdict
 
 from source.models import GlobalHIPT
 from source.dataset import ExtractedFeaturesDataset
-from source.utils import initialize_wandb, create_train_tune_test_df, train, tune, epoch_time
+from source.utils import initialize_wandb, create_train_tune_test_df, train, tune, epoch_time, collate_custom
+
 
 @hydra.main(version_base='1.2.0', config_path='config', config_name='global')
 def main(cfg):
@@ -22,9 +26,9 @@ def main(cfg):
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # set up wandb
-    key = os.environ.get('WANDB_API_KEY')
-    wandb_run = initialize_wandb(project=cfg.wandb.project, exp_name=cfg.wandb.exp_name, entity=cfg.wandb.username, key=key)
-    wandb_run.define_metric('processed', summary='max')
+    # key = os.environ.get('WANDB_API_KEY')
+    # wandb.config = OmegaConf.to_container(cfg, resolve=True, throw_on_missing=True)
+    # wandb_run = initialize_wandb(project=cfg.wandb.project, exp_name=cfg.wandb.exp_name, entity=cfg.wandb.username, key=key)
 
     features_dir = Path(output_dir, 'features')
 
@@ -35,7 +39,7 @@ def main(cfg):
     )
     model = model.cuda()
 
-    fold_num = 0
+    fold_num = 99
     fold_dir = Path(cfg.data_dir, cfg.dataset_name, 'splits', f'fold_{fold_num}')
 
     if Path(fold_dir, 'train.csv').exists() and Path(fold_dir, 'tune.csv').exists() and Path(fold_dir, 'test.csv').exists():
@@ -48,6 +52,11 @@ def main(cfg):
         test_df = pd.read_csv(test_df_path)
     else:
         label_df = pd.read_csv(cfg.data_csv)
+        if cfg.slide_list:
+            with open(Path(cfg.slide_list), 'r') as f:
+                slides = sorted([Path(x.strip()).stem for x in f.readlines()])
+            print(f'Restricting data to the {len(slides)} slides in slide list .txt file provided')
+            label_df = label_df[label_df['slide_id'].isin(slides)]
         train_df, tune_df, test_df = create_train_tune_test_df(label_df, save_csv=False, output_dir=cfg.data_dir)
 
     if cfg.pct:
@@ -58,7 +67,7 @@ def main(cfg):
     train_dataset = ExtractedFeaturesDataset(train_df, features_dir, level=cfg.level)
     tune_dataset = ExtractedFeaturesDataset(tune_df, features_dir, level=cfg.level)
 
-    optimizer = optim.Adam(model.parameters(), lr=cfg.lr)
+    optimizer = optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=cfg.lr)
     if cfg.lr_scheduler:
         scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=cfg.lr_step, gamma=0.1)
 
@@ -72,7 +81,7 @@ def main(cfg):
         best_tune_metric = float('inf')
 
     train_losses, tune_losses = [], []
-    train_metrics, tune_metrics = [], []
+    train_metrics, tune_metrics = defaultdict(list), defaultdict(list)
 
     for epoch in range(cfg.nepochs):
 
@@ -84,11 +93,12 @@ def main(cfg):
             train_dataset,
             optimizer,
             criterion,
-            cfg.train_batch_size,
+            batch_size=cfg.train_batch_size,
         )
 
         train_losses.append(train_loss)
-        train_metrics.append(train_metric)
+        for k,v in train_metric.items():
+            train_metrics[k].append(v)
 
         if epoch % cfg.eval_every == 0:
 
@@ -97,10 +107,12 @@ def main(cfg):
                 model,
                 tune_dataset,
                 criterion,
-                cfg.tune_batch_size
+                batch_size=cfg.tune_batch_size
             )
+
             tune_losses.append(tune_loss)
-            tune_metrics.append(tune_metric)
+            for k,v in tune_metric.items():
+                tune_metrics[k].append(v)
 
             if cfg.tracking == 'loss':
                 if tune_loss < best_tune_loss:
@@ -109,7 +121,7 @@ def main(cfg):
                     torch.save(model.state_dict(), model_fp)
 
             else:
-                tune_metric_tracked = tune_metrics[cfg.tracking]
+                tune_metric_tracked = tune_metrics[cfg.tracking][-1]
                 if tune_metric_tracked > best_tune_metric:
                     best_tune_metric = tune_metric_tracked
                     model_fp = Path(output_dir, 'best_model.pt')
@@ -125,8 +137,8 @@ def main(cfg):
             print(f'Train loss: {train_loss:.5f}')
             print(f'Tune loss: {tune_loss:.5f} (best Tune {cfg.tracking}: {best_tune_loss:.4f}\n')
         else:
-            print(f'Train loss: {train_loss:.5f} \t Train {cfg.tracking}: {train_metrics[cfg.tracking]:.4f}')
-            print(f'Tune loss: {tune_loss:.5f} \t Tune {cfg.tracking}: {tune_metrics[cfg.tracking]:.4f} (best Tune {cfg.tracking}: {best_tune_metric:.4f}\n')
+            print(f'Train loss: {train_loss:.5f} \t Train {cfg.tracking}: {train_metrics[cfg.tracking][-1]:.4f}')
+            print(f'Tune loss: {tune_loss:.5f} \t Tune {cfg.tracking}: {tune_metrics[cfg.tracking][-1]:.4f} (best Tune {cfg.tracking}: {best_tune_metric:.4f}\n')
 
 
 if __name__ == '__main__':

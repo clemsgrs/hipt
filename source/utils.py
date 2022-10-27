@@ -11,23 +11,22 @@ from sklearn import metrics
 from sklearn.model_selection import train_test_split
 
 
-def initialize_wandb(project, exp_name, entity, key=''):
-	command = f'wandb login {key}'
-	subprocess.call(command, shell=True)
-	run = wandb.init(project=project, entity=entity, name=exp_name)
-	return run
+def initialize_wandb(project, exp_name, entity, config={}, tags=None, key=''):
+    command = f'wandb login {key}'
+    subprocess.call(command, shell=True)
+    if tags == None:
+        tags=[]
+    run = wandb.init(project=project, entity=entity, name=exp_name, config=config, tags=tags)
+    return run
 
 
 def initialize_df(slide_ids):
-
     nslide = len(slide_ids)
-
     df_dict = {
         'slide_id': slide_ids,
         'process': np.full((nslide), 1, dtype=np.uint8),
         'status': np.full((nslide), 'tbp'),
     }
-
     df = pd.DataFrame(df_dict)
     return df
 
@@ -94,12 +93,21 @@ def get_metrics(probs, labels, threshold: float = 0.5):
     return metrics_dict
 
 
+def collate_custom(batch):
+    idx = torch.LongTensor([item[0] for item in batch])
+    # feature = torch.vstack([item[1] for item in batch])
+    feature = torch.cat([item[1] for item in batch], dim=0)
+    label = torch.FloatTensor(np.array([item[2] for item in batch]))
+    return [idx, feature, label]
+
+
 def train(
     epoch: int,
     model: nn.Module,
     train_dataset: torch.utils.data.Dataset,
     optimizer: torch.optim.Optimizer,
     criterion: Callable,
+    collate_fn: Callable = collate_custom,
     batch_size: Optional[int] = 1,
     threshold: Optional[float] = 0.5,
     ):
@@ -113,7 +121,8 @@ def train(
     train_loader = torch.utils.data.DataLoader(
         train_dataset,
         batch_size=batch_size,
-        shuffle=True
+        shuffle=True,
+        collate_fn=collate_fn,
     )
 
     with tqdm.tqdm(
@@ -143,21 +152,22 @@ def train(
 
             epoch_loss += loss.item()
 
-            train_dataset.df.loc[idxs, 'training_prob'] = probs
+    train_dataset.df.loc[idxs, 'training_prob'] = probs
 
-        metrics = get_metrics(probs, labels, threshold)
-        avg_loss = epoch_loss / len(train_loader)
+    metrics = get_metrics(probs, labels, threshold)
+    avg_loss = epoch_loss / len(train_loader)
 
-        return avg_loss, metrics
+    return avg_loss, metrics
 
 
 def tune(
-    epoch,
-    model,
-    tune_dataset,
-    criterion,
-    batch_size,
-    threshold=0.5,
+    epoch: int,
+    model: nn.Module,
+    tune_dataset: torch.utils.data.Dataset,
+    criterion: Callable,
+    collate_fn: Callable = collate_custom,
+    batch_size: Optional[int] = 1,
+    threshold: Optional[float] = 0.5,
     ):
 
     model.eval()
@@ -169,7 +179,8 @@ def tune(
     tune_loader = torch.utils.data.DataLoader(
         tune_dataset,
         batch_size=batch_size,
-        shuffle=False
+        shuffle=False,
+        collate_fn=collate_fn,
     )
 
     with tqdm.tqdm(
@@ -189,7 +200,7 @@ def tune(
                 stacked_tiles, label = stacked_tiles.cuda(), label.cuda()
                 # stacked_tiles, label = stacked_tiles.cuda(device='cuda:1'), label.cuda(device='cuda:0')
                 logits = model(stacked_tiles)
-                loss = criterion(logits, label.float())
+                loss = criterion(logits, label)
 
                 prob = torch.sigmoid(logits)
                 probs.extend(prob[:,0].clone().tolist())

@@ -81,7 +81,7 @@ class ExtractedFeaturesDataset(torch.utils.data.Dataset):
         row = self.df.loc[index]
         slide_id = row.slide_id
         fp = Path(self.features_dir, self.level, f'{slide_id}.pt')
-        features = torch.load(fp)
+        features = torch.load(fp).unsqueeze(0)
 
         label = np.array([row.label]).astype(float) if self.training else np.array([-1])
 
