@@ -60,14 +60,13 @@ class GlobalHIPT(nn.Module):
 class LocalGlobalHIPT(nn.Module):
     def __init__(
         self,
-        path_input_dim=384,
-        size_arg = "small",
-        dropout=0.25,
-        num_classes=4,
-        pretrain_4k='None',
-        freeze_4k=False,
-        pretrain_WSI='None',
-        freeze_WSI=False,
+        size_arg: str = 'small',
+        num_classes: int = 4,
+        pretrain_4k: str = 'None',
+        freeze_4k: bool = False,
+        pretrain_WSI: str ='None',
+        freeze_WSI: bool = False,
+        dropout: float = 0.25,
     ):
 
         super(LocalGlobalHIPT, self).__init__()
@@ -132,7 +131,7 @@ class LocalGlobalHIPT(nn.Module):
         return logits, F.softmax(logits, dim=1), Y_hat
 
 
-class HIPT(nn.Module):
+class HIPT_repo(nn.Module):
     def __init__(
         self,
         size_arg='small',
@@ -190,7 +189,7 @@ class HIPT(nn.Module):
             num_heads=6,
             mlp_ratio=4.,
             qkv_bias=True,
-            qk_scale=None, 
+            qk_scale=None,
             norm_layer=partial(nn.LayerNorm, eps=1e-6),
         )
 
@@ -558,3 +557,127 @@ class LocalFeatureExtractor(nn.Module):
         feature_256 = self.vit_256(x).detach().cpu()            # [256, 384]
 
         return feature_256
+
+
+class myHIPT(nn.Module):
+    def __init__(
+        self,
+        level: str = 'global',
+        num_classes: int = 1,
+        pretrain_256: str = 'path/to/pretrained/vit_256/weights.pth',
+        pretrain_4096: str = 'path/to/pretrained/vit_4096/weights.pth',
+        embed_dim_256: int = 384,
+        embed_dim_4096: int = 192,
+        freeze_256: bool = True,
+        freeze_4096: bool = True,
+        size: str = 'small',
+        dropout: float = 0.25,
+    ):
+
+        super(myHIPT, self).__init__()
+        self.size_dict_path = {"small": [384, 192], "big": [1024, 512]}
+        size = self.size_dict_path[size_arg]
+
+        checkpoint_key = 'teacher'
+        self.level = level
+
+        if self.level == 'local':
+            self.device_256 = torch.device('cuda:1')
+            self.vit_256 = vit_small(img_size=256, patch_size=16, embed_dim=embed_dim_256)
+
+            if Path(pretrain_256).is_file():
+                print('Loading pretrained weights for ViT_256 model...')
+                state_dict = torch.load(pretrain_256, map_location='cpu')
+                if checkpoint_key is not None and checkpoint_key in state_dict:
+                    print(f'Take key {checkpoint_key} in provided checkpoint dict')
+                    state_dict = state_dict[checkpoint_key]
+                # remove `module.` prefix
+                state_dict = {k.replace('module.', ''): v for k, v in state_dict.items()}
+                # remove `backbone.` prefix induced by multicrop wrapper
+                state_dict = {k.replace('backbone.', ''): v for k, v in state_dict.items()}
+                state_dict, msg = update_state_dict(self.vit_256.state_dict(), state_dict)
+                self.vit_256.load_state_dict(state_dict, strict=False)
+                print(f'Pretrained weights found at {pretrain_256}')
+                print(msg)
+
+            else:
+                print(f'{pretrain_256} doesnt exist ; please provide path to existing file')
+
+            if freeze_256:
+                print('Freezing pretrained ViT_256 model')
+                for param in self.vit_256.parameters():
+                    param.requires_grad = False
+                print('Done')
+
+            self.vit_256.to(self.device_256)
+
+        self.device_4096 = torch.device('cuda:0')
+        self.vit_4096 = vit4k_xs(
+            img_size=4096,
+            patch_size=256,
+            input_embed_dim=embed_dim_256,
+            output_embed_dim=embed_dim_4096,
+            num_classes=0,
+        )
+
+        if Path(pretrain_4096).is_file():
+            print('Loading pretrained weights for ViT_4096 model...')
+            state_dict = torch.load(pretrain_4096, map_location='cpu')
+            if checkpoint_key is not None and checkpoint_key in state_dict:
+                print(f'Take key {checkpoint_key} in provided checkpoint dict')
+                state_dict = state_dict[checkpoint_key]
+            # remove `module.` prefix
+            state_dict = {k.replace('module.', ''): v for k, v in state_dict.items()}
+            # remove `backbone.` prefix induced by multicrop wrapper
+            state_dict = {k.replace('backbone.', ''): v for k, v in state_dict.items()}
+            state_dict, msg = update_state_dict(self.vit_4096.state_dict(), state_dict)
+            self.vit_4096.load_state_dict(state_dict, strict=False)
+            print(f'Pretrained weights found at {pretrain_4096}')
+            print(msg)
+
+        else:
+            print(f'{pretrain_4096} doesnt exist ; please provide path to existing file')
+
+        if freeze_4096:
+            print('Freezing pretrained ViT_4096 model')
+            for param in self.vit_4096.parameters():
+                param.requires_grad = False
+            print('Done')
+
+        self.vit_4096.to(self.device_4096)
+
+        # Global Aggregation
+        self.global_phi = nn.Sequential(nn.Linear(192, 192), nn.ReLU(), nn.Dropout(0.25))
+        self.global_transformer = nn.TransformerEncoder(
+            nn.TransformerEncoderLayer(
+                d_model=192, nhead=3, dim_feedforward=192, dropout=0.25, activation='relu'
+            ),
+            num_layers=2
+        )
+        self.global_attn_pool = Attn_Net_Gated(L=size[1], D=size[1], dropout=0.25, num_classes=1)
+        self.global_rho = nn.Sequential(*[nn.Linear(size[1], size[1]), nn.ReLU(), nn.Dropout(0.25)])
+
+        self.classifier = nn.Linear(size[1], num_classes)
+
+
+    def forward(self, x):
+
+        # for a given WSI, x should be a tensor of shape:
+        #   - [M, 256, 384] if self.level == 'local'
+        #   - [M, 192] if self.level == 'global'
+        # where M = number for [4096,4096] regions in the WSI
+
+        if self.level == 'local':
+            x = self.vit_256(x.unfold(1, 16, 16).transpose(1,2))
+
+        h_4096 = self.global_phi(x)
+        h_4096 = self.global_transformer(h_4096.unsqueeze(1)).squeeze(1)
+        att_4096, h_4096 = self.global_attn_pool(h_4096)
+        att_4096 = torch.transpose(att_4096, 1, 0)
+        att_4096 = F.softmax(att_4096, dim=1)
+        h_4096_att = torch.mm(att_4096, h_4096)
+        h_WSI = self.global_rho(h_4096_att)
+
+        logits = self.classifier(h_WSI)
+
+        return logits

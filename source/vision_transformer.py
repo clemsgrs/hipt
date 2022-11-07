@@ -343,7 +343,7 @@ class VisionTransformer4K(nn.Module):
         self.phi = nn.Sequential(*[nn.Linear(input_embed_dim, output_embed_dim), nn.GELU(), nn.Dropout(p=drop_rate)])
         num_patches = int(img_size // patch_size)**2
         print(f'Number of [{patch_size},{patch_size}] patches in [{img_size},{img_size}] image num_patches: {num_patches}')
-        
+
         self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
         self.pos_embed = nn.Parameter(torch.zeros(1, num_patches + 1, embed_dim))
         self.pos_drop = nn.Dropout(p=drop_rate)
@@ -454,7 +454,7 @@ def vit4k_xs(
         patch_size=patch_size,
         depth=6,
         num_heads=6,
-        mlp_ratio=4, 
+        mlp_ratio=4,
         qkv_bias=True,
         norm_layer=partial(nn.LayerNorm, eps=1e-6),
     )

@@ -14,7 +14,7 @@ from pathlib import Path
 from omegaconf import OmegaConf
 from collections import defaultdict
 
-from source.models import GlobalHIPT
+from source.models import GlobalHIPT, myHIPT
 from source.dataset import ExtractedFeaturesDataset
 from source.utils import initialize_wandb, create_train_tune_test_df, train, tune, epoch_time, collate_custom
 
@@ -32,14 +32,19 @@ def main(cfg):
 
     features_dir = Path(output_dir, 'features')
 
-    model = GlobalHIPT(
-        size_arg=cfg.size,
+    # model = GlobalHIPT(
+    #     size_arg=cfg.size,
+    #     num_classes=cfg.num_classes,
+    #     dropout=cfg.dropout,
+    # )
+    model = myHIPT(
         num_classes=cfg.num_classes,
+        size_arg=cfg.size,
         dropout=cfg.dropout,
     )
-    model = model.cuda()
+    model = model.cuda() #TODO: is in necessary? how about .relocate() method?
 
-    fold_num = 99
+    fold_num = cfg.fold_num
     fold_dir = Path(cfg.data_dir, cfg.dataset_name, 'splits', f'fold_{fold_num}')
 
     if Path(fold_dir, 'train.csv').exists() and Path(fold_dir, 'tune.csv').exists() and Path(fold_dir, 'test.csv').exists():

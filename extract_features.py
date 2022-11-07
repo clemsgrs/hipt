@@ -8,7 +8,7 @@ import shutil
 import pandas as pd
 from PIL import Image
 from pathlib import Path
-from omegaconf import OmegaConf
+from omegaconf import DictConfig, OmegaConf
 from torchvision import transforms
 
 from source.models import GlobalFeatureExtractor, LocalFeatureExtractor
@@ -16,7 +16,7 @@ from source.utils import initialize_wandb, initialize_df
 
 
 @hydra.main(version_base='1.2.0', config_path='config', config_name='feature_extraction')
-def main(cfg):
+def main(cfg: DictConfig):
 
     output_dir = Path(cfg.output_dir, cfg.dataset_name)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -55,7 +55,7 @@ def main(cfg):
             slide_ids = sorted([Path(x.strip()).stem for x in f.readlines()])
 
     process_list_fp = None
-    if Path(output_dir, f'process_list_{cfg.level}.csv').is_file() and cfg.resume:
+    if Path(output_dir, 'features', f'process_list_{cfg.level}.csv').is_file() and cfg.resume:
         process_list_fp = Path(output_dir, 'features', f'process_list_{cfg.level}.csv')
 
     if process_list_fp is None:
@@ -85,7 +85,7 @@ def main(cfg):
         position=0,
         leave=True,
         file=tqdm_file) as t1:
-        
+
             for i in t1:
 
                 idx = process_stack.index[i]
