@@ -14,12 +14,12 @@ from pathlib import Path
 from omegaconf import OmegaConf
 from collections import defaultdict
 
-from source.models import GlobalHIPT, myHIPT
+from source.models import HIPT
 from source.dataset import ExtractedFeaturesDataset
 from source.utils import initialize_wandb, create_train_tune_test_df, train, tune, epoch_time, collate_custom
 
 
-@hydra.main(version_base='1.2.0', config_path='config', config_name='global')
+@hydra.main(version_base='1.2.0', config_path='config', config_name='local')
 def main(cfg):
 
     output_dir = Path(cfg.output_dir, cfg.dataset_name)
@@ -32,14 +32,11 @@ def main(cfg):
 
     features_dir = Path(output_dir, 'features')
 
-    # model = GlobalHIPT(
-    #     size_arg=cfg.size,
-    #     num_classes=cfg.num_classes,
-    #     dropout=cfg.dropout,
-    # )
-    model = myHIPT(
+    model = HIPT(
+        level=cfg.level,
         num_classes=cfg.num_classes,
-        size_arg=cfg.size,
+        pretrain_4096=cfg.pretrain_4096,
+        freeze_4096=cfg.freeze_4096,
         dropout=cfg.dropout,
     )
     model = model.cuda() #TODO: is in necessary? how about .relocate() method?

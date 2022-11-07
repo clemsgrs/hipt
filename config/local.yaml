@@ -6,9 +6,9 @@ data_csv: '${data_dir}/${dataset_name}/data.csv'
 slide_list: '${data_dir}/${dataset_name}/tmp_list.txt'
 
 fold_num: -1
-level: 'global'
-pretrain_4096:
-freeze_4096:
+level: 'local'
+pretrain_4096: 'checkpoints/vit_4096_xs_dino.pth'
+freeze_4096: True
 
 num_classes: 1
 nepochs: 20
@@ -18,7 +18,7 @@ lr_scheduler:
 lr_step: 15
 dropout: 0.25
 
-pct:
+pct: 0.05
 
 train_batch_size: 1
 tune_batch_size: 1

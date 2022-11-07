@@ -1,5 +1,9 @@
+notebooks/*.png
+
 # wandb related
 wandb/
+
+# hydra related
 outputs/
 
 # Byte-compiled / optimized / DLL files
