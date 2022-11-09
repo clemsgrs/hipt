@@ -34,8 +34,10 @@ class HIPT(nn.Module):
         if self.local:
 
             self.vit_4096 = vit4k_xs(
-                img_size=4096,
-                patch_size=256,
+                # img_size=4096,
+                # patch_size=256,
+                img_size=224,
+                patch_size=16,
                 input_embed_dim=embed_dim_256,
                 output_embed_dim=embed_dim_4096,
                 num_classes=0,
@@ -85,15 +87,16 @@ class HIPT(nn.Module):
         #   - [M, 192] if level == 'global'
         # where M = number for [4096,4096] regions in the WSI
 
-        x = x.squeeze(0)
         if self.local:
             # x = [M, 256, 384]
             x = self.vit_4096(x.unfold(1, 16, 16).transpose(1,2))
 
-        x = x.unsqueeze(0)
-        # x = [1, M, 192]
+        # x = [M, 192]
         x = self.global_phi(x)
-        x = self.global_transformer(x).squeeze(0)
+
+        # in nn.TransformerEncoderLayer, batch_first defaults to False
+        # hence, input is expected to be of shape (seq_length, batch, emb_size)
+        x = self.global_transformer(x.unsqueeze(1)).squeeze(1)
         att, x = self.global_attn_pool(x)
         att = torch.transpose(att, 1, 0)
         att = F.softmax(att, dim=1)
