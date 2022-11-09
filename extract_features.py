@@ -134,5 +134,3 @@ if __name__ == '__main__':
     # python3 extract_features.py
     main()
 
-
-

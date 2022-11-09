@@ -5,8 +5,10 @@ import subprocess
 import numpy as np
 import pandas as pd
 import torch.nn as nn
+import torch.nn.functional as F
+
 from pathlib import Path
-from typing import Optional, Callable
+from typing import Optional, Callable, List
 from sklearn import metrics
 from sklearn.model_selection import train_test_split
 
@@ -81,15 +83,20 @@ def epoch_time(start_time, end_time):
     return elapsed_mins, elapsed_secs
 
 
-def get_metrics(probs, labels, threshold: float = 0.5):
-    probs, labels = np.asarray(probs), np.asarray(labels)
-    preds = probs > threshold
+def get_binary_metrics(probs: np.array(float), preds: List[int], labels: List[int]):
+    labels = np.asarray(labels)
     acc = metrics.accuracy_score(labels, preds)
     auc = metrics.roc_auc_score(labels, probs)
     precision = metrics.precision_score(labels, preds, zero_division=0)
     recall = metrics.recall_score(labels, preds)
+    metrics_dict = {'accuracy': acc, 'auc': auc, 'precision': precision, 'recall': recall}
+    return metrics_dict
 
-    metrics_dict = {'acc': acc, 'auc': auc, 'precision': precision, 'recall': recall}
+
+def get_metrics(probs: np.array(float), preds: List[int], labels: List[int], multi_class: str = 'ovr'):
+    labels = np.asarray(labels)
+    auc = metrics.roc_auc_score(labels, probs, multi_class=multi_class)
+    metrics_dict = {'auc': auc}
     return metrics_dict
 
 
@@ -97,8 +104,72 @@ def collate_custom(batch):
     idx = torch.LongTensor([item[0] for item in batch])
     # feature = torch.vstack([item[1] for item in batch])
     feature = torch.cat([item[1] for item in batch], dim=0)
-    label = torch.FloatTensor(np.array([item[2] for item in batch]))
+    label = torch.LongTensor([item[2] for item in batch])
     return [idx, feature, label]
+
+
+def make_weights_for_balanced_classes(dataset):
+    n_samples = len(dataset)
+    weight_per_class = []
+    for c in range(dataset.num_classes):
+        w = n_samples * 1. / len(dataset.class_2_id[c])
+        weight_per_class.append(w)
+    weight = []
+    for idx in range(len(dataset)):
+        y = dataset.get_label(idx)
+        weight.append(weight_per_class[y])
+    return torch.DoubleTensor(weight)
+
+
+class EarlyStopping:
+    """Early stops the training if validation loss doesn't improve after a given patience."""
+    def __init__(
+        self,
+        tracking: str,
+        min_max: str,
+        patience: int = 20,
+        min_epoch: int = 50,
+        checkpoint_dir: Optional[Path] = None,
+        save_all: bool = False,
+        verbose: bool = False):
+        """
+        Args:
+            patience (int): How long to wait after last time validation loss improved.
+            min_epoch (int): Earliest epoch possible for stopping
+            verbose (bool): If True, prints a message for each validation loss improvement
+        """
+        self.tracking = tracking
+        self.min_max = min_max
+        self.patience = patience
+        self.min_epoch = min_epoch
+        self.checkpoint_dir = checkpoint_dir
+        self.save_all = save_all
+        self.verbose = verbose
+
+        self.best_score = None
+        self.early_stop = False
+
+    def __call__(self, epoch, model, results):
+
+        score = results[self.tracking]
+        if self.self.min_max == 'min':
+            score = -1 * score
+
+        if self.best_score is None or score >= self.best_score:
+            self.best_score = score
+            fname = f'best_model.pt'
+            torch.save(model.state_dict(), Path(self.checkpoint_dir, fname))
+            self.counter = 0
+
+        elif score < self.best_score:
+            self.counter += 1
+            print(f'EarlyStopping counter: {self.counter}/{self.patience}')
+            if self.counter >= self.patience and epoch > self.min_epoch:
+                self.early_stop = True
+
+        if self.save_all:
+            fname = f'epoch_{epoch}.pt'
+            torch.save(model.state_dict(), Path(self.checkpoint_dir, fname))
 
 
 def train(
@@ -109,19 +180,31 @@ def train(
     criterion: Callable,
     collate_fn: Callable = collate_custom,
     batch_size: Optional[int] = 1,
-    threshold: Optional[float] = 0.5,
+    weighted_sampling: Optional[bool] = False,
+    gradient_clipping: Optional[int] = None,
     ):
+
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     model.train()
     epoch_loss = 0
-    probs = []
-    labels = []
+    probs = np.empty((0,train_dataset.num_classes))
+    preds, labels = [], []
     idxs = []
+
+    if weighted_sampling:
+        weights = make_weights_for_balanced_classes(train_dataset)
+        train_sampler = torch.utils.data.WeightedRandomSampler(
+            weights,
+            len(weights),
+        )
+    else:
+        train_sampler = torch.utils.data.RandomSampler(train_dataset)
 
     train_loader = torch.utils.data.DataLoader(
         train_dataset,
         batch_size=batch_size,
-        shuffle=True,
+        sampler=train_sampler,
         collate_fn=collate_fn,
     )
 
@@ -131,33 +214,46 @@ def train(
         unit=' slide',
         ncols=80,
         unit_scale=batch_size,
-        position=0,
         leave=True) as t:
 
         for i, batch in enumerate(t):
 
             optimizer.zero_grad()
-            idx, stacked_tiles, label = batch
-            stacked_tiles, label = stacked_tiles.cuda(), label.cuda()
-            # stacked_tiles, label = stacked_tiles.cuda(device='cuda:1'), label.cuda(device='cuda:0')
-            logits = model(stacked_tiles)
+            idx, features, label = batch
+            features, label = features.to(device, non_blocking=True), label.to(device, non_blocking=True)
+            logits = model(features)
             loss = criterion(logits, label)
+
+            loss_value = loss.item()
+            epoch_loss += loss_value
+
+            if gradient_clipping:
+                loss = loss / gradient_clipping
+
             loss.backward()
             optimizer.step()
 
-            prob = torch.sigmoid(logits)
-            probs.extend(prob[:,0].clone().tolist())
+            prob = F.softmax(logits, dim=1).cpu().detach().numpy()
+            probs = np.append(probs, prob, axis=0)
+
+            pred = torch.topk(logits, 1, dim=1)[1]
+            preds.extend(pred[:,0].clone().tolist())
+
             labels.extend(label.clone().tolist())
             idxs.extend(list(idx))
 
-            epoch_loss += loss.item()
+    #TODO: what happens if idxs is not made of unique index values?
+    for class_idx, p in enumerate(probs.T):
+        train_dataset.df.loc[idxs, f'training_prob_{class_idx}'] = p.tolist()
 
-    train_dataset.df.loc[idxs, 'training_prob'] = probs
+    if train_dataset.num_classes == 2:
+        metrics = get_binary_metrics(probs[:,1], preds, labels)
+    else:
+        metrics = get_metrics(probs, preds, labels)
 
-    metrics = get_metrics(probs, labels, threshold)
-    avg_loss = epoch_loss / len(train_loader)
+    train_loss = epoch_loss / len(train_loader)
 
-    return avg_loss, metrics
+    return train_loss, metrics
 
 
 def tune(
@@ -167,51 +263,62 @@ def tune(
     criterion: Callable,
     collate_fn: Callable = collate_custom,
     batch_size: Optional[int] = 1,
-    threshold: Optional[float] = 0.5,
     ):
+
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     model.eval()
     epoch_loss = 0
-    probs = []
-    labels = []
+    probs = np.empty((0,tune_dataset.num_classes))
+    preds, labels = [], []
     idxs = []
+
+    tune_sampler = torch.utils.data.SequentialSampler(tune_dataset)
 
     tune_loader = torch.utils.data.DataLoader(
         tune_dataset,
         batch_size=batch_size,
-        shuffle=False,
+        sampler=tune_sampler,
         collate_fn=collate_fn,
     )
 
     with tqdm.tqdm(
         tune_loader,
         desc=(f'Tune - Epoch {epoch}'),
-        unit=' tensor',
+        unit=' slide',
         ncols=80,
         unit_scale=batch_size,
-        position=1,
         leave=True) as t:
 
         with torch.no_grad():
 
             for i, batch in enumerate(t):
 
-                idx, stacked_tiles, label = batch
-                stacked_tiles, label = stacked_tiles.cuda(), label.cuda()
-                # stacked_tiles, label = stacked_tiles.cuda(device='cuda:1'), label.cuda(device='cuda:0')
-                logits = model(stacked_tiles)
+                idx, features, label = batch
+                features, label = features.to(device, non_blocking=True), label.to(device, non_blocking=True)
+                logits = model(features)
                 loss = criterion(logits, label)
 
-                prob = torch.sigmoid(logits)
-                probs.extend(prob[:,0].clone().tolist())
+                prob = F.softmax(logits, dim=1).cpu().numpy()
+                probs = np.append(probs, prob, axis=0)
+
+                pred = torch.topk(logits, 1, dim=1)[1]
+                preds.extend(pred[:,0].clone().tolist())
+
                 labels.extend(label.clone().tolist())
                 idxs.extend(list(idx))
 
                 epoch_loss += loss.item()
 
-        tune_dataset.df.loc[idxs, 'validation_prob'] = probs
+        #TODO: what happens if idxs is not made of unique index values?
+        for class_idx, p in enumerate(probs.T):
+            tune_dataset.df.loc[idxs, f'tuning_prob_{class_idx}'] = p.tolist()
 
-        metrics = get_metrics(probs, labels, threshold)
-        avg_loss = epoch_loss / len(tune_loader)
+        if tune_dataset.num_classes == 2:
+            metrics = get_binary_metrics(probs[:,1], preds, labels)
+        else:
+            metrics = get_metrics(probs, preds, labels)
 
-        return avg_loss, metrics
+        tune_loss = epoch_loss / len(tune_loader)
+
+        return tune_loss, metrics

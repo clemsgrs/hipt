@@ -3,28 +3,37 @@ output_dir: 'output'
 
 dataset_name: 'tcga_brca'
 data_csv: '${data_dir}/${dataset_name}/data.csv'
-slide_list: '${data_dir}/${dataset_name}/tmp_list.txt'
+# slide_list: '${data_dir}/${dataset_name}/tmp_list.txt'
+slide_list:
 
-fold_num: -1
+fold_num: 0
 level: 'local'
 pretrain_4096: 'checkpoints/vit_4096_xs_dino.pth'
 freeze_4096: True
 
-num_classes: 1
-nepochs: 20
-eval_every: 1
+num_classes: 2
+nepochs: 50
+tune_every: 1
 lr: 2e-4
 lr_scheduler:
 lr_step: 15
+wd: 1e-5
 dropout: 0.25
+weighted_sampling: True
+gradient_clipping: 32
 
-pct: 0.05
+pct:
 
 train_batch_size: 1
 tune_batch_size: 1
 
-tracking: 'auc'
-metric_objective: 'max'
+save_all: False
+
+early_stopping:
+  tracking: 'loss'
+  min_max: 'min'
+  patience: 10
+  min_epoch: 50
 
 wandb:
   project: 'hipt'

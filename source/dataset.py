@@ -5,7 +5,8 @@ import pandas as pd
 from PIL import Image
 from pathlib import Path
 from torchvision import transforms
-from typing import Callable, Union
+from typing import Callable
+from collections import defaultdict
 
 
 def read_image(image_fp: str) -> Image:
@@ -27,8 +28,8 @@ class StackedTilesDataset(torch.utils.data.Dataset):
         self.training = training
         self.transform = transform
 
-    def __getitem__(self, index: int):
-        row = self.df.loc[index]
+    def __getitem__(self, idx: int):
+        row = self.df.loc[idx]
         slide_id = row.id
         tiles_dir = Path(self.tiles_dir, slide_id, str(self.tile_size), 'imgs')
         tiles_list = list(tiles_dir.glob('*.png'))
@@ -56,7 +57,7 @@ class StackedTilesDataset(torch.utils.data.Dataset):
 
             label = np.array([row.label]).astype(float) if self.training else np.array([-1])
 
-            return index, stacked_tiles, label
+            return idx, stacked_tiles, label
 
     def __len__(self):
         return len(self.df)
@@ -66,27 +67,39 @@ class ExtractedFeaturesDataset(torch.utils.data.Dataset):
     def __init__(
         self,
         df: pd.DataFrame,
-        features_dir: Path,
+        features_root_dir: Path,
         level: str,
         training: bool = True,
         transform: Callable = None
     ):
         self.df = df
-        self.features_dir = features_dir
+        self.features_root_dir = features_root_dir
         self.level = level
         self.training = training
         self.transform = transform
 
-    def __getitem__(self, index: int):
-        row = self.df.loc[index]
+        self.num_classes = len(self.df.label.value_counts(dropna=True))
+        self.map_class_to_slide_ids()
+
+    def map_class_to_slide_ids(self):
+        # map each class to corresponding slide ids
+        self.class_2_id = defaultdict(list)
+        for i in range(self.num_classes):
+            self.class_2_id[i] = np.asarray(self.df.label == i).nonzero()[0]
+
+    def get_label(self, idx):
+        return self.df.label[idx]
+
+    def __getitem__(self, idx: int):
+        row = self.df.loc[idx]
         slide_id = row.slide_id
-        fp = Path(self.features_dir, self.level, f'{slide_id}.pt')
-        features = torch.load(fp, map_location='cuda:0').unsqueeze(0)
-        # features = torch.load(fp).unsqueeze(0)
+        fp = Path(self.features_root_dir, self.level, f'{slide_id}.pt')
+        features = torch.load(fp).unsqueeze(0)
+        features = torch.load(fp)
 
-        label = np.array([row.label]).astype(float) if self.training else np.array([-1])
+        label = row.label
 
-        return index, features, label
+        return idx, features, label
 
     def __len__(self):
         return len(self.df)

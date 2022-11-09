@@ -14,6 +14,7 @@ from source.utils import update_state_dict
 
 
 class HIPT(nn.Module):
+
     def __init__(
         self,
         level: str = 'global',
@@ -28,11 +29,10 @@ class HIPT(nn.Module):
         super(HIPT, self).__init__()
 
         checkpoint_key = 'teacher'
-        self.level = level
+        self.local = level == 'local'
 
-        if self.level == 'local':
+        if self.local:
 
-            self.device_4096 = torch.device('cuda:0')
             self.vit_4096 = vit4k_xs(
                 img_size=4096,
                 patch_size=256,
@@ -65,8 +65,6 @@ class HIPT(nn.Module):
                     param.requires_grad = False
                 print('Done')
 
-            self.vit_4096.to(self.device_4096)
-
         # Global Aggregation
         self.global_phi = nn.Sequential(nn.Linear(embed_dim_4096, 192), nn.ReLU(), nn.Dropout(dropout))
         self.global_transformer = nn.TransformerEncoder(
@@ -80,17 +78,16 @@ class HIPT(nn.Module):
 
         self.classifier = nn.Linear(192, num_classes)
 
-
     def forward(self, x):
 
         # for a given WSI, x should be a tensor of shape:
-        #   - [M, 256, 384] if self.level == 'local'
-        #   - [M, 192] if self.level == 'global'
+        #   - [M, 256, 384] if level == 'local'
+        #   - [M, 192] if level == 'global'
         # where M = number for [4096,4096] regions in the WSI
 
         x = x.squeeze(0)
-        if self.level == 'local':
-            # x = [1, M, 256, 384]
+        if self.local:
+            # x = [M, 256, 384]
             x = self.vit_4096(x.unfold(1, 16, 16).transpose(1,2))
 
         x = x.unsqueeze(0)
@@ -106,6 +103,19 @@ class HIPT(nn.Module):
         logits = self.classifier(x_wsi)
 
         return logits
+
+    def relocate(self):
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        if torch.cuda.device_count() >= 1 and self.local:
+            device_ids = list(range(torch.cuda.device_count()))
+            self.vit_4096 = nn.DataParallel(self.vit_4096, device_ids=device_ids).to('cuda:0')
+
+        self.global_phi = self.global_phi.to(device)
+        self.global_transformer = self.global_transformer.to(device)
+        self.global_attn_pool = self.global_attn_pool.to(device)
+        self.global_rho = self.global_rho.to(device)
+
+        self.classifier = self.classifier.to(device)
 
 
 class HIPT_repo(nn.Module):
@@ -480,7 +490,7 @@ class GlobalFeatureExtractor(nn.Module):
         features_256 = features_256.unsqueeze(0)            # [1, 384, 16, 16]
         features_256 = features_256.to(self.device_4096, non_blocking=True)
 
-        feature_4096 = self.vit_4096(features_256)
+        feature_4096 = self.vit_4096(features_256).detach().cpu()
 
         return feature_4096
 

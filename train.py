@@ -1,36 +1,38 @@
 import os
 import time
-import tqdm
 import wandb
 import torch
 import torch.nn as nn
 import torch.optim as optim
-import torch.nn.functional as F
 import hydra
 import numpy as np
 import pandas as pd
-from PIL import Image
 from pathlib import Path
 from omegaconf import OmegaConf
 from collections import defaultdict
 
 from source.models import HIPT
 from source.dataset import ExtractedFeaturesDataset
-from source.utils import initialize_wandb, create_train_tune_test_df, train, tune, epoch_time, collate_custom
+from source.utils import initialize_wandb, create_train_tune_test_df, train, tune, epoch_time, EarlyStopping
 
 
-@hydra.main(version_base='1.2.0', config_path='config', config_name='local')
+@hydra.main(version_base='1.2.0', config_path='config', config_name='global')
 def main(cfg):
 
     output_dir = Path(cfg.output_dir, cfg.dataset_name)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # set up wandb
-    # key = os.environ.get('WANDB_API_KEY')
-    # wandb.config = OmegaConf.to_container(cfg, resolve=True, throw_on_missing=True)
-    # wandb_run = initialize_wandb(project=cfg.wandb.project, exp_name=cfg.wandb.exp_name, entity=cfg.wandb.username, key=key)
+    checkpoint_dir = Path(output_dir, 'checkpoints', cfg.level)
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
-    features_dir = Path(output_dir, 'features')
+    # set up wandb
+    key = os.environ.get('WANDB_API_KEY')
+    config = OmegaConf.to_container(cfg, resolve=True, throw_on_missing=True)
+    wandb_run = initialize_wandb(project=cfg.wandb.project, exp_name=cfg.wandb.exp_name, entity=cfg.wandb.username, config=config, key=key)
+    wandb_run.define_metric('epoch', summary='max')
+    wandb_run.define_metric('tune_loss', step_metric='epoch')
+
+    features_root_dir = Path(output_dir, 'features')
 
     model = HIPT(
         level=cfg.level,
@@ -39,7 +41,7 @@ def main(cfg):
         freeze_4096=cfg.freeze_4096,
         dropout=cfg.dropout,
     )
-    model = model.cuda() #TODO: is in necessary? how about .relocate() method?
+    model.relocate()
 
     fold_num = cfg.fold_num
     fold_dir = Path(cfg.data_dir, cfg.dataset_name, 'splits', f'fold_{fold_num}')
@@ -66,45 +68,49 @@ def main(cfg):
         train_df = train_df.sample(frac=cfg.pct).reset_index(drop=True)
         tune_df = tune_df.sample(frac=cfg.pct).reset_index(drop=True)
 
-    train_dataset = ExtractedFeaturesDataset(train_df, features_dir, level=cfg.level)
-    tune_dataset = ExtractedFeaturesDataset(tune_df, features_dir, level=cfg.level)
+    train_dataset = ExtractedFeaturesDataset(train_df, features_root_dir, level=cfg.level)
+    tune_dataset = ExtractedFeaturesDataset(tune_df, features_root_dir, level=cfg.level)
+    assert train_dataset.num_classes == tune_dataset.num_classes
 
-    optimizer = optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=cfg.lr)
+    optimizer = optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=cfg.lr, weight_decay=cfg.wd)
     if cfg.lr_scheduler:
         scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=cfg.lr_step, gamma=0.1)
 
-    criterion = nn.BCEWithLogitsLoss()
-    criterion = criterion.cuda()
+    criterion = nn.CrossEntropyLoss()
 
-    best_tune_loss = float('inf')
-    if cfg.metric_objective == 'max':
-        best_tune_metric = 0.0
-    elif cfg.metric_objective == 'min':
-        best_tune_metric = float('inf')
+    early_stopping = EarlyStopping(
+        cfg.early_stopping.tracking,
+        cfg.early_stopping.min_max,
+        cfg.early_stopping.patience,
+        cfg.early_stopping.min_epoch,
+        checkpoint_dir=checkpoint_dir,
+        save_all=cfg.save_all,
+    )
 
-    train_losses, tune_losses = [], []
-    train_metrics, tune_metrics = defaultdict(list), defaultdict(list)
-
+    stop = False
     for epoch in range(cfg.nepochs):
 
         start_time = time.time()
+        wandb.log({'epoch': epoch})
 
-        train_loss, train_metric = train(
+        train_results = train(
             epoch+1,
             model,
             train_dataset,
             optimizer,
             criterion,
             batch_size=cfg.train_batch_size,
+            weighted_sampling=cfg.weighted_sampling,
+            gradient_clipping=cfg.gradient_clipping,
         )
 
-        train_losses.append(train_loss)
-        for k,v in train_metric.items():
-            train_metrics[k].append(v)
 
-        if epoch % cfg.eval_every == 0:
+        for res, val in train_results.items():
+            wandb.log({f'train_{res}': val})
 
-            tune_loss, tune_metric = tune(
+        if epoch % cfg.tune_every == 0:
+
+            tune_results = tune(
                 epoch+1,
                 model,
                 tune_dataset,
@@ -112,22 +118,12 @@ def main(cfg):
                 batch_size=cfg.tune_batch_size
             )
 
-            tune_losses.append(tune_loss)
-            for k,v in tune_metric.items():
-                tune_metrics[k].append(v)
+            for res, val in tune_results.items():
+                wandb.log({f'tune_{res}': val})
 
-            if cfg.tracking == 'loss':
-                if tune_loss < best_tune_loss:
-                    best_tune_loss = tune_loss
-                    model_fp = Path(output_dir, 'best_model.pt')
-                    torch.save(model.state_dict(), model_fp)
-
-            else:
-                tune_metric_tracked = tune_metrics[cfg.tracking][-1]
-                if tune_metric_tracked > best_tune_metric:
-                    best_tune_metric = tune_metric_tracked
-                    model_fp = Path(output_dir, 'best_model.pt')
-                    torch.save(model.state_dict(), model_fp)
+            early_stopping(epoch, model, tune_results)
+            if early_stopping.early_stop:
+                stop = True
 
         if cfg.lr_scheduler:
             scheduler.step()
@@ -135,12 +131,10 @@ def main(cfg):
         end_time = time.time()
         epoch_mins, epoch_secs = epoch_time(start_time, end_time)
         print(f'End of epoch {epoch+1} / {cfg.nepochs} \t Time Taken:  {epoch_mins}m {epoch_secs}s')
-        if cfg.tracking == 'loss':
-            print(f'Train loss: {train_loss:.5f}')
-            print(f'Tune loss: {tune_loss:.5f} (best Tune {cfg.tracking}: {best_tune_loss:.4f}\n')
-        else:
-            print(f'Train loss: {train_loss:.5f} \t Train {cfg.tracking}: {train_metrics[cfg.tracking][-1]:.4f}')
-            print(f'Tune loss: {tune_loss:.5f} \t Tune {cfg.tracking}: {tune_metrics[cfg.tracking][-1]:.4f} (best Tune {cfg.tracking}: {best_tune_metric:.4f}\n')
+
+        if stop:
+            print('Early stopping')
+            break
 
 
 if __name__ == '__main__':
