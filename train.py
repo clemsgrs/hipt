@@ -30,7 +30,6 @@ def main(cfg):
     config = OmegaConf.to_container(cfg, resolve=True, throw_on_missing=True)
     wandb_run = initialize_wandb(project=cfg.wandb.project, exp_name=cfg.wandb.exp_name, entity=cfg.wandb.username, config=config, key=key)
     wandb_run.define_metric('epoch', summary='max')
-    wandb_run.define_metric('tune_loss', step_metric='epoch')
 
     features_root_dir = Path(output_dir, 'features')
 
@@ -104,9 +103,9 @@ def main(cfg):
             gradient_clipping=cfg.gradient_clipping,
         )
 
-
         for res, val in train_results.items():
-            wandb.log({f'train_{res}': val})
+            wandb.define_metric(f'train/{res}', step_metric='epoch')
+            wandb.log({f'train/{res}': val})
 
         if epoch % cfg.tune_every == 0:
 
@@ -119,7 +118,8 @@ def main(cfg):
             )
 
             for res, val in tune_results.items():
-                wandb.log({f'tune_{res}': val})
+                wandb.define_metric(f'tune/{res}', step_metric='epoch')
+                wandb.log({f'tune/{res}': val})
 
             early_stopping(epoch, model, tune_results)
             if early_stopping.early_stop:

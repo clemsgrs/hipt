@@ -152,7 +152,7 @@ class EarlyStopping:
     def __call__(self, epoch, model, results):
 
         score = results[self.tracking]
-        if self.self.min_max == 'min':
+        if self.min_max == 'min':
             score = -1 * score
 
         if self.best_score is None or score >= self.best_score:
@@ -208,6 +208,8 @@ def train(
         collate_fn=collate_fn,
     )
 
+    train_results = {}
+
     with tqdm.tqdm(
         train_loader,
         desc=(f'Train - Epoch {epoch}'),
@@ -251,9 +253,12 @@ def train(
     else:
         metrics = get_metrics(probs, preds, labels)
 
-    train_loss = epoch_loss / len(train_loader)
+    train_results.update(metrics)
 
-    return train_loss, metrics
+    train_loss = epoch_loss / len(train_loader)
+    train_results['loss'] = train_loss
+
+    return train_results
 
 
 def tune(
@@ -281,6 +286,8 @@ def tune(
         sampler=tune_sampler,
         collate_fn=collate_fn,
     )
+
+    tune_results = {}
 
     with tqdm.tqdm(
         tune_loader,
@@ -319,6 +326,9 @@ def tune(
         else:
             metrics = get_metrics(probs, preds, labels)
 
-        tune_loss = epoch_loss / len(tune_loader)
+        tune_results.update(metrics)
 
-        return tune_loss, metrics
+        tune_loss = epoch_loss / len(tune_loader)
+        tune_results['loss'] = tune_loss
+
+        return tune_results
