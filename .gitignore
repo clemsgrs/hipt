@@ -1,4 +1,10 @@
+scripts/*
+output/*
+checkpoints/*
 notebooks/*.png
+
+# un-related python scripts
+convert_svs_slides_to_tif.py
 
 # wandb related
 wandb/
