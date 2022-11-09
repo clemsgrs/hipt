@@ -9,14 +9,13 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 from omegaconf import OmegaConf
-from collections import defaultdict
 
 from source.models import HIPT
 from source.dataset import ExtractedFeaturesDataset
 from source.utils import initialize_wandb, create_train_tune_test_df, train, tune, epoch_time, EarlyStopping
 
 
-@hydra.main(version_base='1.2.0', config_path='config', config_name='global')
+@hydra.main(version_base='1.2.0', config_path='config', config_name='local')
 def main(cfg):
 
     output_dir = Path(cfg.output_dir, cfg.dataset_name)
