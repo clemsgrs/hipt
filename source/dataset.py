@@ -67,12 +67,12 @@ class ExtractedFeaturesDataset(torch.utils.data.Dataset):
     def __init__(
         self,
         df: pd.DataFrame,
-        features_root_dir: Path,
+        features_dir: Path,
         training: bool = True,
         transform: Callable = None
     ):
         self.df = df
-        self.features_root_dir = features_root_dir
+        self.features_dir = features_dir
         self.training = training
         self.transform = transform
 
