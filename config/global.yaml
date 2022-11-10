@@ -1,5 +1,6 @@
 data_dir: 'data'
 output_dir: 'output'
+features_dir:
 
 dataset_name: 'tcga_brca'
 data_csv: '${data_dir}/${dataset_name}/data.csv'

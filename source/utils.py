@@ -220,7 +220,7 @@ def train(
 
         for i, batch in enumerate(t):
 
-            optimizer.zero_grad()
+            # optimizer.zero_grad()
             idx, features, label = batch
             features, label = features.to(device, non_blocking=True), label.to(device, non_blocking=True)
             logits = model(features)
@@ -234,6 +234,7 @@ def train(
 
             loss.backward()
             optimizer.step()
+            optimizer.zero_grad()
 
             prob = F.softmax(logits, dim=1).cpu().detach().numpy()
             probs = np.append(probs, prob, axis=0)

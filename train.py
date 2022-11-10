@@ -1,11 +1,9 @@
 import os
 import time
 import wandb
-import torch
 import torch.nn as nn
 import torch.optim as optim
 import hydra
-import numpy as np
 import pandas as pd
 from pathlib import Path
 from omegaconf import OmegaConf
@@ -27,10 +25,13 @@ def main(cfg):
     # set up wandb
     key = os.environ.get('WANDB_API_KEY')
     config = OmegaConf.to_container(cfg, resolve=True, throw_on_missing=True)
-    wandb_run = initialize_wandb(project=cfg.wandb.project, exp_name=cfg.wandb.exp_name, entity=cfg.wandb.username, config=config, key=key)
-    wandb_run.define_metric('epoch', summary='max')
+    _ = initialize_wandb(project=cfg.wandb.project, exp_name=cfg.wandb.exp_name, entity=cfg.wandb.username, config=config, key=key)
+    wandb.define_metric('epoch', summary='max')
 
-    features_root_dir = Path(output_dir, 'features')
+    if cfg.features_dir:
+        features_dir = Path(cfg.features_dir)
+    else:
+        features_dir = Path(output_dir, 'features', cfg.level)
 
     model = HIPT(
         level=cfg.level,
@@ -66,8 +67,8 @@ def main(cfg):
         train_df = train_df.sample(frac=cfg.pct).reset_index(drop=True)
         tune_df = tune_df.sample(frac=cfg.pct).reset_index(drop=True)
 
-    train_dataset = ExtractedFeaturesDataset(train_df, features_root_dir, level=cfg.level)
-    tune_dataset = ExtractedFeaturesDataset(tune_df, features_root_dir, level=cfg.level)
+    train_dataset = ExtractedFeaturesDataset(train_df, features_dir)
+    tune_dataset = ExtractedFeaturesDataset(tune_df, features_dir)
     assert train_dataset.num_classes == tune_dataset.num_classes
 
     optimizer = optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=cfg.lr, weight_decay=cfg.wd)

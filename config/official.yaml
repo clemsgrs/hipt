@@ -1,16 +1,15 @@
 data_dir: 'data'
 output_dir: 'output'
-features_dir:
+features_dir: '/home/user/code/git/opensource/tmp/HIPT/3-Self-Supervised-Eval/embeddings_slide_lib/embeddings_slide_lib/vit256mean_tcga_slide_embeddings'
 
 dataset_name: 'tcga_brca'
 data_csv: '${data_dir}/${dataset_name}/data.csv'
-# slide_list: '${data_dir}/${dataset_name}/tmp_list.txt'
 slide_list:
 
 fold_num: 0
-level: 'local'
-pretrain_4096: 'checkpoints/vit_4096_xs_dino.pth'
-freeze_4096: True
+level: 'global'
+pretrain_4096:
+freeze_4096:
 
 num_classes: 2
 nepochs: 50
@@ -34,7 +33,7 @@ early_stopping:
   tracking: 'loss'
   min_max: 'min'
   patience: 10
-  min_epoch: 50
+  min_epoch: 30
 
 wandb:
   project: 'hipt'

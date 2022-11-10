@@ -68,13 +68,11 @@ class ExtractedFeaturesDataset(torch.utils.data.Dataset):
         self,
         df: pd.DataFrame,
         features_root_dir: Path,
-        level: str,
         training: bool = True,
         transform: Callable = None
     ):
         self.df = df
         self.features_root_dir = features_root_dir
-        self.level = level
         self.training = training
         self.transform = transform
 
@@ -93,8 +91,7 @@ class ExtractedFeaturesDataset(torch.utils.data.Dataset):
     def __getitem__(self, idx: int):
         row = self.df.loc[idx]
         slide_id = row.slide_id
-        fp = Path(self.features_root_dir, self.level, f'{slide_id}.pt')
-        features = torch.load(fp).unsqueeze(0)
+        fp = Path(self.features_dir, f'{slide_id}.pt')
         features = torch.load(fp)
 
         label = row.label
