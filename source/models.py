@@ -415,7 +415,7 @@ class GlobalFeatureExtractor(nn.Module):
         self.device_256 = torch.device('cuda:0')
         self.device_4096 = torch.device('cuda:1')
 
-        self.vit_256 = vit_small(img_size=256, patch_size=16, embed_dim=embed_dim_256)
+        self.vit_256 = vit_small(img_size=224, patch_size=16, embed_dim=embed_dim_256)
 
         if Path(pretrain_256).is_file():
             print('Loading pretrained weights for ViT_256 model...')
@@ -443,8 +443,8 @@ class GlobalFeatureExtractor(nn.Module):
         self.vit_256.to(self.device_256)
 
         self.vit_4096 = vit4k_xs(
-            img_size=4096,
-            patch_size=256,
+            img_size=224,
+            patch_size=16,
             input_embed_dim=embed_dim_256,
             output_embed_dim=embed_dim_4096,
             num_classes=0,

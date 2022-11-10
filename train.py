@@ -22,6 +22,9 @@ def main(cfg):
     checkpoint_dir = Path(output_dir, 'checkpoints', cfg.level)
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
+    result_dir = Path(output_dir, 'results', cfg.level)
+    result_dir.mkdir(parents=True, exist_ok=True)
+
     # set up wandb
     key = os.environ.get('WANDB_API_KEY')
     config = OmegaConf.to_container(cfg, resolve=True, throw_on_missing=True)
@@ -57,9 +60,9 @@ def main(cfg):
         label_df = pd.read_csv(cfg.data_csv)
         if cfg.slide_list:
             with open(Path(cfg.slide_list), 'r') as f:
-                slides = sorted([Path(x.strip()).stem for x in f.readlines()])
-            print(f'Restricting data to the {len(slides)} slides in slide list .txt file provided')
-            label_df = label_df[label_df['slide_id'].isin(slides)]
+                slide_ids = sorted([x.strip() for x in f.readlines()])
+            print(f'Restricting data to the {len(slide_ids)} slides in slide list .txt file provided')
+            label_df = label_df[label_df['slide_id'].isin(slide_ids)]
         train_df, tune_df, test_df = create_train_tune_test_df(label_df, save_csv=False, output_dir=cfg.data_dir)
 
     if cfg.pct:
@@ -103,6 +106,7 @@ def main(cfg):
             gradient_clipping=cfg.gradient_clipping,
         )
 
+        train_dataset.df.to_csv(Path(result_dir, f'train_{epoch}.csv'), index=False)
         for res, val in train_results.items():
             wandb.define_metric(f'train/{res}', step_metric='epoch')
             wandb.log({f'train/{res}': val})
@@ -117,6 +121,7 @@ def main(cfg):
                 batch_size=cfg.tune_batch_size
             )
 
+            tune_dataset.df.to_csv(Path(result_dir, f'tune_{epoch}.csv'), index=False)
             for res, val in tune_results.items():
                 wandb.define_metric(f'tune/{res}', step_metric='epoch')
                 wandb.log({f'tune/{res}': val})

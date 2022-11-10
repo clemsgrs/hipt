@@ -24,7 +24,9 @@ def main(cfg: DictConfig):
     features_dir = Path(output_dir, 'features', cfg.level)
     if not cfg.resume:
         if features_dir.exists():
+            print(f'{features_dir} already exists! deleting it...')
             shutil.rmtree(features_dir)
+            print('done')
             features_dir.mkdir(parents=False)
         else:
             features_dir.mkdir(parents=False, exist_ok=True)
@@ -32,8 +34,8 @@ def main(cfg: DictConfig):
     # set up wandb
     key = os.environ.get('WANDB_API_KEY')
     config = OmegaConf.to_container(cfg, resolve=True, throw_on_missing=True)
-    wandb_run = initialize_wandb(project=cfg.wandb.project, exp_name=cfg.wandb.exp_name, entity=cfg.wandb.username, config=config, key=key)
-    wandb_run.define_metric('processed', summary='max')
+    _ = initialize_wandb(project=cfg.wandb.project, exp_name=cfg.wandb.exp_name, entity=cfg.wandb.username, config=config, key=key)
+    wandb.define_metric('processed', summary='max')
 
     if cfg.level == 'global':
         model = GlobalFeatureExtractor(
@@ -52,7 +54,7 @@ def main(cfg: DictConfig):
 
     if cfg.slide_list:
         with open(Path(cfg.slide_list), 'r') as f:
-            slide_ids = sorted([Path(x.strip()).stem for x in f.readlines()])
+            slide_ids = sorted([x.strip() for x in f.readlines()])
 
     process_list_fp = None
     if Path(output_dir, 'features', f'process_list_{cfg.level}.csv').is_file() and cfg.resume:

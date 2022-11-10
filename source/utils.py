@@ -70,9 +70,9 @@ def create_train_tune_test_df(
         train_df.to_csv(Path(output_dir, f'train.csv'), index=False)
         tune_df.to_csv(Path(output_dir, f'tune.csv'), index=False)
         test_df.to_csv(Path(output_dir, f'test.csv'), index=False)
-    train_df = train_df.reset_index()
-    tune_df = tune_df.reset_index()
-    test_df = test_df.reset_index()
+    train_df = train_df.reset_index(drop=True)
+    tune_df = tune_df.reset_index(drop=True)
+    test_df = test_df.reset_index(drop=True)
     return train_df, tune_df, test_df
 
 
@@ -247,7 +247,7 @@ def train(
 
     #TODO: what happens if idxs is not made of unique index values?
     for class_idx, p in enumerate(probs.T):
-        train_dataset.df.loc[idxs, f'training_prob_{class_idx}'] = p.tolist()
+        train_dataset.df.loc[idxs, f'prob_{class_idx}'] = p.tolist()
 
     if train_dataset.num_classes == 2:
         metrics = get_binary_metrics(probs[:,1], preds, labels)
@@ -320,7 +320,7 @@ def tune(
 
         #TODO: what happens if idxs is not made of unique index values?
         for class_idx, p in enumerate(probs.T):
-            tune_dataset.df.loc[idxs, f'tuning_prob_{class_idx}'] = p.tolist()
+            tune_dataset.df.loc[idxs, f'prob_{class_idx}'] = p.tolist()
 
         if tune_dataset.num_classes == 2:
             metrics = get_binary_metrics(probs[:,1], preds, labels)

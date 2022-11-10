@@ -4,9 +4,10 @@ features_dir:
 
 dataset_name: 'tcga_brca'
 data_csv: '${data_dir}/${dataset_name}/data.csv'
-slide_list:
+slide_list: '${data_dir}/${dataset_name}/slide_list.txt'
+# slide_list:
 
-fold_num: 0
+fold_num: -1
 level: 'global'
 pretrain_4096:
 freeze_4096:
