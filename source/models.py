@@ -34,8 +34,6 @@ class HIPT(nn.Module):
         if self.local:
 
             self.vit_4096 = vit4k_xs(
-                # img_size=4096,
-                # patch_size=256,
                 img_size=224,
                 patch_size=16,
                 input_embed_dim=embed_dim_256,

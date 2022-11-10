@@ -177,7 +177,6 @@ class VisionTransformer(nn.Module):
         ):
 
         super().__init__()
-        self.num_features = self.embed_dim = embed_dim
 
         self.patch_embed = PatchEmbed(
             img_size=img_size, patch_size=patch_size, in_chans=in_chans, embed_dim=embed_dim)
@@ -339,7 +338,6 @@ class VisionTransformer4K(nn.Module):
 
         super().__init__()
         embed_dim = output_embed_dim
-        self.num_features = self.embed_dim = embed_dim
         self.phi = nn.Sequential(*[nn.Linear(input_embed_dim, output_embed_dim), nn.GELU(), nn.Dropout(p=drop_rate)])
         num_patches = int(img_size // patch_size)**2
         print(f'Number of [{patch_size},{patch_size}] patches in [{img_size},{img_size}] image: {num_patches}')
@@ -373,15 +371,15 @@ class VisionTransformer4K(nn.Module):
             nn.init.constant_(m.weight, 1.0)
 
     def interpolate_pos_encoding(self, x, w, h):
-        npatch = x.shape[1] - 1
-        N = self.pos_embed.shape[1] - 1
+        npatch = x.shape[1] - 1             # x = [M, 1+256, 192] -> npatch = 256
+        N = self.pos_embed.shape[1] - 1     # self.pos_embed = [1, 1+196, 192] -> N = 196
         if npatch == N and w == h:
             return self.pos_embed
-        class_pos_embed = self.pos_embed[:, 0]
-        patch_pos_embed = self.pos_embed[:, 1:]
-        dim = x.shape[-1]
-        w0 = w // 1
-        h0 = h // 1
+        class_pos_embed = self.pos_embed[:, 0]  # [1, 192]
+        patch_pos_embed = self.pos_embed[:, 1:] # [1, 196, 192]
+        dim = x.shape[-1]   # dim = 192
+        w0 = w // 1         # w = 16
+        h0 = h // 1         # h = 16
         # we add a small number to avoid floating point error in the interpolation
         # see discussion at https://github.com/facebookresearch/dino/issues/8
         w0, h0 = w0 + 0.1, h0 + 0.1
@@ -389,29 +387,29 @@ class VisionTransformer4K(nn.Module):
             patch_pos_embed.reshape(1, int(math.sqrt(N)), int(math.sqrt(N)), dim).permute(0, 3, 1, 2),
             scale_factor=(w0 / math.sqrt(N), h0 / math.sqrt(N)),
             mode='bicubic',
-        )
+        ) # [1, 192, 16, 16]
         assert int(w0) == patch_pos_embed.shape[-2] and int(h0) == patch_pos_embed.shape[-1]
-        patch_pos_embed = patch_pos_embed.permute(0, 2, 3, 1).view(1, -1, dim)
-        return torch.cat((class_pos_embed.unsqueeze(0), patch_pos_embed), dim=1)
+        patch_pos_embed = patch_pos_embed.permute(0, 2, 3, 1).view(1, -1, dim) # [1, 16, 16, 192] -> [1, 256, 192]
+        return torch.cat((class_pos_embed.unsqueeze(0), patch_pos_embed), dim=1) # [1, 1+256, 192]
 
     def prepare_tokens(self, x):
 
-        # x = [1, 384, 256, 256]
+        # x = [M, 384, 16, 16]
         B, embed_dim, w, h = x.shape
-        x = x.flatten(2, 3).transpose(1,2)
-        x = self.phi(x)
+        x = x.flatten(2, 3).transpose(1,2)  # [M, 256, 384]
+        x = self.phi(x)                     # [M, 256, 192]
 
         # add the [CLS] token to the embed patch tokens
-        cls_tokens = self.cls_token.expand(B, -1, -1)
-        x = torch.cat((cls_tokens, x), dim=1)
+        cls_tokens = self.cls_token.expand(B, -1, -1)   # [M, 1, 192]
+        x = torch.cat((cls_tokens, x), dim=1)           # [M, 1+256, 192]
 
         # add positional encoding to each token
-        x = x + self.interpolate_pos_encoding(x, w, h)
+        x = x + self.interpolate_pos_encoding(x, w, h)  # [M, 1+256, 192]
 
         return self.pos_drop(x)
 
     def forward(self, x):
-        x = self.prepare_tokens(x)
+        x = self.prepare_tokens(x)  # [M, 1+256, 192]
         for blk in self.blocks:
             x = blk(x)
         x = self.norm(x)
