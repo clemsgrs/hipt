@@ -163,7 +163,10 @@ class EarlyStopping:
 
         elif score < self.best_score:
             self.counter += 1
-            print(f'EarlyStopping counter: {self.counter}/{self.patience}')
+            if epoch <= self.min_epoch+1 and self.verbose:
+                print(f'EarlyStopping counter: {min(self.counter,self.patience)}/{self.patience}')
+            elif self.verbose:
+                print(f'EarlyStopping counter: {self.counter}/{self.patience}')
             if self.counter >= self.patience and epoch > self.min_epoch:
                 self.early_stop = True
 
@@ -220,7 +223,7 @@ def train(
 
         for i, batch in enumerate(t):
 
-            # optimizer.zero_grad()
+            optimizer.zero_grad()
             idx, features, label = batch
             features, label = features.to(device, non_blocking=True), label.to(device, non_blocking=True)
             logits = model(features)
@@ -234,7 +237,6 @@ def train(
 
             loss.backward()
             optimizer.step()
-            optimizer.zero_grad()
 
             prob = F.softmax(logits, dim=1).cpu().detach().numpy()
             probs = np.append(probs, prob, axis=0)
