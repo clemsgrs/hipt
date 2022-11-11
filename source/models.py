@@ -118,6 +118,18 @@ class HIPT(nn.Module):
 
         self.classifier = self.classifier.to(device)
 
+    def __repr__(self) -> str:
+        num_params = 0
+        num_params_train = 0
+        for param in self.parameters():
+            n = param.numel()
+            num_params += n
+            if param.requires_grad:
+                num_params_train += n
+        main_str = f'Total number of parameters: {num_params}\n'
+        main_str += f'Total number of trainable parameters: {num_params_train}'
+        return main_str
+
 
 class HIPT_repo(nn.Module):
     def __init__(
