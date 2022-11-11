@@ -60,12 +60,14 @@ def create_train_tune_test_df(
     df: pd.DataFrame,
     save_csv: bool = False,
     output_dir: Path = Path(''),
-    tune_size: float = .4,
-    test_size: float = .2,
+    tune_size: float = .5,
+    test_size: float = 0.,
     seed: Optional[int] = 21,
     ):
-    train_df, tune_df = train_test_split(df, test_size=tune_size, random_state=seed)
-    train_df, test_df = train_test_split(train_df, test_size=test_size, random_state=seed)
+    train_df, tune_df = train_test_split(df, test_size=tune_size, random_state=seed, stratify=df.label)
+    test_df = pd.DataFrame()
+    if test_size > 0:
+        train_df, test_df = train_test_split(train_df, test_size=test_size, random_state=seed, stratify=df.label)
     if save_csv:
         train_df.to_csv(Path(output_dir, f'train.csv'), index=False)
         tune_df.to_csv(Path(output_dir, f'tune.csv'), index=False)

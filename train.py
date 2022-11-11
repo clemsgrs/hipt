@@ -1,6 +1,7 @@
 import os
 import time
 import wandb
+import torch
 import torch.nn as nn
 import torch.optim as optim
 import hydra
@@ -72,7 +73,9 @@ def main(cfg):
 
     train_dataset = ExtractedFeaturesDataset(train_df, features_dir)
     tune_dataset = ExtractedFeaturesDataset(tune_df, features_dir)
-    assert train_dataset.num_classes == tune_dataset.num_classes
+
+    m, n = train_dataset.num_classes, tune_dataset.num_classes
+    assert m == n, f'Different number of classes C in train (C={m}) and tune (C={n}) sets!'
 
     optimizer = optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=cfg.lr, weight_decay=cfg.wd)
     if cfg.lr_scheduler:
@@ -127,7 +130,7 @@ def main(cfg):
                 wandb.log({f'tune/{res}': val})
 
             early_stopping(epoch, model, tune_results)
-            if early_stopping.early_stop:
+            if early_stopping.early_stop and cfg.early_stopping.enable:
                 stop = True
 
         if cfg.lr_scheduler:
@@ -138,7 +141,7 @@ def main(cfg):
         print(f'End of epoch {epoch+1} / {cfg.nepochs} \t Time Taken:  {epoch_mins}m {epoch_secs}s')
 
         if stop:
-            print('Early stopping')
+            print(f"Stopping early because {cfg.early_stopping.tracking} didn't improve over the last {cfg.early_stopping.patience} epochs")
             break
 
 
