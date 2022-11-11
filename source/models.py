@@ -508,7 +508,7 @@ class LocalFeatureExtractor(nn.Module):
 
         self.device_256 = torch.device('cuda:0')
 
-        self.vit_256 = vit_small(img_size=256, patch_size=16, embed_dim=embed_dim_256)
+        self.vit_256 = vit_small(img_size=224, patch_size=16, embed_dim=embed_dim_256)
 
         if Path(pretrain_256).is_file():
             print('Loading pretrained weights for ViT_256 model...')
