@@ -30,6 +30,7 @@ tune_batch_size: 1
 save_all: False
 
 early_stopping:
+  enable: True
   tracking: 'loss'
   min_max: 'min'
   patience: 10
