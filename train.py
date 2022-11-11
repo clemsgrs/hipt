@@ -11,7 +11,7 @@ from omegaconf import OmegaConf
 
 from source.models import HIPT
 from source.dataset import ExtractedFeaturesDataset
-from source.utils import initialize_wandb, create_train_tune_test_df, train, tune, epoch_time, EarlyStopping
+from source.utils import initialize_wandb, create_train_tune_test_df, train, tune, compute_time, EarlyStopping
 
 
 @hydra.main(version_base='1.2.0', config_path='config', config_name='local')
@@ -45,6 +45,7 @@ def main(cfg):
         dropout=cfg.dropout,
     )
     model.relocate()
+    print(model)
 
     fold_num = cfg.fold_num
     fold_dir = Path(cfg.data_dir, cfg.dataset_name, 'splits', f'fold_{fold_num}')
@@ -93,9 +94,10 @@ def main(cfg):
     )
 
     stop = False
+    start_time = time.time()
     for epoch in range(cfg.nepochs):
 
-        start_time = time.time()
+        epoch_start_time = time.time()
         wandb.log({'epoch': epoch})
 
         train_results = train(
@@ -136,13 +138,17 @@ def main(cfg):
         if cfg.lr_scheduler:
             scheduler.step()
 
-        end_time = time.time()
-        epoch_mins, epoch_secs = epoch_time(start_time, end_time)
+        epoch_end_time = time.time()
+        epoch_mins, epoch_secs = compute_time(epoch_start_time, epoch_end_time)
         print(f'End of epoch {epoch+1} / {cfg.nepochs} \t Time Taken:  {epoch_mins}m {epoch_secs}s')
 
         if stop:
-            print(f"Stopping early because {cfg.early_stopping.tracking} didn't improve over the last {cfg.early_stopping.patience} epochs")
+            print(f'Stopping early because best {cfg.early_stopping.tracking} was reached {cfg.early_stopping.patience} epochs ago')
             break
+
+    end_time = time.time()
+    mins, secs = compute_time(start_time, end_time)
+    print(f'Total time taken: {mins}m {secs}s')
 
 
 if __name__ == '__main__':
