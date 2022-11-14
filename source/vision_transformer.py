@@ -228,6 +228,7 @@ class VisionTransformer(nn.Module):
             scale_factor=(w0 / math.sqrt(N), h0 / math.sqrt(N)),
             mode='bicubic',
             align_corners=False,
+            recompute_scale_factor=True,
         )
         assert int(w0) == patch_pos_embed.shape[-2] and int(h0) == patch_pos_embed.shape[-1]
         patch_pos_embed = patch_pos_embed.permute(0, 2, 3, 1).view(1, -1, dim)
@@ -287,7 +288,7 @@ def vit_tiny(patch_size=16):
 
 
 def vit_small(
-    img_size: int = 256,
+    img_size: int = 224,
     patch_size: int = 16,
     embed_dim: int = 384,
     ):
@@ -389,6 +390,7 @@ class VisionTransformer4K(nn.Module):
             scale_factor=(w0 / math.sqrt(N), h0 / math.sqrt(N)),
             mode='bicubic',
             align_corners=False,
+            recompute_scale_factor=True,
         ) # [1, 192, 16, 16]
         assert int(w0) == patch_pos_embed.shape[-2] and int(h0) == patch_pos_embed.shape[-1]
         patch_pos_embed = patch_pos_embed.permute(0, 2, 3, 1).view(1, -1, dim) # [1, 16, 16, 192] -> [1, 256, 192]
@@ -438,7 +440,7 @@ class VisionTransformer4K(nn.Module):
 
 
 def vit4k_xs(
-    img_size: int = 4096,
+    img_size: int = 224,
     patch_size: int = 16,
     input_embed_dim: int = 384,
     output_embed_dim: int = 192,

@@ -19,6 +19,8 @@ class HIPT(nn.Module):
         self,
         level: str = 'global',
         num_classes: int = 1,
+        img_size: int = 224,
+        patch_size: int = 16,
         pretrain_4096: str = 'path/to/pretrained/vit_4096/weights.pth',
         embed_dim_256: int = 384,
         embed_dim_4096: int = 192,
@@ -35,8 +37,8 @@ class HIPT(nn.Module):
         if self.local:
 
             self.vit_4096 = vit4k_xs(
-                img_size=224,
-                patch_size=16,
+                img_size=img_size,
+                patch_size=patch_size,
                 input_embed_dim=embed_dim_256,
                 output_embed_dim=embed_dim_4096,
                 num_classes=0,
@@ -149,7 +151,11 @@ class GlobalFeatureExtractor(nn.Module):
         self.device_256 = torch.device('cuda:0')
         self.device_4096 = torch.device('cuda:1')
 
-        self.vit_256 = vit_small(img_size=224, patch_size=16, embed_dim=embed_dim_256)
+        self.vit_256 = vit_small(
+            img_size=224,
+            patch_size=16,
+            embed_dim=embed_dim_256,
+        )
 
         if Path(pretrain_256).is_file():
             print('Loading pretrained weights for ViT_256 model...')
@@ -242,7 +248,11 @@ class LocalFeatureExtractor(nn.Module):
 
         self.device_256 = torch.device('cuda:0')
 
-        self.vit_256 = vit_small(img_size=224, patch_size=16, embed_dim=embed_dim_256)
+        self.vit_256 = vit_small(
+            img_size=224,
+            patch_size=16,
+            embed_dim=embed_dim_256,
+        )
 
         if Path(pretrain_256).is_file():
             print('Loading pretrained weights for ViT_256 model...')

@@ -10,17 +10,11 @@ slide_list:
 
 fold_num: 0
 level: 'global'
-pretrain_4096:
-freeze_4096:
 
 num_classes: 2
 nepochs: 50
 tune_every: 1
-lr: 2e-4
-lr_scheduler:
-lr_step: 15
-wd: 1e-5
-dropout: 0.25
+
 weighted_sampling: True
 gradient_clipping: 32
 
@@ -30,6 +24,21 @@ train_batch_size: 1
 tune_batch_size: 1
 
 save_all: False
+
+model:
+  img_size: 224
+  pretrain_4096:
+  freeze_4096:
+  dropout: 0.25
+
+optim:
+  name: 'adam'
+  lr: 2e-4
+  wd: 1e-5
+  lr_scheduler:
+    name:
+    step_size: 10
+    gamma: 0.5
 
 early_stopping:
   enable: True

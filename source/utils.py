@@ -5,6 +5,7 @@ import subprocess
 import numpy as np
 import pandas as pd
 import torch.nn as nn
+import torch.optim as optim
 import torch.nn.functional as F
 
 from pathlib import Path
@@ -121,6 +122,50 @@ def make_weights_for_balanced_classes(dataset):
         y = dataset.get_label(idx)
         weight.append(weight_per_class[y])
     return torch.DoubleTensor(weight)
+
+
+class OptimizerFactory:
+
+     def __init__(
+        self,
+        name: str,
+        params: nn.Module,
+        lr: float,
+        weight_decay: float = 0.,
+        momentum: float = 0.,
+        ):
+
+            if name == 'adam':
+                self.optimizer = optim.Adam(params, lr=lr, weight_decay=weight_decay)
+            elif name == 'sgd':
+                self.optimizer = optim.SGD(params, lr=lr, momentum=momentum, weight_decay=weight_decay)
+            else:
+                raise KeyError(f'{name} not supported')
+
+            return self.optimizer
+
+
+class SchedulerFactory:
+
+    def __init__(
+        self,
+        optimizer: torch.optim.Optimizer,
+        name: Optional[str] = None,
+        params: Optional[dict] = None,
+    ):
+
+        self.scheduler = None
+        if name == 'step':
+            self.scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=params.step_size, gamma=params.gamma)
+        elif name == 'cosine':
+            assert params.T_max != -1, 'T_max parameter must be specified! If you dont know what to use, plug in nepochs'
+            self.scheduler = optim.lr_scheduler.CosineAnnealingLR(params.T_max, eta_min=params.eta_min)
+        elif name == 'reduce_lr_on_plateau':
+            self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode=params.mode, factor=params.factor, patience=params.patience, min_lr=params.min_lr)
+        elif name:
+            raise KeyError(f'{name} not supported')
+
+        return self.scheduler
 
 
 class EarlyStopping:

@@ -12,7 +12,7 @@ from omegaconf import OmegaConf
 
 from source.models import HIPT
 from source.dataset import ExtractedFeaturesDataset
-from source.utils import initialize_wandb, train, tune, test, compute_time, EarlyStopping
+from source.utils import initialize_wandb, train, tune, test, compute_time, EarlyStopping, OptimizerFactory, SchedulerFactory
 
 
 @hydra.main(version_base='1.2.0', config_path='config', config_name='multifold_global')
@@ -32,6 +32,7 @@ def main(cfg):
     config = OmegaConf.to_container(cfg, resolve=True, throw_on_missing=True)
     _ = initialize_wandb(project=cfg.wandb.project, exp_name=cfg.wandb.exp_name, entity=cfg.wandb.username, config=config, key=key)
     wandb.define_metric('epoch', summary='max')
+    wandb.define_metric('lr', step_metric='epoch')
 
     if cfg.features_dir:
         features_dir = Path(cfg.features_dir)
@@ -72,15 +73,17 @@ def main(cfg):
         model = HIPT(
             level=cfg.level,
             num_classes=cfg.num_classes,
-            pretrain_4096=cfg.pretrain_4096,
-            freeze_4096=cfg.freeze_4096,
+            img_size=cfg.model.img_size,
+            pretrain_4096=cfg.model.pretrain_4096,
+            freeze_4096=cfg.model.freeze_4096,
+            freeze_4096_pos_embed=cfg.model.freeze_4096_pos_embed,
             dropout=cfg.dropout,
         )
         model.relocate()
 
-        optimizer = optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=cfg.lr, weight_decay=cfg.wd)
-        if cfg.lr_scheduler:
-            scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=cfg.lr_step, gamma=0.1)
+        model_params = filter(lambda p: p.requires_grad, model.parameters())
+        optimizer = OptimizerFactory(cfg.optim.name, model_params, lr=cfg.optim.lr, weight_decay=cfg.optim.wd)
+        scheduler = SchedulerFactory(optimizer, cfg.optim.lr_scheduler)
 
         criterion = nn.CrossEntropyLoss()
 
@@ -135,8 +138,12 @@ def main(cfg):
                 if early_stopping.early_stop and cfg.early_stopping.enable:
                     stop = True
 
-            if cfg.lr_scheduler:
+            if scheduler:
+                lr = scheduler.get_last_lr()
+                wandb.log({f'train/fold_{i}/lr': lr})
                 scheduler.step()
+            else:
+                wandb.log({f'train/fold_{i}/lr': cfg.optim.lr})
 
             epoch_end_time = time.time()
             epoch_mins, epoch_secs = compute_time(epoch_start_time, epoch_end_time)
