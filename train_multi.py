@@ -5,16 +5,17 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import hydra
+import numpy as np
 import pandas as pd
 from pathlib import Path
 from omegaconf import OmegaConf
 
 from source.models import HIPT
 from source.dataset import ExtractedFeaturesDataset
-from source.utils import initialize_wandb, train, tune, compute_time, EarlyStopping
+from source.utils import initialize_wandb, train, tune, test, compute_time, EarlyStopping
 
 
-@hydra.main(version_base='1.2.0', config_path='config', config_name='local')
+@hydra.main(version_base='1.2.0', config_path='config', config_name='multifold_global')
 def main(cfg):
 
     output_dir = Path(cfg.output_dir, cfg.dataset_name)
@@ -39,6 +40,8 @@ def main(cfg):
 
     fold_root_dir = Path(cfg.data_dir, cfg.dataset_name, 'splits')
     nfold = len([_ for _ in fold_root_dir.glob(f'fold_*')])
+
+    test_aucs = []
 
     start_time = time.time()
     for i in range(nfold):
@@ -95,7 +98,7 @@ def main(cfg):
         for epoch in range(cfg.nepochs):
 
             epoch_start_time = time.time()
-            wandb.log({'epoch': epoch})
+            wandb.log({'epoch': epoch+1})
 
             train_results = train(
                 epoch+1,
@@ -146,6 +149,20 @@ def main(cfg):
         fold_end_time = time.time()
         fold_mins, fold_secs = compute_time(fold_start_time, fold_end_time)
         print(f'Total time taken for fold {i}: {fold_mins}m {fold_secs}s')
+
+        # load best model
+        best_model_fp = torch.load(Path(checkpoint_dir, 'best_model.pt'))
+        model.load_state_dict(best_model_fp)
+
+        test_results = test(model, test_dataset, batch_size=1)
+        test_dataset.df.to_csv(Path(result_dir, f'test.csv'), index=False)
+
+        test_auc = round(test_results['auc'], 2)
+        wandb.log({f'test/fold_{i}/auc': test_auc})
+        test_aucs.append(test_auc)
+
+    mean_test_auc = round(np.mean(test_aucs), 2)
+    wandb.log({f'test/mean_auc': mean_test_auc})
 
     end_time = time.time()
     mins, secs = compute_time(start_time, end_time)
