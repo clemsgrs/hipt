@@ -42,6 +42,7 @@ def main(cfg):
         num_classes=cfg.num_classes,
         pretrain_4096=cfg.pretrain_4096,
         freeze_4096=cfg.freeze_4096,
+        freeze_4096_pos_embed=cfg.freeze_4096_pos_embed,
         dropout=cfg.dropout,
     )
     model.relocate()
@@ -148,8 +149,8 @@ def main(cfg):
             break
 
     # load best model
-    best_model_fp = torch.load(Path(checkpoint_dir, 'best_model.pt'))
-    model.load_state_dict(best_model_fp)
+    best_model_sd = torch.load(Path(checkpoint_dir, 'best_model.pt'))
+    model.load_state_dict(best_model_sd)
 
     test_results = test(model, test_dataset, batch_size=1)
     test_dataset.df.to_csv(Path(result_dir, f'test.csv'), index=False)

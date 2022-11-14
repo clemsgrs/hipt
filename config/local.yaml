@@ -3,14 +3,16 @@ output_dir: 'output'
 features_dir:
 
 dataset_name: 'tcga_brca'
-data_csv: '${data_dir}/${dataset_name}/data.csv'
-# slide_list: '${data_dir}/${dataset_name}/slide_list.txt'
+data_csv:
 slide_list:
+# data_csv: '${data_dir}/${dataset_name}/data.csv'
+# slide_list: '${data_dir}/${dataset_name}/slide_list.txt'
 
 fold_num: 0
 level: 'local'
 pretrain_4096: 'checkpoints/vit_4096_xs_dino.pth'
 freeze_4096: True
+freeze_4096_pos_embed: False
 
 num_classes: 2
 nepochs: 50
