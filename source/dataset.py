@@ -68,13 +68,9 @@ class ExtractedFeaturesDataset(torch.utils.data.Dataset):
         self,
         df: pd.DataFrame,
         features_dir: Path,
-        training: bool = True,
-        transform: Callable = None
     ):
         self.df = df
         self.features_dir = features_dir
-        self.training = training
-        self.transform = transform
 
         self.num_classes = len(self.df.label.value_counts(dropna=True))
         self.map_class_to_slide_ids()

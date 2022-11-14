@@ -180,7 +180,7 @@ class EarlyStopping:
 def train(
     epoch: int,
     model: nn.Module,
-    train_dataset: torch.utils.data.Dataset,
+    dataset: torch.utils.data.Dataset,
     optimizer: torch.optim.Optimizer,
     criterion: Callable,
     collate_fn: Callable = collate_custom,
@@ -193,30 +193,29 @@ def train(
 
     model.train()
     epoch_loss = 0
-    probs = np.empty((0,train_dataset.num_classes))
+    probs = np.empty((0,dataset.num_classes))
     preds, labels = [], []
     idxs = []
 
+    sampler = torch.utils.data.RandomSampler(dataset)
     if weighted_sampling:
-        weights = make_weights_for_balanced_classes(train_dataset)
-        train_sampler = torch.utils.data.WeightedRandomSampler(
+        weights = make_weights_for_balanced_classes(dataset)
+        sampler = torch.utils.data.WeightedRandomSampler(
             weights,
             len(weights),
         )
-    else:
-        train_sampler = torch.utils.data.RandomSampler(train_dataset)
 
-    train_loader = torch.utils.data.DataLoader(
-        train_dataset,
+    loader = torch.utils.data.DataLoader(
+        dataset,
         batch_size=batch_size,
-        sampler=train_sampler,
+        sampler=sampler,
         collate_fn=collate_fn,
     )
 
     train_results = {}
 
     with tqdm.tqdm(
-        train_loader,
+        loader,
         desc=(f'Train - Epoch {epoch}'),
         unit=' slide',
         ncols=80,
@@ -251,16 +250,16 @@ def train(
 
     #TODO: what happens if idxs is not made of unique index values?
     for class_idx, p in enumerate(probs.T):
-        train_dataset.df.loc[idxs, f'prob_{class_idx}'] = p.tolist()
+        dataset.df.loc[idxs, f'prob_{class_idx}'] = p.tolist()
 
-    if train_dataset.num_classes == 2:
+    if dataset.num_classes == 2:
         metrics = get_binary_metrics(probs[:,1], preds, labels)
     else:
         metrics = get_metrics(probs, preds, labels)
 
     train_results.update(metrics)
 
-    train_loss = epoch_loss / len(train_loader)
+    train_loss = epoch_loss / len(loader)
     train_results['loss'] = train_loss
 
     return train_results
@@ -269,7 +268,7 @@ def train(
 def tune(
     epoch: int,
     model: nn.Module,
-    tune_dataset: torch.utils.data.Dataset,
+    dataset: torch.utils.data.Dataset,
     criterion: Callable,
     collate_fn: Callable = collate_custom,
     batch_size: Optional[int] = 1,
@@ -279,23 +278,23 @@ def tune(
 
     model.eval()
     epoch_loss = 0
-    probs = np.empty((0,tune_dataset.num_classes))
+    probs = np.empty((0,dataset.num_classes))
     preds, labels = [], []
     idxs = []
 
-    tune_sampler = torch.utils.data.SequentialSampler(tune_dataset)
+    sampler = torch.utils.data.SequentialSampler(dataset)
 
-    tune_loader = torch.utils.data.DataLoader(
-        tune_dataset,
+    loader = torch.utils.data.DataLoader(
+        dataset,
         batch_size=batch_size,
-        sampler=tune_sampler,
+        sampler=sampler,
         collate_fn=collate_fn,
     )
 
-    tune_results = {}
+    results = {}
 
     with tqdm.tqdm(
-        tune_loader,
+        loader,
         desc=(f'Tune - Epoch {epoch}'),
         unit=' slide',
         ncols=80,
@@ -322,18 +321,83 @@ def tune(
 
                 epoch_loss += loss.item()
 
-        #TODO: what happens if idxs is not made of unique index values?
-        for class_idx, p in enumerate(probs.T):
-            tune_dataset.df.loc[idxs, f'prob_{class_idx}'] = p.tolist()
+    #TODO: what happens if idxs is not made of unique index values?
+    for class_idx, p in enumerate(probs.T):
+        dataset.df.loc[idxs, f'prob_{class_idx}'] = p.tolist()
 
-        if tune_dataset.num_classes == 2:
-            metrics = get_binary_metrics(probs[:,1], preds, labels)
-        else:
-            metrics = get_metrics(probs, preds, labels)
+    if dataset.num_classes == 2:
+        metrics = get_binary_metrics(probs[:,1], preds, labels)
+    else:
+        metrics = get_metrics(probs, preds, labels)
 
-        tune_results.update(metrics)
+    results.update(metrics)
 
-        tune_loss = epoch_loss / len(tune_loader)
-        tune_results['loss'] = tune_loss
+    tune_loss = epoch_loss / len(loader)
+    results['loss'] = tune_loss
 
-        return tune_results
+    return results
+
+
+def test(
+    model: nn.Module,
+    dataset: torch.utils.data.Dataset,
+    collate_fn: Callable = collate_custom,
+    batch_size: Optional[int] = 1,
+    ):
+
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+    model.eval()
+    probs = np.empty((0,dataset.num_classes))
+    preds, labels = [], []
+    idxs = []
+
+    sampler = torch.utils.data.SequentialSampler(dataset)
+
+    loader = torch.utils.data.DataLoader(
+        dataset,
+        batch_size=batch_size,
+        sampler=sampler,
+        collate_fn=collate_fn,
+    )
+
+    results = {}
+
+    with tqdm.tqdm(
+        loader,
+        desc=(f'Test'),
+        unit=' slide',
+        ncols=80,
+        unit_scale=batch_size,
+        leave=True) as t:
+
+        with torch.no_grad():
+
+            for i, batch in enumerate(t):
+
+                idx, features, label = batch
+                features, label = features.to(device, non_blocking=True), label.to(device, non_blocking=True)
+                logits = model(features)
+
+                prob = F.softmax(logits, dim=1).cpu().numpy()
+                probs = np.append(probs, prob, axis=0)
+
+                # topk in binary classification setting <=> 0.50 thresholding
+                pred = torch.topk(logits, 1, dim=1)[1]
+                preds.extend(pred[:,0].clone().tolist())
+
+                labels.extend(label.clone().tolist())
+                idxs.extend(list(idx))
+
+    #TODO: what happens if idxs is not made of unique index values?
+    for class_idx, p in enumerate(probs.T):
+        dataset.df.loc[idxs, f'prob_{class_idx}'] = p.tolist()
+
+    if dataset.num_classes == 2:
+        metrics = get_binary_metrics(probs[:,1], preds, labels)
+    else:
+        metrics = get_metrics(probs, preds, labels)
+
+    results.update(metrics)
+
+    return results

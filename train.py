@@ -11,7 +11,7 @@ from omegaconf import OmegaConf
 
 from source.models import HIPT
 from source.dataset import ExtractedFeaturesDataset
-from source.utils import initialize_wandb, create_train_tune_test_df, train, tune, compute_time, EarlyStopping
+from source.utils import initialize_wandb, create_train_tune_test_df, train, tune, test, compute_time, EarlyStopping
 
 
 @hydra.main(version_base='1.2.0', config_path='config', config_name='local')
@@ -74,6 +74,7 @@ def main(cfg):
 
     train_dataset = ExtractedFeaturesDataset(train_df, features_dir)
     tune_dataset = ExtractedFeaturesDataset(tune_df, features_dir)
+    test_dataset = ExtractedFeaturesDataset(test_df, features_dir)
 
     m, n = train_dataset.num_classes, tune_dataset.num_classes
     assert m == n, f'Different number of classes C in train (C={m}) and tune (C={n}) sets!'
@@ -98,7 +99,7 @@ def main(cfg):
     for epoch in range(cfg.nepochs):
 
         epoch_start_time = time.time()
-        wandb.log({'epoch': epoch})
+        wandb.log({'epoch': epoch+1})
 
         train_results = train(
             epoch+1,
@@ -145,6 +146,16 @@ def main(cfg):
         if stop:
             print(f'Stopping early because best {cfg.early_stopping.tracking} was reached {cfg.early_stopping.patience} epochs ago')
             break
+
+    # load best model
+    best_model_fp = torch.load(Path(checkpoint_dir, 'best_model.pt'))
+    model.load_state_dict(best_model_fp)
+
+    test_results = test(model, test_dataset, batch_size=1)
+    test_dataset.df.to_csv(Path(result_dir, f'test.csv'), index=False)
+
+    test_auc = round(test_results['auc'], 2)
+    wandb.log({f'test/auc': test_auc})
 
     end_time = time.time()
     mins, secs = compute_time(start_time, end_time)
