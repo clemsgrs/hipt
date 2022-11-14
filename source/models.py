@@ -62,7 +62,7 @@ class HIPT(nn.Module):
 
             if freeze_4096:
                 print('Freezing pretrained ViT_4096 model')
-                for name, param in self.vit_4096.parameters():
+                for name, param in self.vit_4096.named_parameters():
                     param.requires_grad = False
                     if name == 'pos_embed':
                         param.requires_grad = freeze_4096_pos_embed
