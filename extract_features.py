@@ -11,8 +11,9 @@ from pathlib import Path
 from omegaconf import DictConfig, OmegaConf
 from torchvision import transforms
 
+from source.dataset import RegionDataset
 from source.models import GlobalFeatureExtractor, LocalFeatureExtractor
-from source.utils import initialize_wandb, initialize_df
+from source.utils import initialize_wandb, initialize_df, collate_regions
 
 
 @hydra.main(version_base='1.2.0', config_path='config', config_name='feature_extraction')
@@ -29,7 +30,7 @@ def main(cfg: DictConfig):
             print('done')
             features_dir.mkdir(parents=False)
         else:
-            features_dir.mkdir(parents=False, exist_ok=True)
+            features_dir.mkdir(parents=True, exist_ok=True)
 
     # set up wandb
     key = os.environ.get('WANDB_API_KEY')
@@ -49,8 +50,10 @@ def main(cfg: DictConfig):
     else:
         raise ValueError(f'cfg.level ({cfg.level} not supported')
 
-    patch_dir = Path(cfg.data_dir, cfg.dataset_name, 'patches')
-    slide_ids = sorted([s.name for s in patch_dir.iterdir()])
+    region_dir = Path(cfg.data_dir, cfg.dataset_name, 'patches')
+    if cfg.region_dir:
+        region_dir = Path(cfg.region_dir)
+    slide_ids = sorted([s.name for s in region_dir.iterdir()])
 
     if cfg.slide_list:
         with open(Path(cfg.slide_list), 'r') as f:
@@ -70,6 +73,15 @@ def main(cfg: DictConfig):
     total = len(process_stack)
     already_processed = len(df)-total
 
+    label_df = pd.read_csv(cfg.data_csv)[['slide_id', 'label']]
+    df = df.merge(label_df, how='left', on='slide_id')
+
+    stacked_region_dataset = RegionDataset(df, region_dir, cfg.region_size, cfg.format)
+    stacked_region_subset = torch.utils.data.Subset(stacked_region_dataset, indices=process_stack.index.tolist())
+    loader = torch.utils.data.DataLoader(stacked_region_subset, batch_size=1, shuffle=False, collate_fn=collate_regions)
+
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
     print()
 
     tqdm_output_fp = None
@@ -78,8 +90,8 @@ def main(cfg: DictConfig):
     tqdm_file = open(tqdm_output_fp, 'a+') if tqdm_output_fp is not None else sys.stderr
 
     with tqdm.tqdm(
-        range(total),
-        desc=(f'Slide Encoding'),
+        loader,
+        desc='Slide Encoding',
         unit=' slide',
         initial=already_processed,
         total=total+already_processed,
@@ -88,19 +100,16 @@ def main(cfg: DictConfig):
         leave=True,
         file=tqdm_file) as t1:
 
-            for i in t1:
+            for i, batch in enumerate(t1):
 
-                idx = process_stack.index[i]
-                slide_id = process_stack.loc[idx, 'slide_id']
+                idx, region_fps, _ = batch
+                region_fps = region_fps[0]
+                slide_id = process_stack.loc[idx.item(), 'slide_id']
 
-                slide_patch_dir = Path(patch_dir, slide_id, str(cfg.region_size), cfg.format)
-                tiles = [t for t in slide_patch_dir.glob(f'*.{cfg.format}')]
-
-                M = len(tiles)
                 features = []
 
                 with tqdm.tqdm(
-                    tiles,
+                    region_fps,
                     desc=(f'{slide_id}'),
                     unit=' tiles',
                     ncols=80+len(slide_id),
@@ -110,10 +119,11 @@ def main(cfg: DictConfig):
 
                     for fp in t2:
 
-                        tile = Image.open(fp)
-                        tile = transforms.functional.to_tensor(tile)
-                        tile = tile.unsqueeze(0)
-                        feature = model(tile)
+                        img = Image.open(fp)
+                        img = transforms.functional.to_tensor(img)      # [3, 4096, 4096]
+                        img = img.unsqueeze(0)                          # [1, 3, 4096, 4096]
+                        img = img.to(device, non_blocking=True)
+                        feature = model(img)
                         features.append(feature)
 
                 stacked_features = torch.stack(features, dim=0).squeeze(1)
@@ -128,8 +138,6 @@ def main(cfg: DictConfig):
 
     tqdm_file.close()
     tqdm_output_fp.unlink()
-
-
 
 if __name__ == '__main__':
 

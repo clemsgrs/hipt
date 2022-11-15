@@ -1,0 +1,63 @@
+data_dir: 'data'
+output_dir: 'output'
+
+region_dir: '${data_dir}/tcga_brca/patches'
+features_dir:
+
+dataset_name: 'toy'
+# data_csv:
+# slide_list:
+slide_list: '${data_dir}/tcga_brca/slide_list.txt'
+data_csv: '${data_dir}/tcga_brca/data.csv'
+
+fold_num: -1
+level: 'region'
+
+region_size: 4096
+region_fmt: 'jpg'
+
+num_classes: 2
+nepochs: 50
+tune_every: 1
+
+model:
+  pretrain_256: 'checkpoints/vit_256_small_dino.pth'
+  freeze_256: True
+  freeze_256_pos_embed: True
+  img_size_256: 224
+  patch_size_256: 16
+  pretrain_4096: 'checkpoints/vit_4096_xs_dino.pth'
+  freeze_4096: True
+  freeze_4096_pos_embed: True
+  img_size_4096: 3584
+  patch_size_4096: 256
+  dropout: 0.25
+
+optim:
+  name: 'adam'
+  lr: 2e-4
+  wd: 1e-5
+  lr_scheduler:
+    name:
+
+weighted_sampling: True
+gradient_clipping: 32
+
+pct:
+
+train_batch_size: 1
+tune_batch_size: 1
+
+save_all: False
+
+early_stopping:
+  enable: True
+  tracking: 'loss'
+  min_max: 'min'
+  patience: 10
+  min_epoch: 30
+
+wandb:
+  project: 'hipt'
+  exp_name: 'toy_training'
+  username: 'clemsg'

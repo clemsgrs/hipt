@@ -1,9 +1,12 @@
 data_dir: 'data'
 output_dir: 'output'
+region_dir: '${data_dir}/tcga_brca/patches'
 
-dataset_name: 'tcga_brca'
-slide_list:
-# slide_list: '${data_dir}/${dataset_name}/toy_list.txt'
+dataset_name: 'toy'
+# slide_list:
+# data_csv:
+slide_list: '${data_dir}/${dataset_name}/slide_list.txt'
+data_csv: '${data_dir}/tcga_brca/data.csv'
 resume: False
 
 region_size: 4096

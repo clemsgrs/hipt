@@ -26,9 +26,6 @@ tune_batch_size: 1
 save_all: False
 
 model:
-  img_size: 224
-  pretrain_4096:
-  freeze_4096:
   dropout: 0.25
 
 optim:

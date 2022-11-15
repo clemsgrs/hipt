@@ -274,8 +274,12 @@ class VisionTransformer(nn.Module):
         return output
 
 
-def vit_tiny(patch_size=16):
+def vit_tiny(
+    img_size: int = 224,
+    patch_size: int = 16,
+    ):
     model = VisionTransformer(
+        img_size=img_size,
         patch_size=patch_size,
         embed_dim=192,
         depth=12,
@@ -305,8 +309,12 @@ def vit_small(
     return model
 
 
-def vit_base(patch_size=16):
+def vit_base(
+    img_size: int = 224,
+    patch_size: int = 16,
+    ):
     model = VisionTransformer(
+        img_size=img_size,
         patch_size=patch_size,
         embed_dim=768,
         depth=12,
@@ -323,8 +331,8 @@ class VisionTransformer4K(nn.Module):
     def __init__(
         self,
         num_classes: int = 0,
-        img_size: int = 4096,
-        patch_size: int = 16,
+        img_size: int = 3584,
+        patch_size: int = 256,
         input_embed_dim: int = 384,
         output_embed_dim: int = 192,
         depth: int = 12,
@@ -440,8 +448,8 @@ class VisionTransformer4K(nn.Module):
 
 
 def vit4k_xs(
-    img_size: int = 224,
-    patch_size: int = 16,
+    img_size: int = 3584,
+    patch_size: int = 256,
     input_embed_dim: int = 384,
     output_embed_dim: int = 192,
     num_classes: int = 0,

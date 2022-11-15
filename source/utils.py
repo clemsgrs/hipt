@@ -61,14 +61,14 @@ def create_train_tune_test_df(
     df: pd.DataFrame,
     save_csv: bool = False,
     output_dir: Path = Path(''),
-    tune_size: float = .5,
-    test_size: float = 0.,
+    tune_size: float = .4,
+    test_size: float = .2,
     seed: Optional[int] = 21,
     ):
     train_df, tune_df = train_test_split(df, test_size=tune_size, random_state=seed, stratify=df.label)
     test_df = pd.DataFrame()
     if test_size > 0:
-        train_df, test_df = train_test_split(train_df, test_size=test_size, random_state=seed, stratify=df.label)
+        train_df, test_df = train_test_split(train_df, test_size=test_size, random_state=seed, stratify=train_df.label)
     if save_csv:
         train_df.to_csv(Path(output_dir, f'train.csv'), index=False)
         tune_df.to_csv(Path(output_dir, f'tune.csv'), index=False)
@@ -103,12 +103,19 @@ def get_metrics(probs: np.array(float), preds: List[int], labels: List[int], mul
     return metrics_dict
 
 
-def collate_custom(batch):
+def collate_features(batch):
     idx = torch.LongTensor([item[0] for item in batch])
     # feature = torch.vstack([item[1] for item in batch])
     feature = torch.cat([item[1] for item in batch], dim=0)
     label = torch.LongTensor([item[2] for item in batch])
     return [idx, feature, label]
+
+
+def collate_regions(batch):
+    idx = torch.LongTensor([item[0] for item in batch])
+    fp = [item[1] for item in batch]
+    label = torch.LongTensor([item[2] for item in batch])
+    return [idx, fp, label]
 
 
 def make_weights_for_balanced_classes(dataset):
@@ -126,7 +133,7 @@ def make_weights_for_balanced_classes(dataset):
 
 class OptimizerFactory:
 
-     def __init__(
+    def __init__(
         self,
         name: str,
         params: nn.Module,
@@ -142,7 +149,8 @@ class OptimizerFactory:
             else:
                 raise KeyError(f'{name} not supported')
 
-            return self.optimizer
+    def get_optimizer(self):
+        return self.optimizer
 
 
 class SchedulerFactory:
@@ -150,21 +158,22 @@ class SchedulerFactory:
     def __init__(
         self,
         optimizer: torch.optim.Optimizer,
-        name: Optional[str] = None,
         params: Optional[dict] = None,
     ):
 
         self.scheduler = None
-        if name == 'step':
+        self.name = params.name
+        if self.name == 'step':
             self.scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=params.step_size, gamma=params.gamma)
-        elif name == 'cosine':
+        elif self.name == 'cosine':
             assert params.T_max != -1, 'T_max parameter must be specified! If you dont know what to use, plug in nepochs'
             self.scheduler = optim.lr_scheduler.CosineAnnealingLR(params.T_max, eta_min=params.eta_min)
-        elif name == 'reduce_lr_on_plateau':
+        elif self.name == 'reduce_lr_on_plateau':
             self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode=params.mode, factor=params.factor, patience=params.patience, min_lr=params.min_lr)
-        elif name:
-            raise KeyError(f'{name} not supported')
+        elif self.name:
+            raise KeyError(f'{self.name} not supported')
 
+    def get_scheduler(self):
         return self.scheduler
 
 
@@ -228,7 +237,7 @@ def train(
     dataset: torch.utils.data.Dataset,
     optimizer: torch.optim.Optimizer,
     criterion: Callable,
-    collate_fn: Callable = collate_custom,
+    collate_fn: Callable = collate_features,
     batch_size: Optional[int] = 1,
     weighted_sampling: Optional[bool] = False,
     gradient_clipping: Optional[int] = None,
@@ -270,9 +279,9 @@ def train(
         for i, batch in enumerate(t):
 
             optimizer.zero_grad()
-            idx, features, label = batch
-            features, label = features.to(device, non_blocking=True), label.to(device, non_blocking=True)
-            logits = model(features)
+            idx, x, label = batch
+            x, label = x.to(device, non_blocking=True), label.to(device, non_blocking=True)
+            logits = model(x)
             loss = criterion(logits, label)
 
             loss_value = loss.item()
@@ -315,7 +324,7 @@ def tune(
     model: nn.Module,
     dataset: torch.utils.data.Dataset,
     criterion: Callable,
-    collate_fn: Callable = collate_custom,
+    collate_fn: Callable = collate_features,
     batch_size: Optional[int] = 1,
     ):
 
@@ -350,9 +359,9 @@ def tune(
 
             for i, batch in enumerate(t):
 
-                idx, features, label = batch
-                features, label = features.to(device, non_blocking=True), label.to(device, non_blocking=True)
-                logits = model(features)
+                idx, x, label = batch
+                x, label = x.to(device, non_blocking=True), label.to(device, non_blocking=True)
+                logits = model(x)
                 loss = criterion(logits, label)
 
                 prob = F.softmax(logits, dim=1).cpu().numpy()
@@ -386,7 +395,7 @@ def tune(
 def test(
     model: nn.Module,
     dataset: torch.utils.data.Dataset,
-    collate_fn: Callable = collate_custom,
+    collate_fn: Callable = collate_features,
     batch_size: Optional[int] = 1,
     ):
 
@@ -420,9 +429,9 @@ def test(
 
             for i, batch in enumerate(t):
 
-                idx, features, label = batch
-                features, label = features.to(device, non_blocking=True), label.to(device, non_blocking=True)
-                logits = model(features)
+                idx, x, label = batch
+                x, label = x.to(device, non_blocking=True), label.to(device, non_blocking=True)
+                logits = model(x)
 
                 prob = F.softmax(logits, dim=1).cpu().numpy()
                 probs = np.append(probs, prob, axis=0)

@@ -26,7 +26,8 @@ tune_batch_size: 1
 save_all: False
 
 model:
-  img_size: 224
+  img_size_4096: 3584
+  patch_size_4096: 256
   pretrain_4096: 'checkpoints/vit_4096_xs_dino.pth'
   freeze_4096: True
   freeze_4096_pos_embed: False

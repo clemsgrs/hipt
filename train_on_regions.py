@@ -9,11 +9,11 @@ from pathlib import Path
 from omegaconf import DictConfig, OmegaConf
 
 from source.models import ModelFactory
-from source.dataset import ExtractedFeaturesDataset
+from source.dataset import StackedRegionsDataset
 from source.utils import initialize_wandb, create_train_tune_test_df, train, tune, test, compute_time, EarlyStopping, OptimizerFactory, SchedulerFactory
 
 
-@hydra.main(version_base='1.2.0', config_path='config', config_name='global')
+@hydra.main(version_base='1.2.0', config_path='config', config_name='region')
 def main(cfg: DictConfig):
 
     output_dir = Path(cfg.output_dir, cfg.dataset_name)
@@ -25,16 +25,17 @@ def main(cfg: DictConfig):
     result_dir = Path(output_dir, 'results', cfg.level)
     result_dir.mkdir(parents=True, exist_ok=True)
 
+    region_dir = Path(cfg.data_dir, cfg.dataset_name, 'patches')
+    if cfg.region_dir:
+        region_dir = Path(cfg.region_dir)
+
     # set up wandb
     key = os.environ.get('WANDB_API_KEY')
     config = OmegaConf.to_container(cfg, resolve=True, throw_on_missing=True)
     _ = initialize_wandb(project=cfg.wandb.project, exp_name=cfg.wandb.exp_name, entity=cfg.wandb.username, config=config, key=key)
     wandb.define_metric('epoch', summary='max')
     wandb.define_metric('lr', step_metric='epoch')
-
-    features_dir = Path(output_dir, 'features', cfg.level)
-    if cfg.features_dir:
-        features_dir = Path(cfg.features_dir)
+    print()
 
     model = ModelFactory(cfg.level, cfg.num_classes, cfg.model).get_model()
     model.relocate()
@@ -65,9 +66,9 @@ def main(cfg: DictConfig):
         train_df = train_df.sample(frac=cfg.pct).reset_index(drop=True)
         tune_df = tune_df.sample(frac=cfg.pct).reset_index(drop=True)
 
-    train_dataset = ExtractedFeaturesDataset(train_df, features_dir)
-    tune_dataset = ExtractedFeaturesDataset(tune_df, features_dir)
-    test_dataset = ExtractedFeaturesDataset(test_df, features_dir)
+    train_dataset = StackedRegionsDataset(train_df, region_dir, cfg.region_size, cfg.region_fmt)
+    tune_dataset = StackedRegionsDataset(tune_df, region_dir, cfg.region_size, cfg.region_fmt)
+    test_dataset = StackedRegionsDataset(test_df, region_dir, cfg.region_size, cfg.region_fmt)
 
     m, n = train_dataset.num_classes, tune_dataset.num_classes
     assert m == n == cfg.num_classes, f'Either train (C={m}) or tune (C={n}) sets doesnt cover full class spectrum (C={cfg.num_classes}'
