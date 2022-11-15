@@ -170,7 +170,7 @@ class LocalGlobalHIPT(nn.Module):
             for name, param in self.vit_4096.named_parameters():
                 param.requires_grad = False
                 if name == 'pos_embed':
-                    param.requires_grad = freeze_4096_pos_embed
+                    param.requires_grad = not(freeze_4096_pos_embed)
             print('Done')
 
         # Global Aggregation
@@ -255,9 +255,6 @@ class HIPT(nn.Module):
 
         checkpoint_key = 'teacher'
 
-        self.device_256 = torch.device('cuda:0')
-        self.device_4096 = torch.device('cuda:1')
-
         self.vit_256 = vit_small(
             img_size=img_size_256,
             patch_size=patch_size_256,
@@ -287,10 +284,8 @@ class HIPT(nn.Module):
             for name, param in self.vit_256.named_parameters():
                 param.requires_grad = False
                 if name == 'pos_embed':
-                    param.requires_grad = freeze_256_pos_embed
+                    param.requires_grad = not(freeze_256_pos_embed)
             print('Done')
-
-        self.vit_256.to(self.device_256)
 
         self.vit_4096 = vit4k_xs(
             img_size=img_size_4096,
@@ -322,10 +317,8 @@ class HIPT(nn.Module):
             for name, param in self.vit_4096.named_parameters():
                 param.requires_grad = False
                 if name == 'pos_embed':
-                    param.requires_grad = freeze_4096_pos_embed
+                    param.requires_grad = not(freeze_4096_pos_embed)
             print('Done')
-
-        self.vit_4096.to(self.device_4096)
 
         # Global Aggregation
         self.global_phi = nn.Sequential(nn.Linear(embed_dim_4096, 192), nn.ReLU(), nn.Dropout(dropout))
@@ -343,16 +336,23 @@ class HIPT(nn.Module):
     def forward(self, x):
 
        # x = [M, 3, 4096, 4096]
-       # M may be too large for ViT-256: might need to further take minibatches of 256
        # TODO: add prepare_img_tensor method
         x = x.unfold(2, 256, 256).unfold(3, 256, 256)           # [M, 3, 16, 16, 256, 256]
         x = rearrange(x, 'b c p1 p2 w h -> (b p1 p2) c w h')    # [M*16*16, 3, 256, 256]
         x = x.to(self.device_256, non_blocking=True)            # [M*256, 3, 256, 256]
 
-        x = self.vit_256(x)                                     # [M, 256, 384]
-        x = x.to(self.device_4096, non_blocking=True)
-        x = self.vit_4096(x.unfold(1, 16, 16).transpose(1,2))   # x = [M, 192]
+        # x = self.vit_256(x)                                     # [M, 256, 384]
+        features_256 = []
+        for mini_bs in range(0, x.shape[0], 256):
+            minibatch = x[mini_bs:mini_bs+256]
+            f = self.vit_256(minibatch).detach()                # [256, 384]
+            features_256.append(f.unsqueeze(0))
 
+        x = torch.vstack(features_256)                          # [M, 256, 384]
+        x = x.to(self.device_4096, non_blocking=True)
+        x = self.vit_4096(x.unfold(1, 16, 16).transpose(1,2))   # x = [M, 16, 16, 384] -> [M, 192]
+
+        x = x.to(self.device_256, non_blocking=True)
         x = self.global_phi(x)
 
         # in nn.TransformerEncoderLayer, batch_first defaults to False
@@ -370,10 +370,17 @@ class HIPT(nn.Module):
 
     def relocate(self):
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        assert torch.cuda.device_count() >= 2
+        if device == torch.device('cuda'):
+            assert torch.cuda.device_count() >= 2
+            self.device_256 = torch.device('cuda:0')
+            self.device_4096 = torch.device('cuda:1')
+            device = self.device_256
+        else:
+            self.device_256 = device
+            self.device_4096 = device
 
-        self.vit_256 = self.vit_256.to('cuda:0')
-        self.vit_4096 = self.vit_4096.to('cuda:1')
+        self.vit_256 = self.vit_256.to(self.device_256)
+        self.vit_4096 = self.vit_4096.to(self.device_4096)
 
         self.global_phi = self.global_phi.to(device)
         self.global_transformer = self.global_transformer.to(device)

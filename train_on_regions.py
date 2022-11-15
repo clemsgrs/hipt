@@ -66,9 +66,9 @@ def main(cfg: DictConfig):
         train_df = train_df.sample(frac=cfg.pct).reset_index(drop=True)
         tune_df = tune_df.sample(frac=cfg.pct).reset_index(drop=True)
 
-    train_dataset = StackedRegionsDataset(train_df, region_dir, cfg.region_size, cfg.region_fmt)
-    tune_dataset = StackedRegionsDataset(tune_df, region_dir, cfg.region_size, cfg.region_fmt)
-    test_dataset = StackedRegionsDataset(test_df, region_dir, cfg.region_size, cfg.region_fmt)
+    train_dataset = StackedRegionsDataset(train_df, region_dir, cfg.region_size, cfg.region_fmt, M_max=cfg.M_max)
+    tune_dataset = StackedRegionsDataset(tune_df, region_dir, cfg.region_size, cfg.region_fmt, M_max=cfg.M_max)
+    test_dataset = StackedRegionsDataset(test_df, region_dir, cfg.region_size, cfg.region_fmt, M_max=cfg.M_max)
 
     m, n = train_dataset.num_classes, tune_dataset.num_classes
     assert m == n == cfg.num_classes, f'Either train (C={m}) or tune (C={n}) sets doesnt cover full class spectrum (C={cfg.num_classes}'

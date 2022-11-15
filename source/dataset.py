@@ -57,7 +57,8 @@ class StackedRegionsDataset(torch.utils.data.Dataset):
         region_size: int = 256,
         fmt: str = 'jpg',
         transform: Callable = None,
-        M_max: int = 2,
+        M_max: int = -1,
+        verbose: bool = False,
     ):
         self.df = df
         self.region_dir = region_dir
@@ -65,6 +66,7 @@ class StackedRegionsDataset(torch.utils.data.Dataset):
         self.format = fmt
         self.transform = transform
         self.M_max = M_max
+        self.verbose = verbose
 
         self.num_classes = len(self.df.label.value_counts(dropna=True))
         self.map_class_to_slide_ids()
@@ -84,7 +86,7 @@ class StackedRegionsDataset(torch.utils.data.Dataset):
         region_dir = Path(self.region_dir, slide_id, str(self.region_size), self.format)
         regions_fp = [fp for fp in region_dir.glob(f'*.{self.format}')]
         M = len(regions_fp)
-        if M >= self.M_max:
+        if self.M_max > -1 and M > self.M_max:
             regions_fp = random.sample([x for x in regions_fp], self.M_max)
             M = self.M_max
 
@@ -96,7 +98,8 @@ class StackedRegionsDataset(torch.utils.data.Dataset):
             unit=' tiles',
             ncols=80,
             position=2,
-            leave=False) as t:
+            leave=False,
+            disable=not(self.verbose)) as t:
 
             for i, fp in enumerate(t):
 
