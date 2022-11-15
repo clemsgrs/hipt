@@ -111,10 +111,11 @@ def collate_features(batch):
     return [idx, feature, label]
 
 
-def collate_regions(batch):
-    idx = torch.LongTensor([item[0] for item in batch])
-    fp = [item[1] for item in batch]
-    label = torch.LongTensor([item[2] for item in batch])
+def collate_region_filepaths(batch):
+    item = batch[0]
+    idx = torch.LongTensor([item[0]])
+    fp = item[1]
+    label = torch.LongTensor([item[2]])
     return [idx, fp, label]
 
 

@@ -117,7 +117,7 @@ class StackedRegionsDataset(torch.utils.data.Dataset):
         return len(self.df)
 
 
-class RegionDataset(torch.utils.data.Dataset):
+class RegionFilepathsDataset(torch.utils.data.Dataset):
     def __init__(
         self,
         df: pd.DataFrame,

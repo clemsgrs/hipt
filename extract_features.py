@@ -11,9 +11,9 @@ from pathlib import Path
 from omegaconf import DictConfig, OmegaConf
 from torchvision import transforms
 
-from source.dataset import RegionDataset
+from source.dataset import RegionFilepathsDataset
 from source.models import GlobalFeatureExtractor, LocalFeatureExtractor
-from source.utils import initialize_wandb, initialize_df, collate_regions
+from source.utils import initialize_wandb, initialize_df, collate_region_filepaths
 
 
 @hydra.main(version_base='1.2.0', config_path='config', config_name='feature_extraction')
@@ -76,9 +76,9 @@ def main(cfg: DictConfig):
     label_df = pd.read_csv(cfg.data_csv)[['slide_id', 'label']]
     df = df.merge(label_df, how='left', on='slide_id')
 
-    stacked_region_dataset = RegionDataset(df, region_dir, cfg.region_size, cfg.format)
-    stacked_region_subset = torch.utils.data.Subset(stacked_region_dataset, indices=process_stack.index.tolist())
-    loader = torch.utils.data.DataLoader(stacked_region_subset, batch_size=1, shuffle=False, collate_fn=collate_regions)
+    region_dataset = RegionFilepathsDataset(df, region_dir, cfg.region_size, cfg.format)
+    region_subset = torch.utils.data.Subset(region_dataset, indices=process_stack.index.tolist())
+    loader = torch.utils.data.DataLoader(region_subset, batch_size=1, shuffle=False, collate_fn=collate_region_filepaths)
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -103,9 +103,7 @@ def main(cfg: DictConfig):
             for i, batch in enumerate(t1):
 
                 idx, region_fps, _ = batch
-                region_fps = region_fps[0]
                 slide_id = process_stack.loc[idx.item(), 'slide_id']
-
                 features = []
 
                 with tqdm.tqdm(
