@@ -11,7 +11,7 @@ from pathlib import Path
 from omegaconf import DictConfig, OmegaConf
 from torchvision import transforms
 
-from source.dataset import StackedRegionsDataset
+from source.dataset import RegionDataset
 from source.models import GlobalFeatureExtractor, LocalFeatureExtractor
 from source.utils import initialize_wandb, initialize_df, collate_regions
 
@@ -76,7 +76,7 @@ def main(cfg: DictConfig):
     label_df = pd.read_csv(cfg.data_csv)[['slide_id', 'label']]
     df = df.merge(label_df, how='left', on='slide_id')
 
-    stacked_region_dataset = StackedRegionsDataset(df, region_dir, cfg.region_size, cfg.format, verbose=True)
+    stacked_region_dataset = RegionDataset(df, region_dir, cfg.region_size, cfg.format)
     stacked_region_subset = torch.utils.data.Subset(stacked_region_dataset, indices=process_stack.index.tolist())
     loader = torch.utils.data.DataLoader(stacked_region_subset, batch_size=1, shuffle=False, collate_fn=collate_regions)
 
