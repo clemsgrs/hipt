@@ -100,39 +100,41 @@ def main(cfg: DictConfig):
         leave=True,
         file=tqdm_file) as t1:
 
-            for i, batch in enumerate(t1):
+            with torch.no_grad():
 
-                idx, region_fps, _ = batch
-                slide_id = process_stack.loc[idx.item(), 'slide_id']
-                features = []
+                for i, batch in enumerate(t1):
 
-                with tqdm.tqdm(
-                    region_fps,
-                    desc=(f'{slide_id}'),
-                    unit=' tiles',
-                    ncols=80+len(slide_id),
-                    position=1,
-                    leave=False,
-                    file=tqdm_file) as t2:
+                    idx, region_fps, _ = batch
+                    slide_id = process_stack.loc[idx.item(), 'slide_id']
+                    features = []
 
-                    for fp in t2:
+                    with tqdm.tqdm(
+                        region_fps,
+                        desc=(f'{slide_id}'),
+                        unit=' region',
+                        ncols=80+len(slide_id),
+                        position=1,
+                        leave=False,
+                        file=tqdm_file) as t2:
 
-                        img = Image.open(fp)
-                        img = transforms.functional.to_tensor(img)      # [3, 4096, 4096]
-                        img = img.unsqueeze(0)                          # [1, 3, 4096, 4096]
-                        img = img.to(device, non_blocking=True)
-                        feature = model(img)
-                        features.append(feature)
+                        for fp in t2:
 
-                stacked_features = torch.stack(features, dim=0).squeeze(1)
-                save_path = Path(features_dir, f'{slide_id}.pt')
-                torch.save(stacked_features, save_path)
+                            img = Image.open(fp)
+                            img = transforms.functional.to_tensor(img)      # [3, 4096, 4096]
+                            img = img.unsqueeze(0)                          # [1, 3, 4096, 4096]
+                            img = img.to(device, non_blocking=True)
+                            feature = model(img)
+                            features.append(feature)
 
-                df.loc[idx, 'process'] = 0
-                df.loc[idx, 'status'] = 'processed'
-                df.to_csv(Path(output_dir, 'features', f'process_list_{cfg.level}.csv'), index=False)
+                    stacked_features = torch.stack(features, dim=0).squeeze(1)
+                    save_path = Path(features_dir, f'{slide_id}.pt')
+                    torch.save(stacked_features, save_path)
 
-                wandb.log({'processed': already_processed+i+1})
+                    df.loc[idx, 'process'] = 0
+                    df.loc[idx, 'status'] = 'processed'
+                    df.to_csv(Path(output_dir, 'features', f'process_list_{cfg.level}.csv'), index=False)
+
+                    wandb.log({'processed': already_processed+i+1})
 
     tqdm_file.close()
     tqdm_output_fp.unlink()

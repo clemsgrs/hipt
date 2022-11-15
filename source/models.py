@@ -489,15 +489,12 @@ class GlobalFeatureExtractor(nn.Module):
         x = rearrange(x, 'b c p1 p2 w h -> (b p1 p2) c w h')                    # [1*16*16, 3, 256, 256]
         x = x.to(self.device_256, non_blocking=True)                            # [256, 3, 256, 256]
 
-        features_256 = self.vit_256(x).detach().cpu()                           # [256, 384]
-
-        features_256 = features_256.reshape(16, 16, 384)                        # [16, 16, 384]
-        features_256 = features_256.transpose(0,1)                              # [16, 16, 384]
-        features_256 = features_256.transpose(0,2)                              # [384, 16, 16]
-        features_256 = features_256.unsqueeze(0)                                # [1, 384, 16, 16]
+        features_256 = self.vit_256(x)                                          # [256, 384]
+        features_256 = features_256.unsqueeze(0)                                # [1, 256, 384]
+        features_256 = features_256.unfold(1, 16, 16).transpose(1,2)            # [1, 384, 16, 16]
         features_256 = features_256.to(self.device_4096, non_blocking=True)
 
-        feature_4096 = self.vit_4096(features_256).detach().cpu()               # [1, 192]
+        feature_4096 = self.vit_4096(features_256).cpu()               # [1, 192]
 
         return feature_4096
 
