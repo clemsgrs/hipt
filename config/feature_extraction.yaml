@@ -6,7 +6,7 @@ dataset_name: 'toy'
 # slide_list:
 # data_csv:
 slide_list: '${data_dir}/${dataset_name}/slide_list.txt'
-data_csv: '${data_dir}/tcga_brca/data.csv'
+
 resume: False
 
 region_size: 4096

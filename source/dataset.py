@@ -130,25 +130,12 @@ class RegionFilepathsDataset(torch.utils.data.Dataset):
         self.region_size = region_size
         self.format = fmt
 
-        self.num_classes = len(self.df.label.value_counts(dropna=True))
-        self.map_class_to_slide_ids()
-
-    def map_class_to_slide_ids(self):
-        # map each class to corresponding slide ids
-        self.class_2_id = defaultdict(list)
-        for i in range(self.num_classes):
-            self.class_2_id[i] = np.asarray(self.df.label == i).nonzero()[0]
-
-    def get_label(self, idx):
-        return self.df.label[idx]
-
     def __getitem__(self, idx: int):
         row = self.df.loc[idx]
         slide_id = row.slide_id
         region_dir = Path(self.region_root_dir, slide_id, str(self.region_size), self.format)
         regions = [str(fp) for fp in region_dir.glob(f'*.{self.format}')]
-        label = row.label
-        return idx, regions, label
+        return idx, regions
 
     def __len__(self):
         return len(self.df)

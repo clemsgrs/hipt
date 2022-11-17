@@ -69,13 +69,14 @@ def create_train_tune_test_df(
     test_df = pd.DataFrame()
     if test_size > 0:
         train_df, test_df = train_test_split(train_df, test_size=test_size, random_state=seed, stratify=train_df.label)
+        test_df = test_df.reset_index(drop=True)
+    train_df = train_df.reset_index(drop=True)
+    tune_df = tune_df.reset_index(drop=True)
     if save_csv:
         train_df.to_csv(Path(output_dir, f'train.csv'), index=False)
         tune_df.to_csv(Path(output_dir, f'tune.csv'), index=False)
-        test_df.to_csv(Path(output_dir, f'test.csv'), index=False)
-    train_df = train_df.reset_index(drop=True)
-    tune_df = tune_df.reset_index(drop=True)
-    test_df = test_df.reset_index(drop=True)
+        if test_size > 0:
+            test_df.to_csv(Path(output_dir, f'test.csv'), index=False)
     return train_df, tune_df, test_df
 
 

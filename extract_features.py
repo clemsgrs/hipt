@@ -73,9 +73,6 @@ def main(cfg: DictConfig):
     total = len(process_stack)
     already_processed = len(df)-total
 
-    label_df = pd.read_csv(cfg.data_csv)[['slide_id', 'label']]
-    df = df.merge(label_df, how='left', on='slide_id')
-
     region_dataset = RegionFilepathsDataset(df, region_dir, cfg.region_size, cfg.format)
     region_subset = torch.utils.data.Subset(region_dataset, indices=process_stack.index.tolist())
     loader = torch.utils.data.DataLoader(region_subset, batch_size=1, shuffle=False, collate_fn=collate_region_filepaths)
@@ -104,7 +101,7 @@ def main(cfg: DictConfig):
 
                 for i, batch in enumerate(t1):
 
-                    idx, region_fps, _ = batch
+                    idx, region_fps = batch
                     slide_id = process_stack.loc[idx.item(), 'slide_id']
                     features = []
 
