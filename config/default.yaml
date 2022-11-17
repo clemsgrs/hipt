@@ -16,7 +16,7 @@ nepochs: 50
 tune_every: 1
 
 model:
-  img_size_496:
+  img_size_4096:
   patch_size_4096:
   pretrain_4096:
   freeze_4096:

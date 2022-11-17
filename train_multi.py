@@ -10,7 +10,7 @@ import pandas as pd
 from pathlib import Path
 from omegaconf import OmegaConf
 
-from source.models import HIPT
+from source.models import ModelFactory
 from source.dataset import ExtractedFeaturesDataset
 from source.utils import initialize_wandb, train, tune, test, compute_time, EarlyStopping, OptimizerFactory, SchedulerFactory
 
@@ -70,20 +70,13 @@ def main(cfg):
         train_c, tune_c, test_c = train_dataset.num_classes, tune_dataset.num_classes, test_dataset.num_classes
         assert train_c == tune_c == test_c, f'Different number of classes C in train (C={train_c}), tune (C={tune_c}) and test (C={test_c}) sets!'
 
-        model = HIPT(
-            level=cfg.level,
-            num_classes=cfg.num_classes,
-            img_size=cfg.model.img_size,
-            pretrain_4096=cfg.model.pretrain_4096,
-            freeze_4096=cfg.model.freeze_4096,
-            freeze_4096_pos_embed=cfg.model.freeze_4096_pos_embed,
-            dropout=cfg.dropout,
-        )
+        model = ModelFactory(cfg.level, cfg.num_classes, cfg.model).get_model()
         model.relocate()
+        print(model)
 
         model_params = filter(lambda p: p.requires_grad, model.parameters())
-        optimizer = OptimizerFactory(cfg.optim.name, model_params, lr=cfg.optim.lr, weight_decay=cfg.optim.wd)
-        scheduler = SchedulerFactory(optimizer, cfg.optim.lr_scheduler)
+        optimizer = OptimizerFactory(cfg.optim.name, model_params, lr=cfg.optim.lr, weight_decay=cfg.optim.wd).get_optimizer()
+        scheduler = SchedulerFactory(optimizer, cfg.optim.lr_scheduler).get_scheduler()
 
         criterion = nn.CrossEntropyLoss()
 
