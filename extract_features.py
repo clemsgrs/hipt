@@ -16,13 +16,13 @@ from source.models import GlobalFeatureExtractor, LocalFeatureExtractor
 from source.utils import initialize_wandb, initialize_df, collate_region_filepaths
 
 
-@hydra.main(version_base='1.2.0', config_path='config', config_name='feature_extraction')
+@hydra.main(version_base='1.2.0', config_path='config/feature_extraction', config_name='default')
 def main(cfg: DictConfig):
 
     output_dir = Path(cfg.output_dir, cfg.dataset_name)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    features_dir = Path(output_dir, 'features', cfg.level)
+    features_dir = Path(output_dir, 'features', cfg.experiment_name, cfg.level)
     if not cfg.resume:
         if features_dir.exists():
             print(f'{features_dir} already exists! deleting it...')
@@ -54,13 +54,15 @@ def main(cfg: DictConfig):
     if cfg.region_dir:
         region_dir = Path(cfg.region_dir)
     slide_ids = sorted([s.name for s in region_dir.iterdir()])
+    print(f'{len(slide_ids)} slides with extracted patches found')
 
     if cfg.slide_list:
         with open(Path(cfg.slide_list), 'r') as f:
             slide_ids = sorted([x.strip() for x in f.readlines()])
+        print(f'restricting to {len(slide_ids)} slides from slide list .txt file')
 
     process_list_fp = None
-    if Path(output_dir, 'features', f'process_list_{cfg.level}.csv').is_file() and cfg.resume:
+    if Path(features_dir.parent, f'process_list_{cfg.level}.csv').is_file() and cfg.resume:
         process_list_fp = Path(output_dir, 'features', f'process_list_{cfg.level}.csv')
 
     if process_list_fp is None:
@@ -129,7 +131,7 @@ def main(cfg: DictConfig):
 
                     df.loc[idx, 'process'] = 0
                     df.loc[idx, 'status'] = 'processed'
-                    df.to_csv(Path(output_dir, 'features', f'process_list_{cfg.level}.csv'), index=False)
+                    df.to_csv(Path(features_dir.parent, f'process_list_{cfg.level}.csv'), index=False)
 
                     wandb.log({'processed': already_processed+i+1})
 
