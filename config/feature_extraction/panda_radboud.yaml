@@ -1,17 +1,17 @@
 data_dir: 'data'
 output_dir: 'output'
-region_dir: '${data_dir}/tcga_brca/patches'
 
-dataset_name: 'toy'
-# slide_list:
-# data_csv:
-slide_list: '${data_dir}/${dataset_name}/slide_list.txt'
+dataset_name: 'panda_radboud'
+experiment_name: 'clam'
+slide_list:
+
+region_dir: '/home/user/code/git/clemsgrs/hs2p/output/${dataset_name}/${experiment_name}/patches'
 
 resume: False
 
 region_size: 4096
 format: 'jpg'
-level: 'local'
+level: 'global'
 
 pretrain_256: 'checkpoints/vit_256_small_dino.pth'
 freeze_256: True

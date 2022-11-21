@@ -63,9 +63,9 @@ def main(cfg):
             print(f'Training on {cfg.pct*100}% of the data')
             train_df = train_df.sample(frac=cfg.pct).reset_index(drop=True)
 
-        train_dataset = ExtractedFeaturesDataset(train_df, features_dir)
-        tune_dataset = ExtractedFeaturesDataset(tune_df, features_dir)
-        test_dataset = ExtractedFeaturesDataset(test_df, features_dir)
+        train_dataset = ExtractedFeaturesDataset(train_df, features_dir, cfg.label_name, cfg.label_mapping)
+        tune_dataset = ExtractedFeaturesDataset(tune_df, features_dir, cfg.label_name, cfg.label_mapping)
+        test_dataset = ExtractedFeaturesDataset(test_df, features_dir, cfg.label_name, cfg.label_mapping)
 
         train_c, tune_c, test_c = train_dataset.num_classes, tune_dataset.num_classes, test_dataset.num_classes
         assert train_c == tune_c == test_c, f'Different number of classes C in train (C={train_c}), tune (C={tune_c}) and test (C={test_c}) sets!'
@@ -151,8 +151,10 @@ def main(cfg):
         print(f'Total time taken for fold {i}: {fold_mins}m {fold_secs}s')
 
         # load best model
-        best_model_fp = torch.load(Path(checkpoint_dir, 'best_model.pt'))
-        model.load_state_dict(best_model_fp)
+        best_model_fp = Path(checkpoint_dir, f'best_model_{wandb.run.id}.pt')
+        wandb.save(best_model_fp)
+        best_model_sd = torch.load(best_model_fp)
+        model.load_state_dict(best_model_sd)
 
         test_results = test(model, test_dataset, batch_size=1)
         test_dataset.df.to_csv(Path(result_dir, f'test.csv'), index=False)

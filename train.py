@@ -13,7 +13,7 @@ from source.dataset import ExtractedFeaturesDataset
 from source.utils import initialize_wandb, create_train_tune_test_df, train, tune, test, compute_time, EarlyStopping, OptimizerFactory, SchedulerFactory
 
 
-@hydra.main(version_base='1.2.0', config_path='config', config_name='global')
+@hydra.main(version_base='1.2.0', config_path='config/training', config_name='default')
 def main(cfg: DictConfig):
 
     output_dir = Path(cfg.output_dir, cfg.dataset_name)
@@ -30,7 +30,6 @@ def main(cfg: DictConfig):
     config = OmegaConf.to_container(cfg, resolve=True, throw_on_missing=True)
     _ = initialize_wandb(project=cfg.wandb.project, exp_name=cfg.wandb.exp_name, entity=cfg.wandb.username, config=config, key=key)
     wandb.define_metric('epoch', summary='max')
-    wandb.define_metric('lr', step_metric='epoch')
 
     features_dir = Path(output_dir, 'features', cfg.level)
     if cfg.features_dir:
@@ -65,9 +64,9 @@ def main(cfg: DictConfig):
         train_df = train_df.sample(frac=cfg.pct).reset_index(drop=True)
         tune_df = tune_df.sample(frac=cfg.pct).reset_index(drop=True)
 
-    train_dataset = ExtractedFeaturesDataset(train_df, features_dir)
-    tune_dataset = ExtractedFeaturesDataset(tune_df, features_dir)
-    test_dataset = ExtractedFeaturesDataset(test_df, features_dir)
+    train_dataset = ExtractedFeaturesDataset(train_df, features_dir, cfg.label_name, cfg.label_mapping)
+    tune_dataset = ExtractedFeaturesDataset(tune_df, features_dir, cfg.label_name, cfg.label_mapping)
+    test_dataset = ExtractedFeaturesDataset(test_df, features_dir, cfg.label_name, cfg.label_mapping)
 
     m, n = train_dataset.num_classes, tune_dataset.num_classes
     assert m == n == cfg.num_classes, f'Either train (C={m}) or tune (C={n}) sets doesnt cover full class spectrum (C={cfg.num_classes}'
@@ -129,6 +128,7 @@ def main(cfg: DictConfig):
             if early_stopping.early_stop and cfg.early_stopping.enable:
                 stop = True
 
+        wandb.define_metric('train/lr', step_metric='epoch')
         if scheduler:
             lr = scheduler.get_last_lr()
             wandb.log({'train/lr': lr})
@@ -145,7 +145,9 @@ def main(cfg: DictConfig):
             break
 
     # load best model
-    best_model_sd = torch.load(Path(checkpoint_dir, 'best_model.pt'))
+    best_model_fp = Path(checkpoint_dir, f'best_model_{wandb.run.id}.pt')
+    wandb.save(str(best_model_fp))
+    best_model_sd = torch.load(best_model_fp)
     model.load_state_dict(best_model_sd)
 
     test_results = test(model, test_dataset, batch_size=1)

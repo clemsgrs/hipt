@@ -1,0 +1,25 @@
+data_dir: 'data'
+output_dir: 'output'
+
+dataset_name: 'toy'
+experiment_name: ''
+slide_list: '${data_dir}/${dataset_name}/slide_list.txt'
+
+region_dir: '${data_dir}/tcga_brca/patches'
+
+resume: False
+
+region_size: 4096
+format: 'jpg'
+level: 'global'
+
+pretrain_256: 'checkpoints/vit_256_small_dino.pth'
+freeze_256: True
+
+pretrain_4096: 'checkpoints/vit_4096_xs_dino.pth'
+freeze_4096: True
+
+wandb:
+  project: 'hipt'
+  exp_name: 'feature_extraction'
+  username: 'clemsg'

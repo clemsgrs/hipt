@@ -1,24 +1,15 @@
 data_dir: 'data'
 output_dir: 'output'
-
-region_dir: '${data_dir}/tcga_brca/patches'
 features_dir:
 
-dataset_name: 'toy'
-# data_csv:
-# slide_list:
-slide_list: '${data_dir}/tcga_brca/slide_list.txt'
-data_csv: '${data_dir}/tcga_brca/data.csv'
+dataset_name: 'tcga_brca'
+data_csv: '${data_dir}/${dataset_name}/data.csv'
+slide_list: '${data_dir}/${dataset_name}/slide_list.txt'
 
-fold_num: -1
-level: 'region'
-
-region_size: 4096
-region_fmt: 'jpg'
-M_max: 5
-
-num_classes: 2
 nepochs: 50
+num_classes: 2
+label_name: 'label'
+label_mapping:
 tune_every: 1
 
 model:
@@ -50,13 +41,6 @@ train_batch_size: 1
 tune_batch_size: 1
 
 save_all: False
-
-early_stopping:
-  enable: True
-  tracking: 'loss'
-  min_max: 'min'
-  patience: 10
-  min_epoch: 30
 
 wandb:
   project: 'hipt'

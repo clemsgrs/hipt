@@ -171,6 +171,7 @@ class LocalGlobalHIPT(nn.Module):
                 param.requires_grad = False
                 if name == 'pos_embed':
                     param.requires_grad = not(freeze_4096_pos_embed)
+            print(f'ViT_4096 positional embedding layer frozen: {freeze_4096_pos_embed}')
             print('Done')
 
         # Global Aggregation

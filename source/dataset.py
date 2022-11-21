@@ -6,7 +6,7 @@ import pandas as pd
 from PIL import Image
 from pathlib import Path
 from torchvision import transforms
-from typing import Callable
+from typing import Callable, Dict
 from collections import defaultdict
 
 
@@ -19,12 +19,29 @@ class ExtractedFeaturesDataset(torch.utils.data.Dataset):
         self,
         df: pd.DataFrame,
         features_dir: Path,
+        label_name: str = 'label',
+        label_mapping: Dict[int,int] = {},
     ):
-        self.df = df
         self.features_dir = features_dir
+        self.label_name = label_name
+        self.label_mapping = label_mapping
+
+        self.df = self.prepare_data(df)
 
         self.num_classes = len(self.df.label.value_counts(dropna=True))
         self.map_class_to_slide_ids()
+
+    def prepare_data(self, df):
+        if self.label_mapping:
+            df['label'] = df[self.label_name].apply(lambda x: self.label_mapping[x])
+        elif self.label_name != 'label':
+            df['label'] = df[self.label_name]
+        filtered_slide_ids = []
+        for slide_id in df.slide_id:
+            if Path(self.features_dir, f'{slide_id}.pt').is_file():
+                filtered_slide_ids.append(slide_id)
+        df_filtered = df[df.slide_id.isin(filtered_slide_ids)].reset_index(drop=True)
+        return df_filtered
 
     def map_class_to_slide_ids(self):
         # map each class to corresponding slide ids
@@ -56,27 +73,39 @@ class StackedRegionsDataset(torch.utils.data.Dataset):
         region_dir: Path,
         region_size: int = 256,
         fmt: str = 'jpg',
+        label_name: str = 'label',
+        label_mapping: Dict[int,int] = {},
         transform: Callable = None,
         M_max: int = -1,
     ):
-        self.df = df
         self.region_dir = region_dir
         self.region_size = region_size
         self.format = fmt
+        self.label_name = label_name
+        self.label_mapping = label_mapping
         self.transform = transform
         self.M_max = M_max
 
+        self.df = self.prepare_data(df)
+
         self.num_classes = len(self.df.label.value_counts(dropna=True))
         self.map_class_to_slide_ids()
+
+    def prepare_data(self, df):
+        if self.label_mapping:
+            df['label'] = df[self.label_name].apply(lambda x: self.label_mapping[x])
+        elif self.label_name != 'label':
+            df['label'] = df[self.label_name]
+        return df
 
     def map_class_to_slide_ids(self):
         # map each class to corresponding slide ids
         self.class_2_id = defaultdict(list)
         for i in range(self.num_classes):
-            self.class_2_id[i] = np.asarray(self.df.label == i).nonzero()[0]
+            self.class_2_id[i] = np.asarray(self.df[self.label_name] == i).nonzero()[0]
 
     def get_label(self, idx):
-        return self.df.label[idx]
+        return self.df[self.label_name][idx]
 
     def __getitem__(self, idx: int):
         row = self.df.loc[idx]
@@ -109,7 +138,7 @@ class StackedRegionsDataset(torch.utils.data.Dataset):
                 img = img.unsqueeze(0)
                 stacked_regions[i] = img
 
-            label = row.label
+            label = row[self.label_name]
 
             return idx, stacked_regions, label
 

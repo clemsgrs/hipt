@@ -1,5 +1,7 @@
-data_dir: 'data'
-output_dir: 'output'
+defaults:
+  - default
+  - _self_
+
 features_dir:
 
 dataset_name: 'tcga_brca'
@@ -11,24 +13,12 @@ nepochs: 50
 tune_every: 1
 
 model:
-  pretrain_256:
-  freeze_256:
-  freeze_256_pos_embed:
-  img_size_256:
-  patch_size_256:
-  pretrain_4096:
-  freeze_4096:
-  freeze_4096_pos_embed:
-  img_size_4096:
-  patch_size_4096:
   dropout: 0.25
 
 optim:
   name: 'adam'
   lr: 2e-4
   wd: 1e-5
-  lr_scheduler:
-    name:
 
 weighted_sampling: True
 gradient_clipping: 32
