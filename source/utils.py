@@ -100,7 +100,8 @@ def get_binary_metrics(probs: np.array(float), preds: List[int], labels: List[in
 def get_metrics(probs: np.array(float), preds: List[int], labels: List[int], multi_class: str = 'ovr'):
     labels = np.asarray(labels)
     auc = metrics.roc_auc_score(labels, probs, multi_class=multi_class)
-    metrics_dict = {'auc': auc}
+    quadratic_weighted_kappa = metrics.cohen_kappa_score(labels, preds, weights='quadratic')
+    metrics_dict = {'auc': auc, 'kappa': quadratic_weighted_kappa}
     return metrics_dict
 
 
@@ -116,8 +117,7 @@ def collate_region_filepaths(batch):
     item = batch[0]
     idx = torch.LongTensor([item[0]])
     fp = item[1]
-    label = torch.LongTensor([item[2]])
-    return [idx, fp, label]
+    return [idx, fp]
 
 
 def make_weights_for_balanced_classes(dataset):
@@ -215,7 +215,7 @@ class EarlyStopping:
 
         if self.best_score is None or score >= self.best_score:
             self.best_score = score
-            fname = f'best_model.pt'
+            fname = f'best_model_{wandb.run.id}.pt'
             torch.save(model.state_dict(), Path(self.checkpoint_dir, fname))
             self.counter = 0
 
