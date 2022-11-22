@@ -2,7 +2,7 @@ defaults:
   - default
   - _self_
 
-features_dir: output/panda_radboud/features/otsu/local
+features_dir: output/panda_radboud/features/clam/local
 
 dataset_name: 'panda_radboud'
 data_csv:
