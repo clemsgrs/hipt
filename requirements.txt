@@ -3,3 +3,5 @@ seaborn==0.12.0
 hydra-core==1.2.0
 einops==0.4.1
 nbstripout==0.6.1
+plotly==5.11.0
+kaleido

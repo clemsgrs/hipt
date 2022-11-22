@@ -46,3 +46,4 @@ wandb:
   project: 'hipt'
   exp_name: 'toy_training'
   username: 'clemsg'
+  metrics_to_log: ['auc', 'roc_auc_curve']

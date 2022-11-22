@@ -2,7 +2,9 @@ defaults:
   - default
   - _self_
 
-dataset_name: 'tcga_brca'
+features_dir: output/panda_radboud/features/otsu/local
+
+dataset_name: 'panda_radboud'
 data_csv:
 slide_list:
 
@@ -10,19 +12,24 @@ fold_num: 0
 level: 'local'
 
 nepochs: 100
-num_classes: 2
+num_classes: 6
+label_name: 'isup_grade'
 tune_every: 1
 
 model:
-  img_size_4096: 4096
   freeze_4096: False
   freeze_4096_pos_embed: False
+  img_size_4096: 4096
   dropout: 0.25
 
 optim:
   name: 'adam'
   lr: 2e-4
   wd: 1e-5
+  lr_scheduler:
+    name: 'step'
+    step_size: 20
+    gamma: 0.5
 
 early_stopping:
   enable: False
@@ -32,6 +39,4 @@ early_stopping:
   min_epoch: 50
 
 wandb:
-  project: 'hipt'
   exp_name: 'toy_training'
-  username: 'clemsg'

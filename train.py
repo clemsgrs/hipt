@@ -106,8 +106,9 @@ def main(cfg: DictConfig):
 
         train_dataset.df.to_csv(Path(result_dir, f'train_{epoch}.csv'), index=False)
         for res, val in train_results.items():
-            wandb.define_metric(f'train/{res}', step_metric='epoch')
-            wandb.log({f'train/{res}': val})
+            if res in cfg.wandb.metrics_to_log:
+                wandb.define_metric(f'train/{res}', step_metric='epoch')
+                wandb.log({f'train/{res}': val})
 
         if epoch % cfg.tune_every == 0:
 
@@ -121,8 +122,9 @@ def main(cfg: DictConfig):
 
             tune_dataset.df.to_csv(Path(result_dir, f'tune_{epoch}.csv'), index=False)
             for res, val in tune_results.items():
-                wandb.define_metric(f'tune/{res}', step_metric='epoch')
-                wandb.log({f'tune/{res}': val})
+                if res in cfg.wandb.metrics_to_log:
+                    wandb.define_metric(f'tune/{res}', step_metric='epoch')
+                    wandb.log({f'tune/{res}': val})
 
             early_stopping(epoch, model, tune_results)
             if early_stopping.early_stop and cfg.early_stopping.enable:
@@ -153,8 +155,10 @@ def main(cfg: DictConfig):
     test_results = test(model, test_dataset, batch_size=1)
     test_dataset.df.to_csv(Path(result_dir, f'test.csv'), index=False)
 
-    test_auc = round(test_results['auc'], 2)
-    wandb.log({f'test/auc': test_auc})
+    for res, val in test_results.items():
+        if res == 'auc':
+            val = round(val, 3)
+        wandb.log({f'test/{res}': auc})
 
     end_time = time.time()
     mins, secs = compute_time(start_time, end_time)

@@ -7,6 +7,7 @@ import pandas as pd
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
+import plotly.express as px
 
 from pathlib import Path
 from typing import Optional, Callable, List
@@ -118,6 +119,21 @@ def collate_region_filepaths(batch):
     idx = torch.LongTensor([item[0]])
     fp = item[1]
     return [idx, fp]
+
+
+def get_roc_auc_curve(probs: np.array(float), labels: List[int]):
+    fpr, tpr, _ = metrics.roc_curve(labels, probs)
+    auc = metrics.roc_auc_score(labels, probs)
+    fig = px.area(
+        x=fpr, y=tpr,
+        title=f'ROC Curve (AUC={auc:.2f})',
+        labels=dict(x='1-Specificity', y='Sensitivity'),
+    )
+    fig.add_shape(
+        type='line', line=dict(dash='dash'),
+        x0=0, x1=1, y0=0, y1=1
+    )
+    return fig
 
 
 def make_weights_for_balanced_classes(dataset):
@@ -268,7 +284,7 @@ def train(
         collate_fn=collate_fn,
     )
 
-    train_results = {}
+    results = {}
 
     with tqdm.tqdm(
         loader,
@@ -310,15 +326,17 @@ def train(
 
     if dataset.num_classes == 2:
         metrics = get_binary_metrics(probs[:,1], preds, labels)
+        roc_auc_curve = get_roc_auc_curve(probs[:,1], labels)
+        results.update({'roc_auc_curve': roc_auc_curve})
     else:
         metrics = get_metrics(probs, preds, labels)
 
-    train_results.update(metrics)
+    results.update(metrics)
 
     train_loss = epoch_loss / len(loader)
-    train_results['loss'] = train_loss
+    results['loss'] = train_loss
 
-    return train_results
+    return results
 
 
 def tune(
@@ -383,6 +401,8 @@ def tune(
 
     if dataset.num_classes == 2:
         metrics = get_binary_metrics(probs[:,1], preds, labels)
+        roc_auc_curve = get_roc_auc_curve(probs[:,1], labels)
+        results.update({'roc_auc_curve': roc_auc_curve})
     else:
         metrics = get_metrics(probs, preds, labels)
 
@@ -451,6 +471,8 @@ def test(
 
     if dataset.num_classes == 2:
         metrics = get_binary_metrics(probs[:,1], preds, labels)
+        roc_auc_curve = get_roc_auc_curve(probs[:,1], labels)
+        results.update({'roc_auc_curve': roc_auc_curve})
     else:
         metrics = get_metrics(probs, preds, labels)
 
