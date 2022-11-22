@@ -44,6 +44,7 @@ save_all: False
 
 wandb:
   project: 'hipt'
-  exp_name: 'toy_training'
   username: 'clemsg'
+  exp_name: 'toy_training'
+  dir: '/home/user/wandb'
   metrics_to_log: ['auc', 'roc_auc_curve']

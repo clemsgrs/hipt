@@ -21,5 +21,6 @@ freeze_4096: True
 
 wandb:
   project: 'hipt'
-  exp_name: 'feature_extraction'
   username: 'clemsg'
+  exp_name: 'feature_extraction'
+  dir: '/home/user/wandb'

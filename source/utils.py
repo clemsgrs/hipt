@@ -15,12 +15,16 @@ from sklearn import metrics
 from sklearn.model_selection import train_test_split
 
 
-def initialize_wandb(project, exp_name, entity, config={}, tags=None, key=''):
+def initialize_wandb(project, entity, exp_name, dir='./wandb', config={}, tags=None, key=''):
+    dir = Path(dir)
     command = f'wandb login {key}'
     subprocess.call(command, shell=True)
     if tags == None:
         tags=[]
-    run = wandb.init(project=project, entity=entity, name=exp_name, config=config, tags=tags)
+    if not dir.is_dir():
+        dir.mkdir()
+    subprocess.call(f'chmod -R 777 {dir}', shell=True)
+    run = wandb.init(project=project, entity=entity, name=exp_name, dir=dir, config=config, tags=tags)
     return run
 
 
@@ -132,8 +136,10 @@ def get_roc_auc_curve(probs: np.array(float), labels: List[int]):
     plt.xlabel('1-Specificity')
     plt.ylabel('Sensitivity')
     plt.title('Receiver Operating Characteristic (ROC) curve')
-    plt.legend()
-    return fig
+    plt.legend(loc='lower right')
+    img = wandb.Image(fig)
+    plt.close()
+    return img
 
 
 def make_weights_for_balanced_classes(dataset):
