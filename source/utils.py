@@ -7,7 +7,7 @@ import pandas as pd
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
-import plotly.express as px
+import matplotlib.pyplot as plt
 
 from pathlib import Path
 from typing import Optional, Callable, List
@@ -124,15 +124,15 @@ def collate_region_filepaths(batch):
 def get_roc_auc_curve(probs: np.array(float), labels: List[int]):
     fpr, tpr, _ = metrics.roc_curve(labels, probs)
     auc = metrics.roc_auc_score(labels, probs)
-    fig = px.area(
-        x=fpr, y=tpr,
-        title=f'ROC Curve (AUC={auc:.2f})',
-        labels=dict(x='1-Specificity', y='Sensitivity'),
-    )
-    fig.add_shape(
-        type='line', line=dict(dash='dash'),
-        x0=0, x1=1, y0=0, y1=1
-    )
+    fig = plt.figure(dpi=600)
+    plt.plot(fpr, tpr, label=f'ROC curve (AUC = {auc:.3f}')
+    plt.plot([0, 1], [0, 1], "k--")
+    plt.xlim([0.0, 1.0])
+    plt.ylim([0.0, 1.05])
+    plt.xlabel('1-Specificity')
+    plt.ylabel('Sensitivity')
+    plt.title('Receiver Operating Characteristic (ROC) curve')
+    plt.legend()
     return fig
 
 
