@@ -7,7 +7,7 @@ import pandas as pd
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
-import plotly.express as px
+import matplotlib.pyplot as plt
 
 from pathlib import Path
 from typing import Optional, Callable, List
@@ -15,12 +15,16 @@ from sklearn import metrics
 from sklearn.model_selection import train_test_split
 
 
-def initialize_wandb(project, exp_name, entity, config={}, tags=None, key=''):
+def initialize_wandb(project, entity, exp_name, dir='./wandb', config={}, tags=None, key=''):
+    dir = Path(dir)
     command = f'wandb login {key}'
     subprocess.call(command, shell=True)
     if tags == None:
         tags=[]
-    run = wandb.init(project=project, entity=entity, name=exp_name, config=config, tags=tags)
+    if not dir.is_dir():
+        dir.mkdir()
+    subprocess.call(f'chmod -R 777 {dir}', shell=True)
+    run = wandb.init(project=project, entity=entity, name=exp_name, dir=dir, config=config, tags=tags)
     return run
 
 
@@ -124,16 +128,18 @@ def collate_region_filepaths(batch):
 def get_roc_auc_curve(probs: np.array(float), labels: List[int]):
     fpr, tpr, _ = metrics.roc_curve(labels, probs)
     auc = metrics.roc_auc_score(labels, probs)
-    fig = px.area(
-        x=fpr, y=tpr,
-        title=f'ROC Curve (AUC={auc:.2f})',
-        labels=dict(x='1-Specificity', y='Sensitivity'),
-    )
-    fig.add_shape(
-        type='line', line=dict(dash='dash'),
-        x0=0, x1=1, y0=0, y1=1
-    )
-    return fig
+    fig = plt.figure(dpi=600)
+    plt.plot(fpr, tpr, label=f'ROC curve (AUC = {auc:.3f}')
+    plt.plot([0, 1], [0, 1], "k--")
+    plt.xlim([0.0, 1.0])
+    plt.ylim([0.0, 1.05])
+    plt.xlabel('1-Specificity')
+    plt.ylabel('Sensitivity')
+    plt.title('Receiver Operating Characteristic (ROC) curve')
+    plt.legend(loc='lower right')
+    img = wandb.Image(fig)
+    plt.close()
+    return img
 
 
 def make_weights_for_balanced_classes(dataset):

@@ -5,6 +5,8 @@ import torch
 import torch.nn as nn
 import hydra
 import pandas as pd
+import matplotlib.pyplot as plt
+
 from pathlib import Path
 from omegaconf import DictConfig, OmegaConf
 
@@ -28,7 +30,7 @@ def main(cfg: DictConfig):
     # set up wandb
     key = os.environ.get('WANDB_API_KEY')
     config = OmegaConf.to_container(cfg, resolve=True, throw_on_missing=True)
-    _ = initialize_wandb(project=cfg.wandb.project, exp_name=cfg.wandb.exp_name, entity=cfg.wandb.username, config=config, key=key)
+    _ = initialize_wandb(cfg.wandb.project, cfg.wandb.username, cfg.wandb.exp_name, dir=cfg.wandb.dir, config=config, key=key)
     wandb.define_metric('epoch', summary='max')
 
     features_dir = Path(output_dir, 'features', cfg.level)
@@ -158,7 +160,8 @@ def main(cfg: DictConfig):
     for res, val in test_results.items():
         if res == 'auc':
             val = round(val, 3)
-        wandb.log({f'test/{res}': auc})
+        if res in cfg.wandb.metrics_to_log:
+            wandb.log({f'test/{res}': val})
 
     end_time = time.time()
     mins, secs = compute_time(start_time, end_time)
