@@ -3,8 +3,8 @@ import time
 import wandb
 import torch
 import torch.nn as nn
-import torch.optim as optim
 import hydra
+import statistics
 import numpy as np
 import pandas as pd
 from pathlib import Path
@@ -12,17 +12,17 @@ from omegaconf import OmegaConf
 
 from source.models import ModelFactory
 from source.dataset import ExtractedFeaturesDataset
-from source.utils import initialize_wandb, train, tune, test, compute_time, EarlyStopping, OptimizerFactory, SchedulerFactory
+from source.utils import initialize_wandb, train, tune, test, compute_time, log_on_step, EarlyStopping, OptimizerFactory, SchedulerFactory
 
 
-@hydra.main(version_base='1.2.0', config_path='config', config_name='multifold_global')
+@hydra.main(version_base='1.2.0', config_path='config/training', config_name='multifold_global')
 def main(cfg):
 
     output_dir = Path(cfg.output_dir, cfg.dataset_name)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    checkpoint_dir = Path(output_dir, 'checkpoints', cfg.level)
-    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    checkpoint_root_dir = Path(output_dir, 'checkpoints', cfg.level)
+    checkpoint_root_dir.mkdir(parents=True, exist_ok=True)
 
     result_root_dir = Path(output_dir, 'results', cfg.level)
     result_root_dir.mkdir(parents=True, exist_ok=True)
@@ -31,8 +31,6 @@ def main(cfg):
     key = os.environ.get('WANDB_API_KEY')
     config = OmegaConf.to_container(cfg, resolve=True, throw_on_missing=True)
     _ = initialize_wandb(cfg.wandb.project, cfg.wandb.username, cfg.wandb.exp_name, dir=cfg.wandb.dir, config=config, key=key)
-    wandb.define_metric('epoch', summary='max')
-    wandb.define_metric('lr', step_metric='epoch')
 
     if cfg.features_dir:
         features_dir = Path(cfg.features_dir)
@@ -41,6 +39,7 @@ def main(cfg):
 
     fold_root_dir = Path(cfg.data_dir, cfg.dataset_name, 'splits')
     nfold = len([_ for _ in fold_root_dir.glob(f'fold_*')])
+    print(f'Training on {nfold} folds')
 
     test_aucs = []
 
@@ -48,6 +47,8 @@ def main(cfg):
     for i in range(nfold):
 
         fold_dir = Path(fold_root_dir, f'fold_{i}')
+        checkpoint_dir = Path(checkpoint_root_dir, f'fold_{i}')
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
         result_dir = Path(result_root_dir, f'fold_{i}')
         result_dir.mkdir(parents=True, exist_ok=True)
 
@@ -91,10 +92,12 @@ def main(cfg):
 
         stop = False
         fold_start_time = time.time()
+
+        wandb.define_metric(f'fold_{i}/train/epoch', summary='max')
         for epoch in range(cfg.nepochs):
 
             epoch_start_time = time.time()
-            wandb.log({'epoch': epoch+1})
+            wandb.log({f'fold_{i}/train/epoch': epoch})
 
             train_results = train(
                 epoch+1,
@@ -107,10 +110,8 @@ def main(cfg):
                 gradient_clipping=cfg.gradient_clipping,
             )
 
+            log_on_step(f'fold_{i}/train', train_results, step=f'fold_{i}/train/epoch', to_log=cfg.wandb.to_log)
             train_dataset.df.to_csv(Path(result_dir, f'train_{epoch}.csv'), index=False)
-            for res, val in train_results.items():
-                wandb.define_metric(f'train/fold_{i}/{res}', step_metric='epoch')
-                wandb.log({f'train/fold_{i}/{res}': val})
 
             if epoch % cfg.tune_every == 0:
 
@@ -122,21 +123,20 @@ def main(cfg):
                     batch_size=cfg.tune_batch_size
                 )
 
+                log_on_step(f'fold_{i}/tune', tune_results, step=f'fold_{i}/train/epoch', to_log=cfg.wandb.to_log)
                 tune_dataset.df.to_csv(Path(result_dir, f'tune_{epoch}.csv'), index=False)
-                for res, val in tune_results.items():
-                    wandb.define_metric(f'tune/fold_{i}/{res}', step_metric='epoch')
-                    wandb.log({f'tune/fold_{i}/{res}': val})
 
                 early_stopping(epoch, model, tune_results)
                 if early_stopping.early_stop and cfg.early_stopping.enable:
                     stop = True
 
+            wandb.define_metric(f'fold_{i}/train/lr', step_metric=f'fold_{i}/train/epoch')
             if scheduler:
                 lr = scheduler.get_last_lr()
-                wandb.log({f'train/fold_{i}/lr': lr})
+                wandb.log({f'fold_{i}/train/lr': lr})
                 scheduler.step()
             else:
-                wandb.log({f'train/fold_{i}/lr': cfg.optim.lr})
+                wandb.log({f'fold_{i}/train/lr': cfg.optim.lr})
 
             epoch_end_time = time.time()
             epoch_mins, epoch_secs = compute_time(epoch_start_time, epoch_end_time)
@@ -152,19 +152,24 @@ def main(cfg):
 
         # load best model
         best_model_fp = Path(checkpoint_dir, f'best_model_{wandb.run.id}.pt')
-        wandb.save(best_model_fp)
+        wandb.save(str(best_model_fp))
         best_model_sd = torch.load(best_model_fp)
         model.load_state_dict(best_model_sd)
 
         test_results = test(model, test_dataset, batch_size=1)
         test_dataset.df.to_csv(Path(result_dir, f'test.csv'), index=False)
 
-        test_auc = round(test_results['auc'], 2)
-        wandb.log({f'test/fold_{i}/auc': test_auc})
-        test_aucs.append(test_auc)
+        for r, v in test_results.items():
+            if r == 'auc':
+                test_aucs.append(v)
+                v = round(v, 3)
+            if r in cfg.wandb.to_log:
+                wandb.log({f'fold_{i}/test/{r}': v })
 
-    mean_test_auc = round(np.mean(test_aucs), 2)
-    wandb.log({f'test/mean_auc': mean_test_auc})
+    mean_test_auc = round(np.mean(test_aucs), 3)
+    std_test_auc = round(statistics.stdev(test_aucs), 3)
+    wandb.log({f'test/auc_mean': mean_test_auc})
+    wandb.log({f'test/auc_std': std_test_auc})
 
     end_time = time.time()
     mins, secs = compute_time(start_time, end_time)
