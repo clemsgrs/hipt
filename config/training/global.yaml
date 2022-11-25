@@ -2,19 +2,19 @@ defaults:
   - default
   - _self_
 
-# features_dir: output/panda_radboud/features/clam/global
+features_dir: output/panda_radboud/features/otsu/global
+# features_dir: /home/user/code/git/opensource/HIPT/global_features
 
-dataset_name: 'tcga_brca'
+dataset_name: 'panda_radboud'
 data_csv:
 slide_list:
 
 fold_num: 0
 level: 'global'
 
-nepochs: 20
-# num_classes: 6
-# label_name: 'isup_grade'
-num_classes: 2
+nepochs: 200
+num_classes: 6
+label_name: 'isup_grade'
 tune_every: 1
 
 model:
@@ -24,13 +24,17 @@ optim:
   name: 'adam'
   lr: 2e-4
   wd: 1e-5
+  lr_scheduler:
+    name: 'step'
+    step_size: 50
+    gamma: 0.5
 
 early_stopping:
   enable: False
   tracking: 'loss'
   min_max: 'min'
   patience: 10
-  min_epoch: 50
+  min_epoch: 30
 
 wandb:
   exp_name: 'toy_training'

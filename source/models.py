@@ -66,6 +66,7 @@ class GlobalHIPT(nn.Module):
     ):
 
         super(GlobalHIPT, self).__init__()
+        self.num_classes = num_classes
 
         # Global Aggregation
         self.global_phi = nn.Sequential(nn.Linear(embed_dim_4096, 192), nn.ReLU(), nn.Dropout(dropout))
@@ -137,6 +138,7 @@ class LocalGlobalHIPT(nn.Module):
     ):
 
         super(LocalGlobalHIPT, self).__init__()
+        self.num_classes = num_classes
 
         checkpoint_key = 'teacher'
 
@@ -253,6 +255,7 @@ class HIPT(nn.Module):
     ):
 
         super(HIPT, self).__init__()
+        self.num_classes = num_classes
 
         checkpoint_key = 'teacher'
 

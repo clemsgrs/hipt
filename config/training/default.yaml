@@ -12,6 +12,8 @@ label_name: 'label'
 label_mapping:
 tune_every: 1
 
+loss: 'ce'
+
 model:
   pretrain_256: 'checkpoints/vit_256_small_dino.pth'
   freeze_256: True
@@ -46,5 +48,5 @@ wandb:
   project: 'hipt'
   username: 'clemsg'
   exp_name: 'toy_training'
-  dir: '/home/user/wandb'
-  metrics_to_log: ['auc', 'roc_auc_curve']
+  dir: '/home/user'
+  to_log: ['loss', 'auc', 'kappa', 'roc_auc_curve']

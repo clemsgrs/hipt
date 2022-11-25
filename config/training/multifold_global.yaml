@@ -2,14 +2,14 @@ defaults:
   - default
   - _self_
 
-features_dir:
+# features_dir: /home/user/code/git/opensource/HIPT/global_features
 
 dataset_name: 'tcga_brca'
 
 level: 'global'
 
-num_classes: 2
 nepochs: 50
+num_classes: 2
 tune_every: 1
 
 model:
@@ -20,16 +20,6 @@ optim:
   lr: 2e-4
   wd: 1e-5
 
-weighted_sampling: True
-gradient_clipping: 32
-
-pct:
-
-train_batch_size: 1
-tune_batch_size: 1
-
-save_all: False
-
 early_stopping:
   enable: False
   tracking: 'loss'
@@ -38,6 +28,4 @@ early_stopping:
   min_epoch: 30
 
 wandb:
-  project: 'hipt'
   exp_name: 'training_multifold'
-  username: 'clemsg'

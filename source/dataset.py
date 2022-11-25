@@ -6,7 +6,7 @@ import pandas as pd
 from PIL import Image
 from pathlib import Path
 from torchvision import transforms
-from typing import Callable, Dict
+from typing import Callable, Dict, Optional
 from collections import defaultdict
 
 
@@ -21,10 +21,12 @@ class ExtractedFeaturesDataset(torch.utils.data.Dataset):
         features_dir: Path,
         label_name: str = 'label',
         label_mapping: Dict[int,int] = {},
+        label_encoding: Optional[str] = None,
     ):
         self.features_dir = features_dir
         self.label_name = label_name
         self.label_mapping = label_mapping
+        self.label_encoding = label_encoding
 
         self.df = self.prepare_data(df)
 
@@ -59,6 +61,8 @@ class ExtractedFeaturesDataset(torch.utils.data.Dataset):
         features = torch.load(fp)
 
         label = row.label
+        if self.label_encoding == 'ordinal':
+            label = [1]*(label+1) + [0]*(self.num_classes-label-1)
 
         return idx, features, label
 

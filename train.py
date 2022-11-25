@@ -5,17 +5,17 @@ import torch
 import torch.nn as nn
 import hydra
 import pandas as pd
-import matplotlib.pyplot as plt
 
 from pathlib import Path
+from functools import partial
 from omegaconf import DictConfig, OmegaConf
 
 from source.models import ModelFactory
 from source.dataset import ExtractedFeaturesDataset
-from source.utils import initialize_wandb, create_train_tune_test_df, train, tune, test, compute_time, EarlyStopping, OptimizerFactory, SchedulerFactory
+from source.utils import initialize_wandb, create_train_tune_test_df, train, tune, test, compute_time, log_on_step, collate_features, EarlyStopping, OptimizerFactory, SchedulerFactory
 
 
-@hydra.main(version_base='1.2.0', config_path='config/training', config_name='default')
+@hydra.main(version_base='1.2.0', config_path='config/training', config_name='global')
 def main(cfg: DictConfig):
 
     output_dir = Path(cfg.output_dir, cfg.dataset_name)
@@ -37,7 +37,22 @@ def main(cfg: DictConfig):
     if cfg.features_dir:
         features_dir = Path(cfg.features_dir)
 
-    model = ModelFactory(cfg.level, cfg.num_classes, cfg.model).get_model()
+    num_classes = cfg.num_classes
+    if cfg.loss == 'ce':
+        criterion = nn.CrossEntropyLoss()
+        label_type = 'int'
+        label_encoding = None
+    elif cfg.loss == 'mse':
+        criterion = nn.MSELoss()
+        label_type = 'float'
+        label_encoding = None
+        num_classes = 1
+    elif cfg.loss == 'ordinal':
+        criterion = nn.MSELoss()
+        label_type = 'float'
+        label_encoding = 'ordinal'
+
+    model = ModelFactory(cfg.level, num_classes, cfg.model).get_model()
     model.relocate()
     print(model)
 
@@ -66,9 +81,9 @@ def main(cfg: DictConfig):
         train_df = train_df.sample(frac=cfg.pct).reset_index(drop=True)
         tune_df = tune_df.sample(frac=cfg.pct).reset_index(drop=True)
 
-    train_dataset = ExtractedFeaturesDataset(train_df, features_dir, cfg.label_name, cfg.label_mapping)
-    tune_dataset = ExtractedFeaturesDataset(tune_df, features_dir, cfg.label_name, cfg.label_mapping)
-    test_dataset = ExtractedFeaturesDataset(test_df, features_dir, cfg.label_name, cfg.label_mapping)
+    train_dataset = ExtractedFeaturesDataset(train_df, features_dir, cfg.label_name, cfg.label_mapping, label_encoding)
+    tune_dataset = ExtractedFeaturesDataset(tune_df, features_dir, cfg.label_name, cfg.label_mapping, label_encoding)
+    test_dataset = ExtractedFeaturesDataset(test_df, features_dir, cfg.label_name, cfg.label_mapping, label_encoding)
 
     m, n = train_dataset.num_classes, tune_dataset.num_classes
     assert m == n == cfg.num_classes, f'Either train (C={m}) or tune (C={n}) sets doesnt cover full class spectrum (C={cfg.num_classes}'
@@ -76,8 +91,6 @@ def main(cfg: DictConfig):
     model_params = filter(lambda p: p.requires_grad, model.parameters())
     optimizer = OptimizerFactory(cfg.optim.name, model_params, lr=cfg.optim.lr, weight_decay=cfg.optim.wd).get_optimizer()
     scheduler = SchedulerFactory(optimizer, cfg.optim.lr_scheduler).get_scheduler()
-
-    criterion = nn.CrossEntropyLoss()
 
     early_stopping = EarlyStopping(
         cfg.early_stopping.tracking,
@@ -101,16 +114,14 @@ def main(cfg: DictConfig):
             train_dataset,
             optimizer,
             criterion,
+            collate_fn=partial(collate_features, label_type=label_type),
             batch_size=cfg.train_batch_size,
             weighted_sampling=cfg.weighted_sampling,
             gradient_clipping=cfg.gradient_clipping,
         )
 
+        log_on_step('train', train_results, to_log=cfg.wandb.to_log)
         train_dataset.df.to_csv(Path(result_dir, f'train_{epoch}.csv'), index=False)
-        for res, val in train_results.items():
-            if res in cfg.wandb.metrics_to_log:
-                wandb.define_metric(f'train/{res}', step_metric='epoch')
-                wandb.log({f'train/{res}': val})
 
         if epoch % cfg.tune_every == 0:
 
@@ -119,14 +130,12 @@ def main(cfg: DictConfig):
                 model,
                 tune_dataset,
                 criterion,
+                collate_fn=partial(collate_features, label_type=label_type),
                 batch_size=cfg.tune_batch_size
             )
 
+            log_on_step('tune', tune_results, to_log=cfg.wandb.to_log)
             tune_dataset.df.to_csv(Path(result_dir, f'tune_{epoch}.csv'), index=False)
-            for res, val in tune_results.items():
-                if res in cfg.wandb.metrics_to_log:
-                    wandb.define_metric(f'tune/{res}', step_metric='epoch')
-                    wandb.log({f'tune/{res}': val})
 
             early_stopping(epoch, model, tune_results)
             if early_stopping.early_stop and cfg.early_stopping.enable:
@@ -154,14 +163,14 @@ def main(cfg: DictConfig):
     best_model_sd = torch.load(best_model_fp)
     model.load_state_dict(best_model_sd)
 
-    test_results = test(model, test_dataset, batch_size=1)
+    test_results = test(model, test_dataset, collate_fn=partial(collate_features, label_type=label_type), batch_size=1)
     test_dataset.df.to_csv(Path(result_dir, f'test.csv'), index=False)
 
-    for res, val in test_results.items():
-        if res == 'auc':
-            val = round(val, 3)
-        if res in cfg.wandb.metrics_to_log:
-            wandb.log({f'test/{res}': val})
+    for r, v in test_results.items():
+        if r == 'auc':
+            v = round(v, 3)
+        if r in cfg.wandb.to_log:
+            wandb.log({f'test/{r}': v })
 
     end_time = time.time()
     mins, secs = compute_time(start_time, end_time)
