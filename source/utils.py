@@ -171,6 +171,22 @@ def logit_to_ordinal_prediction(logits):
     return (pred > 0.5).cumprod(axis=1).sum(axis=1) - 1
 
 
+def convert_logit_to_class(logits):
+    l = logits.item()
+    if l < 0.5:
+        return 0
+    elif l < 1.5:
+        return 1
+    elif l < 2.5:
+        return 2
+    elif l < 3.5:
+        return 3
+    elif l < 4.5:
+        return 4
+    else:
+        return 5
+
+
 class OptimizerFactory:
 
     def __init__(
@@ -288,6 +304,7 @@ def train(
     model.train()
     epoch_loss = 0
     probs = np.empty((0,dataset.num_classes))
+    # probs = np.zeros((0,dataset.num_classes))
     preds, labels = [], []
     idxs = []
 
@@ -321,6 +338,7 @@ def train(
             optimizer.zero_grad()
             idx, x, label = batch
             x, label = x.to(device, non_blocking=True), label.to(device, non_blocking=True)
+            # logits = model(x).squeeze(1)
             logits = model(x)
             loss = criterion(logits, label)
 
@@ -333,10 +351,23 @@ def train(
             loss.backward()
             optimizer.step()
 
+            # if len(label.shape)>1:
+            #     label = torch.sum(label, dim=1)-1
+            #     pred = logit_to_ordinal_prediction(logits)
+            #     preds.extend(pred.clone().tolist())
+            # elif len(logits.shape) == 1:
+            #     pred = convert_logit_to_class(logits)
+            #     preds.extend([pred])
+            # else:
+            #     pred = torch.topk(logits, 1, dim=1)[1]
+            #     preds.extend(pred[:,0].clone().tolist())
+
             pred = torch.topk(logits, 1, dim=1)[1]
             preds.extend(pred[:,0].clone().tolist())
 
             prob = F.softmax(logits, dim=1).cpu().detach().numpy()
+            # prob = np.random.rand(1,dataset.num_classes)
+            # prob = prob/prob.sum(axis=1)
             probs = np.append(probs, prob, axis=0)
 
             labels.extend(label.clone().tolist())
@@ -375,6 +406,7 @@ def tune(
     model.eval()
     epoch_loss = 0
     probs = np.empty((0,dataset.num_classes))
+    # probs = np.zeros((0,dataset.num_classes))
     preds, labels = [], []
     idxs = []
 
@@ -403,13 +435,27 @@ def tune(
 
                 idx, x, label = batch
                 x, label = x.to(device, non_blocking=True), label.to(device, non_blocking=True)
+                # logits = model(x).squeeze(1)
                 logits = model(x)
                 loss = criterion(logits, label)
+
+                # if len(label.shape)>1:
+                #     label = torch.sum(label, dim=1)-1
+                #     pred = logit_to_ordinal_prediction(logits)
+                #     preds.extend(pred.clone().tolist())
+                # elif len(logits.shape) == 1:
+                #     pred = convert_logit_to_class(logits)
+                #     preds.extend([pred])
+                # else:
+                #     pred = torch.topk(logits, 1, dim=1)[1]
+                #     preds.extend(pred[:,0].clone().tolist())
 
                 pred = torch.topk(logits, 1, dim=1)[1]
                 preds.extend(pred[:,0].clone().tolist())
 
                 prob = F.softmax(logits, dim=1).cpu().detach().numpy()
+                # prob = np.random.rand(1,dataset.num_classes)
+                # prob = prob/prob.sum(axis=1)
                 probs = np.append(probs, prob, axis=0)
 
                 labels.extend(label.clone().tolist())
@@ -447,6 +493,7 @@ def test(
 
     model.eval()
     probs = np.empty((0,dataset.num_classes))
+    # probs = np.zeros((0,dataset.num_classes))
     preds, labels = [], []
     idxs = []
 
@@ -475,12 +522,26 @@ def test(
 
                 idx, x, label = batch
                 x, label = x.to(device, non_blocking=True), label.to(device, non_blocking=True)
+                # logits = model(x).squeeze(1)
                 logits = model(x)
 
+                # if len(label.shape)>1:
+                #     label = torch.sum(label, dim=1)-1
+                #     pred = logit_to_ordinal_prediction(logits)
+                #     preds.extend(pred.clone().tolist())
+                # elif len(logits.shape) == 1:
+                #     pred = convert_logit_to_class(logits)
+                #     preds.extend([pred])
+                # else:
+                #     # topk in binary classification setting <=> 0.50 thresholding
+                #     pred = torch.topk(logits, 1, dim=1)[1]
+                #     preds.extend(pred[:,0].clone().tolist())
                 pred = torch.topk(logits, 1, dim=1)[1]
                 preds.extend(pred[:,0].clone().tolist())
 
                 prob = F.softmax(logits, dim=1).cpu().detach().numpy()
+                # prob = np.random.rand(1,dataset.num_classes)
+                # prob = prob/prob.sum(axis=1)
                 probs = np.append(probs, prob, axis=0)
 
                 labels.extend(label.clone().tolist())
