@@ -10,7 +10,8 @@ import torch.nn.functional as F
 import matplotlib.pyplot as plt
 
 from pathlib import Path
-from typing import Optional, Callable, List
+from functools import partial
+from typing import Optional, Callable, List, Dict
 from sklearn import metrics
 from sklearn.model_selection import train_test_split
 
@@ -21,9 +22,6 @@ def initialize_wandb(project, entity, exp_name, dir='./wandb', config={}, tags=N
     subprocess.call(command, shell=True)
     if tags == None:
         tags=[]
-    if not dir.is_dir():
-        dir.mkdir()
-    subprocess.call(f'chmod -R 777 {dir}', shell=True)
     run = wandb.init(project=project, entity=entity, name=exp_name, dir=dir, config=config, tags=tags)
     return run
 
@@ -110,11 +108,14 @@ def get_metrics(probs: np.array(float), preds: List[int], labels: List[int], mul
     return metrics_dict
 
 
-def collate_features(batch):
+def collate_features(batch, label_type: str = 'int'):
     idx = torch.LongTensor([item[0] for item in batch])
     # feature = torch.vstack([item[1] for item in batch])
     feature = torch.cat([item[1] for item in batch], dim=0)
-    label = torch.LongTensor([item[2] for item in batch])
+    if label_type == 'float':
+        label = torch.FloatTensor([item[2] for item in batch])
+    elif label_type == 'int':
+        label = torch.LongTensor([item[2] for item in batch])
     return [idx, feature, label]
 
 
@@ -142,6 +143,15 @@ def get_roc_auc_curve(probs: np.array(float), labels: List[int]):
     return img
 
 
+def log_on_step(name, results, step: str = 'epoch', to_log: Optional[List['str']] = None):
+    if not to_log:
+        to_log = list(results.keys())
+    for r, v in results.items():
+        if r in to_log:
+            wandb.define_metric(f'{name}/{r}', step_metric=step)
+            wandb.log({f'{name}/{r}': v})
+
+
 def make_weights_for_balanced_classes(dataset):
     n_samples = len(dataset)
     weight_per_class = []
@@ -153,6 +163,12 @@ def make_weights_for_balanced_classes(dataset):
         y = dataset.get_label(idx)
         weight.append(weight_per_class[y])
     return torch.DoubleTensor(weight)
+
+
+def logit_to_ordinal_prediction(logits):
+    with torch.no_grad():
+        pred = torch.sigmoid(logits)
+    return (pred > 0.5).cumprod(axis=1).sum(axis=1) - 1
 
 
 class OptimizerFactory:
@@ -261,7 +277,7 @@ def train(
     dataset: torch.utils.data.Dataset,
     optimizer: torch.optim.Optimizer,
     criterion: Callable,
-    collate_fn: Callable = collate_features,
+    collate_fn: Callable = partial(collate_features, label_type='int'),
     batch_size: Optional[int] = 1,
     weighted_sampling: Optional[bool] = False,
     gradient_clipping: Optional[int] = None,
@@ -317,11 +333,11 @@ def train(
             loss.backward()
             optimizer.step()
 
-            prob = F.softmax(logits, dim=1).cpu().detach().numpy()
-            probs = np.append(probs, prob, axis=0)
-
             pred = torch.topk(logits, 1, dim=1)[1]
             preds.extend(pred[:,0].clone().tolist())
+
+            prob = F.softmax(logits, dim=1).cpu().detach().numpy()
+            probs = np.append(probs, prob, axis=0)
 
             labels.extend(label.clone().tolist())
             idxs.extend(list(idx))
@@ -350,7 +366,7 @@ def tune(
     model: nn.Module,
     dataset: torch.utils.data.Dataset,
     criterion: Callable,
-    collate_fn: Callable = collate_features,
+    collate_fn: Callable = partial(collate_features, label_type='int'),
     batch_size: Optional[int] = 1,
     ):
 
@@ -390,11 +406,11 @@ def tune(
                 logits = model(x)
                 loss = criterion(logits, label)
 
-                prob = F.softmax(logits, dim=1).cpu().numpy()
-                probs = np.append(probs, prob, axis=0)
-
                 pred = torch.topk(logits, 1, dim=1)[1]
                 preds.extend(pred[:,0].clone().tolist())
+
+                prob = F.softmax(logits, dim=1).cpu().detach().numpy()
+                probs = np.append(probs, prob, axis=0)
 
                 labels.extend(label.clone().tolist())
                 idxs.extend(list(idx))
@@ -423,7 +439,7 @@ def tune(
 def test(
     model: nn.Module,
     dataset: torch.utils.data.Dataset,
-    collate_fn: Callable = collate_features,
+    collate_fn: Callable = partial(collate_features, label_type='int'),
     batch_size: Optional[int] = 1,
     ):
 
@@ -461,12 +477,11 @@ def test(
                 x, label = x.to(device, non_blocking=True), label.to(device, non_blocking=True)
                 logits = model(x)
 
-                prob = F.softmax(logits, dim=1).cpu().numpy()
-                probs = np.append(probs, prob, axis=0)
-
-                # topk in binary classification setting <=> 0.50 thresholding
                 pred = torch.topk(logits, 1, dim=1)[1]
                 preds.extend(pred[:,0].clone().tolist())
+
+                prob = F.softmax(logits, dim=1).cpu().detach().numpy()
+                probs = np.append(probs, prob, axis=0)
 
                 labels.extend(label.clone().tolist())
                 idxs.extend(list(idx))
