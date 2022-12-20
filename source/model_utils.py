@@ -3,7 +3,7 @@ import torch.nn as nn
 
 
 class Attn_Net_Gated(nn.Module):
-    def __init__(self, L = 1024, D = 256, dropout = False, num_classes = 1):
+    def __init__(self, L=1024, D=256, dropout=False, num_classes=1):
         r"""
         Attention Network with Sigmoid Gating (3 fc layers)
         args:
@@ -13,10 +13,8 @@ class Attn_Net_Gated(nn.Module):
             num_classes (int): number of classes
         """
         super(Attn_Net_Gated, self).__init__()
-        self.attention_a = [
-            nn.Linear(L, D),
-            nn.Tanh()]
-        
+        self.attention_a = [nn.Linear(L, D), nn.Tanh()]
+
         self.attention_b = [nn.Linear(L, D), nn.Sigmoid()]
         if dropout:
             self.attention_a.append(nn.Dropout(0.25))

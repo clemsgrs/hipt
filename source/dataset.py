@@ -19,8 +19,8 @@ class ExtractedFeaturesDataset(torch.utils.data.Dataset):
         self,
         df: pd.DataFrame,
         features_dir: Path,
-        label_name: str = 'label',
-        label_mapping: Dict[int,int] = {},
+        label_name: str = "label",
+        label_mapping: Dict[int, int] = {},
         label_encoding: Optional[str] = None,
     ):
         self.features_dir = features_dir
@@ -35,12 +35,12 @@ class ExtractedFeaturesDataset(torch.utils.data.Dataset):
 
     def prepare_data(self, df):
         if self.label_mapping:
-            df['label'] = df[self.label_name].apply(lambda x: self.label_mapping[x])
-        elif self.label_name != 'label':
-            df['label'] = df[self.label_name]
+            df["label"] = df[self.label_name].apply(lambda x: self.label_mapping[x])
+        elif self.label_name != "label":
+            df["label"] = df[self.label_name]
         filtered_slide_ids = []
         for slide_id in df.slide_id:
-            if Path(self.features_dir, f'{slide_id}.pt').is_file():
+            if Path(self.features_dir, f"{slide_id}.pt").is_file():
                 filtered_slide_ids.append(slide_id)
         df_filtered = df[df.slide_id.isin(filtered_slide_ids)].reset_index(drop=True)
         return df_filtered
@@ -57,12 +57,12 @@ class ExtractedFeaturesDataset(torch.utils.data.Dataset):
     def __getitem__(self, idx: int):
         row = self.df.loc[idx]
         slide_id = row.slide_id
-        fp = Path(self.features_dir, f'{slide_id}.pt')
+        fp = Path(self.features_dir, f"{slide_id}.pt")
         features = torch.load(fp)
 
         label = row.label
-        if self.label_encoding == 'ordinal':
-            label = [1]*(label+1) + [0]*(self.num_classes-label-1)
+        if self.label_encoding == "ordinal":
+            label = [1] * (label + 1) + [0] * (self.num_classes - label - 1)
 
         return idx, features, label
 
@@ -76,9 +76,9 @@ class StackedRegionsDataset(torch.utils.data.Dataset):
         df: pd.DataFrame,
         region_dir: Path,
         region_size: int = 256,
-        fmt: str = 'jpg',
-        label_name: str = 'label',
-        label_mapping: Dict[int,int] = {},
+        fmt: str = "jpg",
+        label_name: str = "label",
+        label_mapping: Dict[int, int] = {},
         transform: Callable = None,
         M_max: int = -1,
     ):
@@ -97,9 +97,9 @@ class StackedRegionsDataset(torch.utils.data.Dataset):
 
     def prepare_data(self, df):
         if self.label_mapping:
-            df['label'] = df[self.label_name].apply(lambda x: self.label_mapping[x])
-        elif self.label_name != 'label':
-            df['label'] = df[self.label_name]
+            df["label"] = df[self.label_name].apply(lambda x: self.label_mapping[x])
+        elif self.label_name != "label":
+            df["label"] = df[self.label_name]
         return df
 
     def map_class_to_slide_ids(self):
@@ -115,7 +115,7 @@ class StackedRegionsDataset(torch.utils.data.Dataset):
         row = self.df.loc[idx]
         slide_id = row.slide_id
         region_dir = Path(self.region_dir, slide_id, str(self.region_size), self.format)
-        regions_fp = [fp for fp in region_dir.glob(f'*.{self.format}')]
+        regions_fp = [fp for fp in region_dir.glob(f"*.{self.format}")]
         M = len(regions_fp)
         if self.M_max > -1 and M > self.M_max:
             regions_fp = random.sample([x for x in regions_fp], self.M_max)
@@ -125,12 +125,13 @@ class StackedRegionsDataset(torch.utils.data.Dataset):
 
         with tqdm.tqdm(
             regions_fp,
-            desc=(f'{slide_id}'),
-            unit=' tiles',
+            desc=(f"{slide_id}"),
+            unit=" tiles",
             ncols=80,
             position=2,
             leave=False,
-            disable=True) as t:
+            disable=True,
+        ) as t:
 
             for i, fp in enumerate(t):
 
@@ -166,8 +167,10 @@ class RegionFilepathsDataset(torch.utils.data.Dataset):
     def __getitem__(self, idx: int):
         row = self.df.loc[idx]
         slide_id = row.slide_id
-        region_dir = Path(self.region_root_dir, slide_id, str(self.region_size), self.format)
-        regions = [str(fp) for fp in region_dir.glob(f'*.{self.format}')]
+        region_dir = Path(
+            self.region_root_dir, slide_id, str(self.region_size), self.format
+        )
+        regions = [str(fp) for fp in region_dir.glob(f"*.{self.format}")]
         return idx, regions
 
     def __len__(self):
