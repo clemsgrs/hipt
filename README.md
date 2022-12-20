@@ -47,12 +47,16 @@ hipt/
 │          └── ...
 ```
 
-3. Train model on extracted features
+3. Train **single-fold** model on extracted features
 
 Once features have been extracted, create a configuration file under `config/training/` taking inspiration from existing files.<br>
-Then, run the following command to kick off model training:
+Then, run the following command to kick off model training on a single fold:
 
-`python3 train.py --config-name <training_config_filename>`
+`python3 train.py --config-name <training_single_fold_config_filename>`
+
+4. Train **multi-fold** model on extracted features
+
+`python3 train_multi.py --config-name <training_multi_fold_config_filename>`
 
 ## Resuming experiment after crash / bug
 
@@ -60,5 +64,6 @@ If, for some reason, feature extraction crashes, you should be able to resume fr
 
 ## TODO List
 
+- [ ] improve documentation
 - [ ] when switching `img_size` argument from `[224]` to `[256]`, make sure the positional enmedding is trainable!
 - [ ] switch back optimizer.zero_grad( ) before .step( )
