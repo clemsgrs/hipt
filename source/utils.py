@@ -11,22 +11,70 @@ import matplotlib.pyplot as plt
 
 from pathlib import Path
 from functools import partial
-from typing import Optional, Callable, List, Dict
+from omegaconf import DictConfig, OmegaConf
+from typing import Optional, Callable, List
 from sklearn import metrics
 from sklearn.model_selection import train_test_split
 
 
+def write_dictconfig(d, f, child: bool = False, ntab=0):
+    for k, v in d.items():
+        if isinstance(v, dict):
+            if not child:
+                f.write(f"{k}:\n")
+            else:
+                for _ in range(ntab):
+                    f.write("\t")
+                f.write(f"- {k}:\n")
+            write_dictconfig(v, f, True, ntab=ntab + 1)
+        else:
+            if isinstance(v, list):
+                if not child:
+                    f.write(f"{k}:\n")
+                    for e in v:
+                        f.write(f"\t- {e}\n")
+                else:
+                    for _ in range(ntab):
+                        f.write("\t")
+                    f.write(f"{k}:\n")
+                    for e in v:
+                        for _ in range(ntab):
+                            f.write("\t")
+                        f.write(f"\t- {e}\n")
+            else:
+                if not child:
+                    f.write(f"{k}: {v}\n")
+                else:
+                    for _ in range(ntab):
+                        f.write("\t")
+                    f.write(f"- {k}: {v}\n")
+
+
 def initialize_wandb(
-    project, entity, exp_name, dir="./wandb", config={}, tags=None, key=""
+    cfg: DictConfig,
+    tags: Optional[List] = None,
+    key: Optional[str] = "",
 ):
-    dir = Path(dir)
     command = f"wandb login {key}"
     subprocess.call(command, shell=True)
     if tags == None:
         tags = []
+    config = OmegaConf.to_container(cfg, resolve=True, throw_on_missing=True)
     run = wandb.init(
-        project=project, entity=entity, name=exp_name, dir=dir, config=config, tags=tags
+        project=cfg.wandb.project,
+        entity=cfg.wandb.username,
+        name=cfg.wandb.exp_name,
+        group=cfg.wandb.group,
+        dir=cfg.wandb.dir,
+        config=config,
+        tags=tags,
     )
+    config_file_path = Path(run.dir, "run_config.yaml")
+    d = OmegaConf.to_container(cfg, resolve=True)
+    with open(config_file_path, "w+") as f:
+        write_dictconfig(d, f)
+        wandb.save(str(config_file_path))
+        f.close()
     return run
 
 

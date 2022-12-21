@@ -8,7 +8,7 @@ import shutil
 import pandas as pd
 from PIL import Image
 from pathlib import Path
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig
 from torchvision import transforms
 
 from source.dataset import RegionFilepathsDataset
@@ -36,16 +36,8 @@ def main(cfg: DictConfig):
 
     # set up wandb
     key = os.environ.get("WANDB_API_KEY")
-    config = OmegaConf.to_container(cfg, resolve=True, throw_on_missing=True)
-    _ = initialize_wandb(
-        cfg.wandb.project,
-        cfg.wandb.username,
-        cfg.wandb.exp_name,
-        dir=cfg.wandb.dir,
-        config=config,
-        key=key,
-    )
-    wandb.define_metric("processed", summary="max")
+    wandb_run = initialize_wandb(cfg, key=key)
+    wandb_run.define_metric("processed", summary="max")
 
     if cfg.level == "global":
         model = GlobalFeatureExtractor(
