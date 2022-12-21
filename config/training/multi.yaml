@@ -1,10 +1,9 @@
 defaults:
-  - default
+  - single
   - _self_
 
-# features_dir: /home/user/code/git/opensource/HIPT/global_features
-
-dataset_name: 'tcga_brca'
+data:
+  fold_dir: ''
 
 level: 'global'
 

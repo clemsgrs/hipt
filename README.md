@@ -44,7 +44,7 @@ Then run the following command to kick off feature extraction:
 This will produce one .pt file per slide and save it under `output/<dataset_name>/<experiment_name>/<level>/`:
 
 ```
-hipt/ 
+hipt/
 ├── output/<dataset_name>/<experiment_name>/
 │     └── level/
 │          ├── slide_1.pt
@@ -60,6 +60,22 @@ Then, run the following command to kick off model training on a single fold:
 `python3 train.py --config-name <training_single_fold_config_filename>`
 
 4. Train **multi-fold** model on extracted features
+
+Your multiple folds should be structured as follow:
+
+```
+fold_dir/
+├── fold_1/
+│     ├── train.csv
+│     ├── tune.csv
+│     └── test.csv
+├── fold_2/
+└── ...
+```
+
+Create a configuration file under `config/training/` taking inspiration from `config/multi.yaml`.<br>
+Remember to indicate the root directory where your folds are located under `data.fold_dir`.<br>
+Then, run the following command to kick off model training on multiple folds:
 
 `python3 train_multi.py --config-name <training_multi_fold_config_filename>`
 

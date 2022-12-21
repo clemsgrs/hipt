@@ -1,5 +1,5 @@
 defaults:
-  - default
+  - single
   - _self_
 
 region_dir: '${data_dir}/tcga_brca/patches'

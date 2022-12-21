@@ -194,7 +194,7 @@ def collate_region_filepaths(batch):
     return [idx, fp]
 
 
-def get_roc_auc_curve(probs: np.array(float), labels: List[int]):
+def get_roc_auc_curve(probs: np.array(float), labels: List[int], log_to_wandb: bool = False):
     fpr, tpr, _ = metrics.roc_curve(labels, probs)
     auc = metrics.roc_auc_score(labels, probs)
     fig = plt.figure(dpi=600)
@@ -206,7 +206,8 @@ def get_roc_auc_curve(probs: np.array(float), labels: List[int]):
     plt.ylabel("Sensitivity")
     plt.title("Receiver Operating Characteristic (ROC) curve")
     plt.legend(loc="lower right")
-    img = wandb.Image(fig)
+    if log_to_wandb:
+        img = wandb.Image(fig)
     plt.close()
     return img
 

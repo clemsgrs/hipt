@@ -1,5 +1,4 @@
 import os
-import sys
 import tqdm
 import wandb
 import torch
@@ -21,10 +20,10 @@ from source.utils import initialize_wandb, initialize_df, collate_region_filepat
 )
 def main(cfg: DictConfig):
 
-    output_dir = Path(cfg.output_dir, cfg.dataset_name)
+    output_dir = Path(cfg.output_dir, cfg.experiment_name)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    features_dir = Path(output_dir, "features", cfg.experiment_name, cfg.level)
+    features_dir = Path(output_dir, "features", cfg.level)
     if not cfg.resume:
         if features_dir.exists():
             print(f"{features_dir} already exists! deleting it...")
@@ -35,9 +34,10 @@ def main(cfg: DictConfig):
             features_dir.mkdir(parents=True, exist_ok=True)
 
     # set up wandb
-    key = os.environ.get("WANDB_API_KEY")
-    wandb_run = initialize_wandb(cfg, key=key)
-    wandb_run.define_metric("processed", summary="max")
+    if cfg.wandb.username:
+        key = os.environ.get("WANDB_API_KEY")
+        wandb_run = initialize_wandb(cfg, key=key)
+        wandb_run.define_metric("processed", summary="max")
 
     if cfg.level == "global":
         model = GlobalFeatureExtractor(
@@ -51,9 +51,7 @@ def main(cfg: DictConfig):
     else:
         raise ValueError(f"cfg.level ({cfg.level} not supported")
 
-    region_dir = Path(cfg.data_dir, cfg.dataset_name, "patches")
-    if cfg.region_dir:
-        region_dir = Path(cfg.region_dir)
+    region_dir = Path(cfg.region_dir)
     slide_ids = sorted([s.name for s in region_dir.iterdir()])
     print(f"{len(slide_ids)} slides with extracted patches found")
 
@@ -91,11 +89,6 @@ def main(cfg: DictConfig):
 
     print()
 
-    tqdm_output_fp = None
-    tqdm_output_fp = Path(f"tqdm_{wandb.run.id}.log")
-    tqdm_output_fp.unlink(missing_ok=True)
-    tqdm_file = open(tqdm_output_fp, "a+") if tqdm_output_fp is not None else sys.stderr
-
     with tqdm.tqdm(
         loader,
         desc="Slide Encoding",
@@ -105,7 +98,6 @@ def main(cfg: DictConfig):
         ncols=80,
         position=0,
         leave=True,
-        file=tqdm_file,
     ) as t1:
 
         with torch.no_grad():
@@ -123,7 +115,6 @@ def main(cfg: DictConfig):
                     ncols=80 + len(slide_id),
                     position=1,
                     leave=False,
-                    file=tqdm_file,
                 ) as t2:
 
                     for fp in t2:
@@ -146,13 +137,10 @@ def main(cfg: DictConfig):
                     index=False,
                 )
 
-                wandb.log({"processed": already_processed + i + 1})
-
-    tqdm_file.close()
-    tqdm_output_fp.unlink()
+                if cfg.wandb.username:
+                    wandb.log({"processed": already_processed + i + 1})
 
 
 if __name__ == "__main__":
 
-    # python3 extract_features.py
     main()
