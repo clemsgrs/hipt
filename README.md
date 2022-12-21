@@ -12,6 +12,11 @@ Re-implementation of original [HIPT](https://github.com/mahmoodlab/HIPT) code.
 
 install requirements via `pip3 install -r requirements.txt`
 
+## Prerequisite
+
+You need to have extracted square regions from each WSI you intend to train on.<br>
+To do so, you can take a look at [HS2P](https://github.com/clemsgrs/hs2p), which segments tissue and extract relevant patches at a given pixel spacing.
+
 ## Step-by-step guide
 
 1. [Optional] Configure wandb
