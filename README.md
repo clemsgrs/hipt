@@ -17,6 +17,16 @@ install requirements via `pip3 install -r requirements.txt`
 You need to have extracted square regions from each WSI you intend to train on.<br>
 To do so, you can take a look at [HS2P](https://github.com/clemsgrs/hs2p), which segments tissue and extract relevant patches at a given pixel spacing.
 
+
+download HIPT pre-trained weights via:
+
+```
+mkdir checkpoints
+cd checkpoints
+gdown --id 1Qm-_XrTMYhu9Hl-4FClaOMuroyWlOAxw
+gdown --id 1A2eHTT0dedHgdCvy6t3d9HwluF8p5yjz
+```
+
 ## Step-by-step guide
 
 1. [Optional] Configure wandb
