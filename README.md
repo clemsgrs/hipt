@@ -23,8 +23,8 @@ download HIPT pre-trained weights via:
 ```
 mkdir checkpoints
 cd checkpoints
-gdown --id 1Qm-_XrTMYhu9Hl-4FClaOMuroyWlOAxw
-gdown --id 1A2eHTT0dedHgdCvy6t3d9HwluF8p5yjz
+gdown 1Qm-_XrTMYhu9Hl-4FClaOMuroyWlOAxw
+gdown 1A2eHTT0dedHgdCvy6t3d9HwluF8p5yjz
 ```
 
 ## Step-by-step guide
