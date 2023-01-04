@@ -2,6 +2,7 @@ data/*
 scripts/*
 output/*
 notebooks/*
+checkpoints/*.pth
 
 # un-related python scripts
 convert_svs_slides_to_tif.py
