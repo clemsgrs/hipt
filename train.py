@@ -12,6 +12,7 @@ from functools import partial
 from omegaconf import DictConfig
 
 from source.models import ModelFactory
+from source.components import LossFactory
 from source.dataset import ExtractedFeaturesDataset
 from source.utils import (
     initialize_wandb,
@@ -50,19 +51,7 @@ def main(cfg: DictConfig):
         features_dir = Path(cfg.features_dir)
 
     num_classes = cfg.num_classes
-    if cfg.loss == "ce":
-        criterion = nn.CrossEntropyLoss()
-        label_type = "int"
-        label_encoding = None
-    elif cfg.loss == "mse":
-        criterion = nn.MSELoss()
-        label_type = "float"
-        label_encoding = None
-        num_classes = 1
-    elif cfg.loss == "ordinal":
-        criterion = nn.MSELoss()
-        label_type = "float"
-        label_encoding = "ordinal"
+    criterion = LossFactory(cfg.task, cfg.loss).get_loss()
 
     model = ModelFactory(cfg.level, num_classes, cfg.model).get_model()
     model.relocate()
