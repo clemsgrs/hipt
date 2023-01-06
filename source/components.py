@@ -52,7 +52,8 @@ class LossFactory:
                 self.criterion = nn.MSELoss()
 
         elif task == 'survival':
-            self.criterion = NLLSurvLoss(alpha=loss_options.alpha)
+            self.criterion = NLLSurvLoss()
+            # self.criterion = NLLSurvLoss(alpha=loss_options.alpha)
 
     def get_loss(self):
         return self.criterion

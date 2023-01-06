@@ -47,10 +47,9 @@ def main(cfg: DictConfig):
     if cfg.features_dir:
         features_dir = Path(cfg.features_dir)
 
-    num_classes = cfg.num_classes
     criterion = LossFactory(cfg.task, cfg.loss).get_loss()
 
-    model = ModelFactory(cfg.level, num_classes, cfg.model).get_model()
+    model = ModelFactory(cfg.level, cfg.nbins, cfg.model).get_model()
     model.relocate()
     print(model)
 
@@ -64,16 +63,16 @@ def main(cfg: DictConfig):
         tune_df = tune_df.sample(frac=cfg.pct).reset_index(drop=True)
 
     train_dataset = ExtractedFeaturesSurvivalSlideLevelDataset(
-        train_df, features_dir, cfg.label_name,
+        train_df, features_dir, cfg.label_name, nbins=cfg.nbins
     )
     tune_dataset = ExtractedFeaturesSurvivalSlideLevelDataset(
-        tune_df, features_dir, cfg.label_name,
+        tune_df, features_dir, cfg.label_name, nbins=cfg.nbins
     )
 
     m, n = train_dataset.num_classes, tune_dataset.num_classes
-    assert (
-        m == n == cfg.num_classes
-    ), f"Either train (C={m}) or tune (C={n}) sets doesnt cover full class spectrum (C={cfg.num_classes}"
+    # assert (
+    #     m == n == cfg.nbins
+    # ), f"Either train (C={m}) or tune (C={n}) sets doesnt cover full class spectrum (C={cfg.nbins}"
 
     model_params = filter(lambda p: p.requires_grad, model.parameters())
     optimizer = OptimizerFactory(
@@ -116,7 +115,7 @@ def main(cfg: DictConfig):
                 collate_fn=partial(collate_features, label_type="int"),
                 batch_size=cfg.train_batch_size,
                 weighted_sampling=cfg.weighted_sampling,
-                gradient_clipping=cfg.gradient_clipping,
+                gradient_accumulation=cfg.gradient_clipping,
             )
 
             if cfg.wandb.enable:

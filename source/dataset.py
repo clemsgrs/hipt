@@ -80,13 +80,13 @@ class ExtractedFeaturesSurvivalSlideLevelDataset(torch.utils.data.Dataset):
         df: pd.DataFrame,
         features_dir: Path,
         label_name: str = "label",
-        n_bins: int = 4,
+        nbins: int = 4,
         eps: float = 1e-6,
     ):
 
         self.features_dir = features_dir
         self.label_name = label_name
-        self.n_bins = n_bins
+        self.nbins = nbins
         self.eps = eps
 
         if "IDC" in df['oncotree_code'].values:
@@ -99,14 +99,12 @@ class ExtractedFeaturesSurvivalSlideLevelDataset(torch.utils.data.Dataset):
         self.map_class_to_slide_ids()
         self.map_class_to_patient_ids()
 
-        self.num_classes = len(self.label_dict)
-
     def prepare_data(self, df):
 
         patient_df = df.drop_duplicates(['case_id']).copy()
         uncensored_df = patient_df[patient_df['censorship'] < 1]
 
-        _, q_bins = pd.qcut(uncensored_df[self.label_name], q=self.n_bins, retbins=True, labels=False)
+        _, q_bins = pd.qcut(uncensored_df[self.label_name], q=self.nbins, retbins=True, labels=False)
         q_bins[-1] = df[self.label_name].max() + self.eps
         q_bins[0] = df[self.label_name].min() - self.eps
 
@@ -118,21 +116,21 @@ class ExtractedFeaturesSurvivalSlideLevelDataset(torch.utils.data.Dataset):
             slide_ids = df[df['case_id'] == patient_id]['slide_id'].values.tolist()
             self.patient_id_2_slide_id[patient_id] = slide_ids
 
-        label_dict = {}
+        self.label_dict = {}
         label_count = 0
         for label in range(len(q_bins)-1):
             for censorship in [0, 1]:
-                label_dict.update({(label, censorship): label_count})
+                self.label_dict.update({(label, censorship): label_count})
                 label_count += 1
 
-        self.num_classes = len(label_dict)
+        self.num_classes = len(self.label_dict)
 
         patient_df.reset_index(drop=True, inplace=True)
         for i in patient_df.index:
             disc_label = patient_df.loc[i, "disc_label"]
             censorship = patient_df.loc[i, "censorship"]
             key = (disc_label, int(censorship))
-            patient_df.at[i, "label"] = label_dict[key]
+            patient_df.at[i, "label"] = self.label_dict[key]
 
         slide_df = pd.merge(df, patient_df[["case_id", "label"]], how="left", on="case_id")
 
@@ -188,13 +186,13 @@ class ExtractedFeaturesSurvivalDataset(torch.utils.data.Dataset):
         df: pd.DataFrame,
         features_dir: Path,
         label_name: str = "label",
-        n_bins: int = 4,
+        nbins: int = 4,
         eps: float = 1e-6,
     ):
 
         self.features_dir = features_dir
         self.label_name = label_name
-        self.n_bins = n_bins
+        self.nbins = nbins
         self.eps = eps
 
         if "IDC" in df['oncotree_code'].values:
@@ -207,14 +205,12 @@ class ExtractedFeaturesSurvivalDataset(torch.utils.data.Dataset):
         self.map_class_to_slide_ids()
         self.map_class_to_patient_ids()
 
-        self.num_classes = len(self.label_dict)
-
     def prepare_data(self, df):
 
         patient_df = df.drop_duplicates(['case_id']).copy()
         uncensored_df = patient_df[patient_df['censorship'] < 1]
 
-        _, q_bins = pd.qcut(uncensored_df[self.label_name], q=self.n_bins, retbins=True, labels=False)
+        _, q_bins = pd.qcut(uncensored_df[self.label_name], q=self.nbins, retbins=True, labels=False)
         q_bins[-1] = df[self.label_name].max() + self.eps
         q_bins[0] = df[self.label_name].min() - self.eps
 
@@ -226,21 +222,21 @@ class ExtractedFeaturesSurvivalDataset(torch.utils.data.Dataset):
             slide_ids = df[df['case_id'] == patient_id]['slide_id'].values.tolist()
             self.patient_id_2_slide_id[patient_id] = slide_ids
 
-        label_dict = {}
+        self.label_dict = {}
         label_count = 0
         for label in range(len(q_bins)-1):
             for censorship in [0, 1]:
-                label_dict.update({(label, censorship): label_count})
+                self.label_dict.update({(label, censorship): label_count})
                 label_count += 1
 
-        self.num_classes = len(label_dict)
+        self.num_classes = len(self.label_dict)
 
         patient_df.reset_index(drop=True, inplace=True)
         for i in patient_df.index:
             disc_label = patient_df.loc[i, "disc_label"]
             censorship = patient_df.loc[i, "censorship"]
             key = (disc_label, int(censorship))
-            patient_df.at[i, "label"] = label_dict[key]
+            patient_df.at[i, "label"] = self.label_dict[key]
 
         slide_df = pd.merge(df, patient_df[["case_id", "label"]], how="left", on="case_id")
 

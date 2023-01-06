@@ -1,17 +1,16 @@
 data:
-  train_csv: ''
-  tune_csv: ''
-  test_csv: ''
+  train_csv: '/home/user/dataset/tcga/brca/survival/5fold-cv/fold_0/train.csv'
+  tune_csv: '/home/user/dataset/tcga/brca/survival/5fold-cv/fold_0/tune.csv'
 
-features_dir:
+features_dir: '/home/user/code/git/clemsgrs/hs2p/output/tcga_brca_all_slides/patches'
 output_dir: 'output'
-experiment_name: 'tcga_brca'
+experiment_name: 'tcga_brca_survival'
 level: 'global'
 
 nepochs: 50
-num_classes: 2
 label_name: 'survival_months'
 label_mapping:
+nbins: 4
 tune_every: 1
 
 task: 'survival'
@@ -57,7 +56,7 @@ early_stopping:
 wandb:
   enable: False
   project: 'hipt'
-  username:
+  username: 'clemsg'
   exp_name: '${experiment_name}'
   dir: '/home/user'
   to_log: ['loss', 'c_index']
