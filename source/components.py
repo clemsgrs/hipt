@@ -21,7 +21,7 @@ def nll_loss(hazards, S, Y, c, alpha=0.4, eps=1e-7):
     neg_l = censored_loss + uncensored_loss
     loss = (1-alpha) * neg_l + alpha * uncensored_loss
     loss = loss.mean()
-    return 
+    return
 
 
 class NLLSurvLoss(object):
@@ -39,25 +39,18 @@ class LossFactory:
     def __init__(
         self,
         task: str,
-        loss: str,
+        loss: Optional[str] = None,
         loss_options: Optional[DictConfig] = None,
     ):
 
-        if task == 'classification':
+        if task == 'subtyping':
             if loss == "ce":
                 self.criterion = nn.CrossEntropyLoss()
-                label_type = "int"
-                label_encoding = None
             elif loss == "mse":
                 self.criterion = nn.MSELoss()
-                label_type = "float"
-                label_encoding = None
-                num_classes = 1
             elif loss == "ordinal":
                 self.criterion = nn.MSELoss()
-                label_type = "float"
-                label_encoding = "ordinal"
-        
+
         elif task == 'survival':
             self.criterion = NLLSurvLoss(alpha=loss_options.alpha)
 

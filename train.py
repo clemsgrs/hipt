@@ -28,7 +28,9 @@ from source.utils import (
 )
 
 
-@hydra.main(version_base="1.2.0", config_path="config/training", config_name="global")
+@hydra.main(
+    version_base="1.2.0", config_path="config/training/subtyping", config_name="global"
+)
 def main(cfg: DictConfig):
 
     output_dir = Path(cfg.output_dir, cfg.experiment_name)
@@ -68,13 +70,22 @@ def main(cfg: DictConfig):
         tune_df = tune_df.sample(frac=cfg.pct).reset_index(drop=True)
 
     train_dataset = ExtractedFeaturesDataset(
-        train_df, features_dir, cfg.label_name, cfg.label_mapping, label_encoding
+        train_df,
+        features_dir,
+        cfg.label_name,
+        cfg.label_mapping,
     )
     tune_dataset = ExtractedFeaturesDataset(
-        tune_df, features_dir, cfg.label_name, cfg.label_mapping, label_encoding
+        tune_df,
+        features_dir,
+        cfg.label_name,
+        cfg.label_mapping,
     )
     test_dataset = ExtractedFeaturesDataset(
-        test_df, features_dir, cfg.label_name, cfg.label_mapping, label_encoding
+        test_df,
+        features_dir,
+        cfg.label_name,
+        cfg.label_mapping,
     )
 
     m, n = train_dataset.num_classes, tune_dataset.num_classes
@@ -120,7 +131,7 @@ def main(cfg: DictConfig):
                 train_dataset,
                 optimizer,
                 criterion,
-                collate_fn=partial(collate_features, label_type=label_type),
+                collate_fn=partial(collate_features, label_type="int"),
                 batch_size=cfg.train_batch_size,
                 weighted_sampling=cfg.weighted_sampling,
                 gradient_clipping=cfg.gradient_clipping,
@@ -137,13 +148,15 @@ def main(cfg: DictConfig):
                     model,
                     tune_dataset,
                     criterion,
-                    collate_fn=partial(collate_features, label_type=label_type),
+                    collate_fn=partial(collate_features, label_type="int"),
                     batch_size=cfg.tune_batch_size,
                 )
 
                 if cfg.wandb.enable:
                     log_on_step("tune", tune_results, to_log=cfg.wandb.to_log)
-                tune_dataset.df.to_csv(Path(result_dir, f"tune_{epoch}.csv"), index=False)
+                tune_dataset.df.to_csv(
+                    Path(result_dir, f"tune_{epoch}.csv"), index=False
+                )
 
                 early_stopping(epoch, model, tune_results)
                 if early_stopping.early_stop and cfg.early_stopping.enable:
@@ -181,7 +194,7 @@ def main(cfg: DictConfig):
     test_results = test(
         model,
         test_dataset,
-        collate_fn=partial(collate_features, label_type=label_type),
+        collate_fn=partial(collate_features, label_type="int"),
         batch_size=1,
     )
     test_dataset.df.to_csv(Path(result_dir, f"test.csv"), index=False)
