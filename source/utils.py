@@ -15,7 +15,7 @@ from omegaconf import DictConfig, OmegaConf
 from typing import Optional, Callable, List
 from sklearn import metrics
 from sklearn.model_selection import train_test_split
-
+from sksurv.metrics import concordance_index_censored
 
 def write_dictconfig(d, f, child: bool = False, ntab=0):
     for k, v in d.items():
@@ -594,5 +594,230 @@ def test(
         metrics = get_metrics(probs, preds, labels)
 
     results.update(metrics)
+
+    return results
+
+
+def train_survival(
+    epoch: int,
+    model: nn.Module,
+    dataset: torch.utils.data.Dataset,
+    optimizer: torch.optim.Optimizer,
+    criterion: Callable,
+    collate_fn: Callable = partial(collate_features, label_type="int"),
+    batch_size: Optional[int] = 1,
+    weighted_sampling: Optional[bool] = False,
+    gradient_accumulation: Optional[int] = 1,
+):
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    model.train()
+    epoch_loss = 0
+    censorships, event_times = [], []
+    risk_scores, labels = [], []
+
+    sampler = torch.utils.data.RandomSampler(dataset)
+    if weighted_sampling:
+        weights = make_weights_for_balanced_classes(dataset)
+        sampler = torch.utils.data.WeightedRandomSampler(
+            weights,
+            len(weights),
+        )
+
+    loader = torch.utils.data.DataLoader(
+        dataset,
+        batch_size=batch_size,
+        sampler=sampler,
+        collate_fn=collate_fn,
+    )
+
+    results = {}
+
+    with tqdm.tqdm(
+        loader,
+        desc=(f"Train - Epoch {epoch}"),
+        unit=" slide",
+        ncols=80,
+        unit_scale=batch_size,
+        leave=True,
+    ) as t:
+
+        for i, batch in enumerate(t):
+
+            _, x, label, event_time, c = batch
+            x, label = x.to(device, non_blocking=True), label.to(
+                device, non_blocking=True
+            )
+            logits = model(x)
+            hazards = torch.sigmoid(logits)
+            surv = torch.cumprod(1 - hazards, dim=1)
+
+            loss = criterion(hazards, surv, label, c)
+
+            loss_value = loss.item()
+            epoch_loss += loss_value
+
+            if gradient_accumulation:
+                loss = loss / gradient_accumulation
+
+            loss.backward()
+
+            if (i + 1) % gradient_accumulation == 0:
+                optimizer.step()
+                optimizer.zero_grad()
+
+            risk = -torch.sum(surv, dim=1).detach().cpu().numpy()
+            risk_scores.append(risk)
+            censorships.append(c.item())
+            event_times.append(event_time)
+
+            labels.extend(label.clone().tolist())
+
+    c_index = concordance_index_censored(
+        (1-censorships).astype(bool),
+        event_times,
+        risk_scores, tied_tol=1e-08,
+    )[0]
+
+    results["c_index"] = c_index
+
+    train_loss = epoch_loss / len(loader)
+    results["loss"] = train_loss
+
+    return results
+
+
+def tune_survival(
+    epoch: int,
+    model: nn.Module,
+    dataset: torch.utils.data.Dataset,
+    criterion: Callable,
+    collate_fn: Callable = partial(collate_features, label_type="int"),
+    batch_size: Optional[int] = 1,
+):
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    model.eval()
+    epoch_loss = 0
+    censorships, event_times = [], []
+    risk_scores, labels = [], []
+
+    sampler = torch.utils.data.SequentialSampler(dataset)
+
+    loader = torch.utils.data.DataLoader(
+        dataset,
+        batch_size=batch_size,
+        sampler=sampler,
+        collate_fn=collate_fn,
+    )
+
+    results = {}
+
+    with tqdm.tqdm(
+        loader,
+        desc=(f"Tune - Epoch {epoch}"),
+        unit=" slide",
+        ncols=80,
+        unit_scale=batch_size,
+        leave=True,
+    ) as t:
+
+        with torch.no_grad():
+
+            for i, batch in enumerate(t):
+
+                _, x, label, event_time, c = batch
+                x, label = x.to(device, non_blocking=True), label.to(
+                    device, non_blocking=True
+                )
+                logits = model(x)
+                hazards = torch.sigmoid(logits)
+                surv = torch.cumprod(1 - hazards, dim=1)
+
+                loss = criterion(hazards, surv, label, c, alpha=0)
+                epoch_loss += loss.item()
+
+                risk = -torch.sum(surv, dim=1).detach().cpu().numpy()
+                risk_scores.append(risk)
+                censorships.append(c.item())
+                event_times.append(event_time)
+
+                labels.extend(label.clone().tolist())
+
+    c_index = concordance_index_censored(
+        (1-censorships).astype(bool),
+        event_times,
+        risk_scores, tied_tol=1e-08,
+    )[0]
+
+    results["c_index"] = c_index
+
+    tune_loss = epoch_loss / len(loader)
+    results["loss"] = tune_loss
+
+    return results
+
+
+def test_survival(
+    model: nn.Module,
+    dataset: torch.utils.data.Dataset,
+    collate_fn: Callable = partial(collate_features, label_type="int"),
+    batch_size: Optional[int] = 1,
+):
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    model.eval()
+    censorships, event_times = [], []
+    risk_scores, labels = [], []
+
+    sampler = torch.utils.data.SequentialSampler(dataset)
+
+    loader = torch.utils.data.DataLoader(
+        dataset,
+        batch_size=batch_size,
+        sampler=sampler,
+        collate_fn=collate_fn,
+    )
+
+    results = {}
+
+    with tqdm.tqdm(
+        loader,
+        desc=(f"Test"),
+        unit=" slide",
+        ncols=80,
+        unit_scale=batch_size,
+        leave=True,
+    ) as t:
+
+        with torch.no_grad():
+
+            for i, batch in enumerate(t):
+
+                _, x, label, event_time, c = batch
+                x, label = x.to(device, non_blocking=True), label.to(
+                    device, non_blocking=True
+                )
+                logits = model(x)
+                hazards = torch.sigmoid(logits)
+                surv = torch.cumprod(1 - hazards, dim=1)
+
+                risk = -torch.sum(surv, dim=1).detach().cpu().numpy()
+                risk_scores.append(risk)
+                censorships.append(c.item())
+                event_times.append(event_time)
+
+                labels.extend(label.clone().tolist())
+
+    c_index = concordance_index_censored(
+        (1-censorships).astype(bool),
+        event_times,
+        risk_scores, tied_tol=1e-08,
+    )[0]
+
+    results["c_index"] = c_index
 
     return results
