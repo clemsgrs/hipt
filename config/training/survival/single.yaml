@@ -10,11 +10,12 @@ level: 'global'
 
 nepochs: 50
 num_classes: 2
-label_name: 'label'
+label_name: 'survival_months'
 label_mapping:
 tune_every: 1
 
-loss: 'ce'
+task: 'survival'
+loss:
 
 train_batch_size: 1
 tune_batch_size: 1
@@ -59,4 +60,4 @@ wandb:
   username:
   exp_name: '${experiment_name}'
   dir: '/home/user'
-  to_log: ['loss', 'auc', 'kappa', 'roc_auc_curve']
+  to_log: ['loss', 'c_index']
