@@ -17,38 +17,38 @@ class ModelFactory:
         self,
         level: str,
         num_classes: int = 2,
-        model_opt: Optional[DictConfig] = None,
+        model_options: Optional[DictConfig] = None,
     ):
 
         if level == "global":
             self.model = GlobalHIPT(
                 num_classes=num_classes,
-                dropout=model_opt.dropout,
+                dropout=model_options.dropout,
             )
         elif level == "local":
             self.model = LocalGlobalHIPT(
                 num_classes=num_classes,
-                img_size_4096=model_opt.img_size_4096,
-                patch_size_4096=model_opt.patch_size_4096,
-                pretrain_4096=model_opt.pretrain_4096,
-                freeze_4096=model_opt.freeze_4096,
-                freeze_4096_pos_embed=model_opt.freeze_4096_pos_embed,
-                dropout=model_opt.dropout,
+                img_size_4096=model_options.img_size_4096,
+                patch_size_4096=model_options.patch_size_4096,
+                pretrain_4096=model_options.pretrain_4096,
+                freeze_4096=model_options.freeze_4096,
+                freeze_4096_pos_embed=model_options.freeze_4096_pos_embed,
+                dropout=model_options.dropout,
             )
         else:
             self.model = HIPT(
                 num_classes=num_classes,
-                pretrain_256=model_opt.pretrain_256,
-                freeze_256=model_opt.freeze_256,
-                freeze_256_pos_embed=model_opt.freeze_256_pos_embed,
-                img_size_256=model_opt.img_size_256,
-                patch_size_256=model_opt.patch_size_256,
-                pretrain_4096=model_opt.pretrain_4096,
-                freeze_4096=model_opt.freeze_4096,
-                freeze_4096_pos_embed=model_opt.freeze_4096_pos_embed,
-                img_size_4096=model_opt.img_size_4096,
-                patch_size_4096=model_opt.patch_size_4096,
-                dropout=model_opt.dropout,
+                pretrain_256=model_options.pretrain_256,
+                freeze_256=model_options.freeze_256,
+                freeze_256_pos_embed=model_options.freeze_256_pos_embed,
+                img_size_256=model_options.img_size_256,
+                patch_size_256=model_options.patch_size_256,
+                pretrain_4096=model_options.pretrain_4096,
+                freeze_4096=model_options.freeze_4096,
+                freeze_4096_pos_embed=model_options.freeze_4096_pos_embed,
+                img_size_4096=model_options.img_size_4096,
+                patch_size_4096=model_options.patch_size_4096,
+                dropout=model_options.dropout,
             )
 
     def get_model(self):
