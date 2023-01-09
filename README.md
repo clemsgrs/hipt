@@ -14,20 +14,18 @@ install requirements via `pip3 install -r requirements.txt`
 
 ## Prerequisite
 
-1. Leverage Git LFS to get checkpoints
-
-This repository includes not only the code base for HIPT, but also saved checkpoints which we version control via Git LFS.<br>
-To clone this repository, install `git lfs` and follow these commands: 
-
-```
-GIT_LFS_SKIP_SMUDGE=1 git clone https://github.com/clemsgrs/hipt.git 	# Pulls just the codebase
-git lfs pull --include "*.pth"						# Pulls the pretrained checkpoints
-```
-
-2. Leverage HS2P to extract square regions for each slide
-
 You need to have extracted square regions from each WSI you intend to train on.<br>
 To do so, you can take a look at [HS2P](https://github.com/clemsgrs/hs2p), which segments tissue and extract relevant patches at a given pixel spacing.
+
+
+download HIPT pre-trained weights via:
+
+```
+mkdir checkpoints
+cd checkpoints
+gdown 1Qm-_XrTMYhu9Hl-4FClaOMuroyWlOAxw
+gdown 1A2eHTT0dedHgdCvy6t3d9HwluF8p5yjz
+```
 
 ## Step-by-step guide
 
@@ -56,7 +54,7 @@ Then run the following command to kick off feature extraction:
 This will produce one .pt file per slide and save it under `output/<dataset_name>/<experiment_name>/<level>/`:
 
 ```
-hipt/ 
+hipt/
 ├── output/<dataset_name>/<experiment_name>/
 │     └── level/
 │          ├── slide_1.pt
@@ -64,14 +62,47 @@ hipt/
 │          └── ...
 ```
 
-3. Train **single-fold** model on extracted features
+3. Prepare `train.csv` and `tune.csv`
+
+For this pipeline you will need two csv files: `train.csv` and `tune.csv`.<br>
+The syntax is easy:
+
+```
+slide_id,label
+TRAIN_1,1
+TRAIN_2,1
+...
+```
+
+If you want to run testing at the end, you can provide a `test.csv` file.
+
+4. Train **single-fold** model on extracted features
 
 Once features have been extracted, create a configuration file under `config/training/` taking inspiration from existing files.<br>
+Dump in there the paths to your `train.csv` and `tune.csv` files.<br>
+If you want to run testing as well, add the path to your `test.csv` file. Otherwise, leave it blank (it'll skip testing).
+
 Then, run the following command to kick off model training on a single fold:
 
 `python3 train.py --config-name <training_single_fold_config_filename>`
 
-4. Train **multi-fold** model on extracted features
+5. Train **multi-fold** model on extracted features
+
+Your multiple folds should be structured as follow:
+
+```
+fold_dir/
+├── fold_1/
+│     ├── train.csv
+│     ├── tune.csv
+│     └── test.csv
+├── fold_2/
+└── ...
+```
+
+Create a configuration file under `config/training/` taking inspiration from `config/multi.yaml`.<br>
+Remember to indicate the root directory where your folds are located under `data.fold_dir`.<br>
+Then, run the following command to kick off model training on multiple folds:
 
 `python3 train_multi.py --config-name <training_multi_fold_config_filename>`
 
