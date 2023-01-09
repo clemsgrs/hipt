@@ -187,6 +187,19 @@ def collate_features(batch, label_type: str = "int"):
     return [idx, feature, label]
 
 
+def collate_survival_features(batch, label_type: str = "int"):
+    idx = torch.LongTensor([item[0] for item in batch])
+    # feature = torch.vstack([item[1] for item in batch])
+    feature = torch.cat([item[1] for item in batch], dim=0)
+    if label_type == "float":
+        label = torch.FloatTensor([item[2] for item in batch])
+    elif label_type == "int":
+        label = torch.LongTensor([item[2] for item in batch])
+    event_time = torch.FloatTensor([item[3] for item in batch])
+    censorship = torch.FloatTensor([item[4] for item in batch])
+    return [idx, feature, label, event_time, censorship]
+
+
 def collate_region_filepaths(batch):
     item = batch[0]
     idx = torch.LongTensor([item[0]])
@@ -604,9 +617,8 @@ def train_survival(
     dataset: torch.utils.data.Dataset,
     optimizer: torch.optim.Optimizer,
     criterion: Callable,
-    collate_fn: Callable = partial(collate_features, label_type="int"),
+    collate_fn: Callable = partial(collate_survival_features, label_type="int"),
     batch_size: Optional[int] = 1,
-    weighted_sampling: Optional[bool] = False,
     gradient_accumulation: Optional[int] = 1,
 ):
 
@@ -618,12 +630,6 @@ def train_survival(
     risk_scores, labels = [], []
 
     sampler = torch.utils.data.RandomSampler(dataset)
-    if weighted_sampling:
-        weights = make_weights_for_balanced_classes(dataset)
-        sampler = torch.utils.data.WeightedRandomSampler(
-            weights,
-            len(weights),
-        )
 
     loader = torch.utils.data.DataLoader(
         dataset,
@@ -646,9 +652,7 @@ def train_survival(
         for i, batch in enumerate(t):
 
             _, x, label, event_time, c = batch
-            x, label = x.to(device, non_blocking=True), label.to(
-                device, non_blocking=True
-            )
+            x, label, c = x.to(device, non_blocking=True), label.to(device, non_blocking=True), c.to(device, non_blocking=True)
             logits = model(x)
             hazards = torch.sigmoid(logits)
             surv = torch.cumprod(1 - hazards, dim=1)
@@ -667,17 +671,18 @@ def train_survival(
                 optimizer.step()
                 optimizer.zero_grad()
 
-            risk = -torch.sum(surv, dim=1).detach().cpu().numpy()
-            risk_scores.append(risk)
+            risk = -torch.sum(surv, dim=1).detach()
+            risk_scores.append(risk.item())
             censorships.append(c.item())
-            event_times.append(event_time)
+            event_times.append(event_time.item())
 
             labels.extend(label.clone().tolist())
 
     c_index = concordance_index_censored(
-        (1-censorships).astype(bool),
+        [bool(1-c) for c in censorships],
         event_times,
-        risk_scores, tied_tol=1e-08,
+        risk_scores,
+        tied_tol=1e-08,
     )[0]
 
     results["c_index"] = c_index
@@ -693,7 +698,7 @@ def tune_survival(
     model: nn.Module,
     dataset: torch.utils.data.Dataset,
     criterion: Callable,
-    collate_fn: Callable = partial(collate_features, label_type="int"),
+    collate_fn: Callable = partial(collate_survival_features, label_type="int"),
     batch_size: Optional[int] = 1,
 ):
 
@@ -729,9 +734,7 @@ def tune_survival(
             for i, batch in enumerate(t):
 
                 _, x, label, event_time, c = batch
-                x, label = x.to(device, non_blocking=True), label.to(
-                    device, non_blocking=True
-                )
+                x, label,c = x.to(device, non_blocking=True), label.to(device, non_blocking=True), c.to(device, non_blocking=True)
                 logits = model(x)
                 hazards = torch.sigmoid(logits)
                 surv = torch.cumprod(1 - hazards, dim=1)
@@ -739,17 +742,18 @@ def tune_survival(
                 loss = criterion(hazards, surv, label, c, alpha=0)
                 epoch_loss += loss.item()
 
-                risk = -torch.sum(surv, dim=1).detach().cpu().numpy()
-                risk_scores.append(risk)
+                risk = -torch.sum(surv, dim=1).detach()
+                risk_scores.append(risk.item())
                 censorships.append(c.item())
-                event_times.append(event_time)
+                event_times.append(event_time.item())
 
                 labels.extend(label.clone().tolist())
 
     c_index = concordance_index_censored(
-        (1-censorships).astype(bool),
+        [bool(1-c) for c in censorships],
         event_times,
-        risk_scores, tied_tol=1e-08,
+        risk_scores,
+        tied_tol=1e-08,
     )[0]
 
     results["c_index"] = c_index
@@ -763,7 +767,7 @@ def tune_survival(
 def test_survival(
     model: nn.Module,
     dataset: torch.utils.data.Dataset,
-    collate_fn: Callable = partial(collate_features, label_type="int"),
+    collate_fn: Callable = partial(collate_survival_features, label_type="int"),
     batch_size: Optional[int] = 1,
 ):
 
@@ -798,24 +802,23 @@ def test_survival(
             for i, batch in enumerate(t):
 
                 _, x, label, event_time, c = batch
-                x, label = x.to(device, non_blocking=True), label.to(
-                    device, non_blocking=True
-                )
+                x, label, c = x.to(device, non_blocking=True), label.to(device, non_blocking=True), c.to(device, non_blocking=True)
                 logits = model(x)
                 hazards = torch.sigmoid(logits)
                 surv = torch.cumprod(1 - hazards, dim=1)
 
-                risk = -torch.sum(surv, dim=1).detach().cpu().numpy()
-                risk_scores.append(risk)
+                risk = -torch.sum(surv, dim=1).detach()
+                risk_scores.append(risk.item())
                 censorships.append(c.item())
-                event_times.append(event_time)
+                event_times.append(event_time.item())
 
                 labels.extend(label.clone().tolist())
 
     c_index = concordance_index_censored(
-        (1-censorships).astype(bool),
+        [bool(1-c) for c in censorships],
         event_times,
-        risk_scores, tied_tol=1e-08,
+        risk_scores,
+        tied_tol=1e-08,
     )[0]
 
     results["c_index"] = c_index

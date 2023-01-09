@@ -6,7 +6,6 @@ import hydra
 import pandas as pd
 
 from pathlib import Path
-from functools import partial
 from omegaconf import DictConfig
 
 from source.models import ModelFactory
@@ -18,14 +17,13 @@ from source.utils import (
     tune_survival,
     compute_time,
     log_on_step,
-    collate_features,
     EarlyStopping,
     OptimizerFactory,
     SchedulerFactory,
 )
 
 
-@hydra.main(version_base="1.2.0", config_path="config/training/survival", config_name="global")
+@hydra.main(version_base="1.2.0", config_path="config/training/survival", config_name="single")
 def main(cfg: DictConfig):
 
     output_dir = Path(cfg.output_dir, cfg.experiment_name)
@@ -112,15 +110,13 @@ def main(cfg: DictConfig):
                 train_dataset,
                 optimizer,
                 criterion,
-                collate_fn=partial(collate_features, label_type="int"),
                 batch_size=cfg.train_batch_size,
-                weighted_sampling=cfg.weighted_sampling,
-                gradient_accumulation=cfg.gradient_clipping,
+                gradient_accumulation=cfg.gradient_accumulation,
             )
 
             if cfg.wandb.enable:
                 log_on_step("train", train_results, to_log=cfg.wandb.to_log)
-            train_dataset.df.to_csv(Path(result_dir, f"train_{epoch}.csv"), index=False)
+            # train_dataset.df.to_csv(Path(result_dir, f"train_{epoch}.csv"), index=False)
 
             if epoch % cfg.tune_every == 0:
 
@@ -129,13 +125,12 @@ def main(cfg: DictConfig):
                     model,
                     tune_dataset,
                     criterion,
-                    collate_fn=partial(collate_features, label_type="int"),
                     batch_size=cfg.tune_batch_size,
                 )
 
                 if cfg.wandb.enable:
                     log_on_step("tune", tune_results, to_log=cfg.wandb.to_log)
-                tune_dataset.df.to_csv(Path(result_dir, f"tune_{epoch}.csv"), index=False)
+                # tune_dataset.df.to_csv(Path(result_dir, f"tune_{epoch}.csv"), index=False)
 
                 early_stopping(epoch, model, tune_results)
                 if early_stopping.early_stop and cfg.early_stopping.enable:

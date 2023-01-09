@@ -21,7 +21,7 @@ def nll_loss(hazards, S, Y, c, alpha=0.4, eps=1e-7):
     neg_l = censored_loss + uncensored_loss
     loss = (1-alpha) * neg_l + alpha * uncensored_loss
     loss = loss.mean()
-    return
+    return loss
 
 
 class NLLSurvLoss(object):
