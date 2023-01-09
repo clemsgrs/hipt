@@ -9,7 +9,6 @@ level: 'global'
 
 nepochs: 50
 num_classes: 2
-tune_every: 1
 
 model:
   dropout: 0.25
@@ -18,13 +17,6 @@ optim:
   name: 'adam'
   lr: 2e-4
   wd: 1e-5
-
-early_stopping:
-  enable: False
-  tracking: 'loss'
-  min_max: 'min'
-  patience: 10
-  min_epoch: 30
 
 wandb:
   exp_name: 'training_multifold'

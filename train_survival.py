@@ -55,10 +55,10 @@ def main(cfg: DictConfig):
     train_df = pd.read_csv(cfg.data.train_csv)
     tune_df = pd.read_csv(cfg.data.tune_csv)
 
-    if cfg.pct:
-        print(f"Training & Tuning on {cfg.pct*100}% of the data")
-        train_df = train_df.sample(frac=cfg.pct).reset_index(drop=True)
-        tune_df = tune_df.sample(frac=cfg.pct).reset_index(drop=True)
+    if cfg.training.pct:
+        print(f"Training & Tuning on {cfg.training.pct*100}% of the data")
+        train_df = train_df.sample(frac=cfg.training.pct).reset_index(drop=True)
+        tune_df = tune_df.sample(frac=cfg.training.pct).reset_index(drop=True)
 
     train_dataset = ExtractedFeaturesSurvivalSlideLevelDataset(
         train_df, features_dir, cfg.label_name, nbins=cfg.nbins
@@ -84,7 +84,7 @@ def main(cfg: DictConfig):
         cfg.early_stopping.patience,
         cfg.early_stopping.min_epoch,
         checkpoint_dir=checkpoint_dir,
-        save_all=cfg.save_all,
+        save_all=cfg.early_stopping.save_all,
     )
 
     stop = False
@@ -110,22 +110,22 @@ def main(cfg: DictConfig):
                 train_dataset,
                 optimizer,
                 criterion,
-                batch_size=cfg.train_batch_size,
-                gradient_accumulation=cfg.gradient_accumulation,
+                batch_size=cfg.training.batch_size,
+                gradient_accumulation=cfg.training.gradient_accumulation,
             )
 
             if cfg.wandb.enable:
                 log_on_step("train", train_results, to_log=cfg.wandb.to_log)
             # train_dataset.df.to_csv(Path(result_dir, f"train_{epoch}.csv"), index=False)
 
-            if epoch % cfg.tune_every == 0:
+            if epoch % cfg.tuning.tune_every == 0:
 
                 tune_results = tune_survival(
                     epoch + 1,
                     model,
                     tune_dataset,
                     criterion,
-                    batch_size=cfg.tune_batch_size,
+                    batch_size=cfg.tuning.batch_size,
                 )
 
                 if cfg.wandb.enable:

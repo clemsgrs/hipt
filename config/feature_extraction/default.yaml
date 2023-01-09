@@ -1,7 +1,7 @@
-region_dir: ''
+region_dir: '/home/user/code/git/clemsgrs/hs2p/output/tcga_brca_survival_debug/patches/'
 
 output_dir: 'output'
-experiment_name: 'debug'
+experiment_name: 'tcga_brca_survival_debug'
 resume: False
 
 slide_list:

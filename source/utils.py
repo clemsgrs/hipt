@@ -351,7 +351,7 @@ class EarlyStopping:
 
         if self.best_score is None or score >= self.best_score:
             self.best_score = score
-            fname = f"best_model_{wandb.run.id}.pt"
+            fname = f"best_model.pt"
             torch.save(model.state_dict(), Path(self.checkpoint_dir, fname))
             self.counter = 0
 
@@ -369,6 +369,9 @@ class EarlyStopping:
         if self.save_all:
             fname = f"epoch_{epoch}.pt"
             torch.save(model.state_dict(), Path(self.checkpoint_dir, fname))
+
+        # overrid latest
+        torch.save(model.state_dict(), Path(self.checkpoint_dir, "latest_model.pt"))
 
 
 def train(

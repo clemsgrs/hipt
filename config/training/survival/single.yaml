@@ -11,17 +11,21 @@ nepochs: 50
 label_name: 'survival_months'
 label_mapping:
 nbins: 4
-tune_every: 1
 
 task: 'survival'
 loss:
 
-train_batch_size: 1
-tune_batch_size: 1
-pct:
+training:
+  batch_size: 1
+  pct:
+  gradient_accumulation: 32
 
-gradient_accumulation: 32
-save_all: False
+tuning:
+  batch_size: 1
+  tune_every: 1
+
+testing:
+  retrieve_checkpoint: 'best'
 
 model:
   pretrain_256: 'checkpoints/vit_256_small_dino.pth'
@@ -51,6 +55,7 @@ early_stopping:
   min_max: 'min'
   patience: 10
   min_epoch: 30
+  save_all: False
 
 wandb:
   enable: True
