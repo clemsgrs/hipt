@@ -132,7 +132,7 @@ class ExtractedFeaturesSurvivalSlideLevelDataset(torch.utils.data.Dataset):
             key = (disc_label, int(censorship))
             patient_df.at[i, "label"] = self.label_dict[key]
 
-        slide_df = pd.merge(df, patient_df[["case_id", "label"]], how="left", on="case_id")
+        slide_df = pd.merge(df, patient_df[["case_id", "disc_label", "label"]], how="left", on="case_id")
 
         return patient_df, slide_df
 
