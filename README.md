@@ -29,14 +29,14 @@ gdown 1A2eHTT0dedHgdCvy6t3d9HwluF8p5yjz
 
 ## Step-by-step guide
 
-1. [Optional] Configure wandb
+**1. [Optional] Configure wandb**
 
 If you want to benefit from wandb logging, you need to follow these simple steps:
  - grab your wandb API key under your profile and export
  - run the following command in your terminal: `export WANDB_API_KEY=<your_personal_key>`
  - change wandb paramters in the config file under `config/` (mainly `project` and `username`)
 
-2. Extract features
+**2. Extract features**
 
 Create a configuration file under `config/feature_extraction/` taking inspiration from existing files.<br>
 A good starting point is to use the default configuration file `config/default.yaml` where parameters are documented.
@@ -62,7 +62,7 @@ hipt/
 │          └── ...
 ```
 
-3. Prepare `train.csv` and `tune.csv`
+**3. Prepare `train.csv` and `tune.csv`**
 
 For this pipeline you will need two csv files: `train.csv` and `tune.csv`.<br>
 The syntax is easy:
@@ -76,7 +76,7 @@ TRAIN_2,1
 
 If you want to run testing at the end, you can provide a `test.csv` file.
 
-4. Train **single-fold** model on extracted features
+**4. Train **single-fold** model on extracted features**
 
 Once features have been extracted, create a configuration file under `config/training/` taking inspiration from existing files.<br>
 Dump in there the paths to your `train.csv` and `tune.csv` files.<br>
@@ -86,7 +86,7 @@ Then, run the following command to kick off model training on a single fold:
 
 `python3 train.py --config-name <training_single_fold_config_filename>`
 
-5. Train **multi-fold** model on extracted features
+**5. Train **multi-fold** model on extracted features**
 
 Your multiple folds should be structured as follow:
 
