@@ -2,7 +2,7 @@ data:
   train_csv: '/home/user/dataset/tcga/brca/survival/5fold-cv/fold_0/train.csv'
   tune_csv: '/home/user/dataset/tcga/brca/survival/5fold-cv/fold_0/tune.csv'
 
-features_dir: '/home/user/code/git/clemsgrs/hs2p/output/tcga_brca_all_slides/patches'
+features_dir: 'output/tcga_brca_all_slides/features/global'
 output_dir: 'output'
 experiment_name: 'tcga_brca_survival'
 level: 'global'
@@ -20,8 +20,7 @@ train_batch_size: 1
 tune_batch_size: 1
 pct:
 
-weighted_sampling: True
-gradient_clipping: 32
+gradient_accumulation: 32
 save_all: False
 
 model:
@@ -54,9 +53,10 @@ early_stopping:
   min_epoch: 30
 
 wandb:
-  enable: False
+  enable: True
   project: 'hipt'
   username: 'clemsg'
   exp_name: '${experiment_name}'
   dir: '/home/user'
-  to_log: ['loss', 'c_index']
+  group:
+  to_log: ['loss', 'c-index']

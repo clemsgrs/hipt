@@ -18,6 +18,7 @@ freeze_4096: True
 
 wandb:
   project: 'hipt'
-  username:
+  username: 'clemsg'
   exp_name: '${experiment_name}'
   dir: '/home/user/'
+  group:

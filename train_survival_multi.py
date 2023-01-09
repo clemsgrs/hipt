@@ -3,7 +3,6 @@ import time
 import tqdm
 import wandb
 import torch
-import torch.nn as nn
 import hydra
 import statistics
 import numpy as np
@@ -12,12 +11,13 @@ from pathlib import Path
 from omegaconf import DictConfig
 
 from source.models import ModelFactory
-from source.dataset import ExtractedFeaturesDataset
+from source.components import LossFactory
+from source.dataset import ExtractedFeaturesSurvivalSlideLevelDataset
 from source.utils import (
     initialize_wandb,
-    train,
-    tune,
-    test,
+    train_survival,
+    tune_survival,
+    test_survival,
     compute_time,
     log_on_step,
     EarlyStopping,
@@ -27,7 +27,7 @@ from source.utils import (
 
 
 @hydra.main(
-    version_base="1.2.0", config_path="config/training/subtyping", config_name="multi"
+    version_base="1.2.0", config_path="config/training/survival", config_name="multi"
 )
 def main(cfg: DictConfig):
 
@@ -53,7 +53,7 @@ def main(cfg: DictConfig):
     nfold = len([_ for _ in fold_root_dir.glob(f"fold_*")])
     print(f"Training on {nfold} folds")
 
-    test_aucs = []
+    test_metrics = []
 
     start_time = time.time()
     for i in range(nfold):
@@ -67,7 +67,7 @@ def main(cfg: DictConfig):
         print(f"Loading data for fold {i}")
         train_df_path = Path(fold_dir, "train.csv")
         tune_df_path = Path(fold_dir, "tune.csv")
-        test_df_path = Path(fold_dir, "test.csv")
+        test_df_path = Path(fold_dir, "tune.csv")
         train_df = pd.read_csv(train_df_path)
         tune_df = pd.read_csv(tune_df_path)
         test_df = pd.read_csv(test_df_path)
@@ -76,26 +76,26 @@ def main(cfg: DictConfig):
             print(f"Training on {cfg.pct*100}% of the data")
             train_df = train_df.sample(frac=cfg.pct).reset_index(drop=True)
 
-        train_dataset = ExtractedFeaturesDataset(
-            train_df, features_dir, cfg.label_name, cfg.label_mapping
+        train_dataset = ExtractedFeaturesSurvivalSlideLevelDataset(
+            train_df, features_dir, cfg.label_name, nbins=cfg.nbins
         )
-        tune_dataset = ExtractedFeaturesDataset(
-            tune_df, features_dir, cfg.label_name, cfg.label_mapping
+        tune_dataset = ExtractedFeaturesSurvivalSlideLevelDataset(
+            tune_df, features_dir, cfg.label_name, nbins=cfg.nbins
         )
-        test_dataset = ExtractedFeaturesDataset(
-            test_df, features_dir, cfg.label_name, cfg.label_mapping
+        test_dataset = ExtractedFeaturesSurvivalSlideLevelDataset(
+            test_df, features_dir, cfg.label_name, nbins=cfg.nbins
         )
 
-        train_c, tune_c, test_c = (
-            train_dataset.num_classes,
-            tune_dataset.num_classes,
-            test_dataset.num_classes,
-        )
-        assert (
-            train_c == tune_c == test_c
-        ), f"Different number of classes C in train (C={train_c}), tune (C={tune_c}) and test (C={test_c}) sets!"
+        # train_c, tune_c, test_c = (
+        #     train_dataset.num_classes,
+        #     tune_dataset.num_classes,
+        #     test_dataset.num_classes,
+        # )
+        # assert (
+        #     train_c == tune_c == test_c
+        # ), f"Different number of classes C in train (C={train_c}), tune (C={tune_c}) and test (C={test_c}) sets!"
 
-        model = ModelFactory(cfg.level, cfg.num_classes, cfg.model).get_model()
+        model = ModelFactory(cfg.level, cfg.nbins, cfg.model).get_model()
         model.relocate()
         print(model)
 
@@ -105,7 +105,7 @@ def main(cfg: DictConfig):
         ).get_optimizer()
         scheduler = SchedulerFactory(optimizer, cfg.optim.lr_scheduler).get_scheduler()
 
-        criterion = nn.CrossEntropyLoss()
+        criterion = LossFactory(cfg.task, cfg.loss).get_loss()
 
         early_stopping = EarlyStopping(
             cfg.early_stopping.tracking,
@@ -136,14 +136,13 @@ def main(cfg: DictConfig):
                 if cfg.wandb.enable:
                     wandb.log({f"fold_{i}/train/epoch": epoch})
 
-                train_results = train(
+                train_results = train_survival(
                     epoch + 1,
                     model,
                     train_dataset,
                     optimizer,
                     criterion,
                     batch_size=cfg.train_batch_size,
-                    weighted_sampling=cfg.weighted_sampling,
                     gradient_accumulation=cfg.gradient_accumulation,
                 )
 
@@ -154,11 +153,11 @@ def main(cfg: DictConfig):
                         step=f"fold_{i}/train/epoch",
                         to_log=cfg.wandb.to_log,
                     )
-                train_dataset.df.to_csv(Path(result_dir, f"train_{epoch}.csv"), index=False)
+                # train_dataset.df.to_csv(Path(result_dir, f"train_{epoch}.csv"), index=False)
 
                 if epoch % cfg.tune_every == 0:
 
-                    tune_results = tune(
+                    tune_results = tune_survival(
                         epoch + 1,
                         model,
                         tune_dataset,
@@ -173,9 +172,9 @@ def main(cfg: DictConfig):
                             step=f"fold_{i}/train/epoch",
                             to_log=cfg.wandb.to_log,
                         )
-                    tune_dataset.df.to_csv(
-                        Path(result_dir, f"tune_{epoch}.csv"), index=False
-                    )
+                    # tune_dataset.df.to_csv(
+                    #     Path(result_dir, f"tune_{epoch}.csv"), index=False
+                    # )
 
                     early_stopping(epoch, model, tune_results)
                     if early_stopping.early_stop and cfg.early_stopping.enable:
@@ -216,21 +215,25 @@ def main(cfg: DictConfig):
         best_model_sd = torch.load(best_model_fp)
         model.load_state_dict(best_model_sd)
 
-        test_results = test(model, test_dataset, batch_size=1)
-        test_dataset.df.to_csv(Path(result_dir, f"test.csv"), index=False)
+        test_results = test_survival(
+            model,
+            test_dataset,
+            batch_size=1,
+        )
+        # test_dataset.df.to_csv(Path(result_dir, f"test.csv"), index=False)
 
         for r, v in test_results.items():
-            if r == "auc":
-                test_aucs.append(v)
+            if r == "c-index":
+                test_metrics.append(v)
                 v = round(v, 3)
             if r in cfg.wandb.to_log and cfg.wandb.enable:
                 wandb.log({f"fold_{i}/test/{r}": v})
 
-    mean_test_auc = round(np.mean(test_aucs), 3)
-    std_test_auc = round(statistics.stdev(test_aucs), 3)
+    mean_test_metric = round(np.mean(test_metrics), 3)
+    std_test_metric = round(statistics.stdev(test_metrics), 3)
     if cfg.wandb.enable:
-        wandb.log({f"test/auc_mean": mean_test_auc})
-        wandb.log({f"test/auc_std": std_test_auc})
+        wandb.log({f"test/c-index_mean": mean_test_metric})
+        wandb.log({f"test/c-index_std": std_test_metric})
 
     end_time = time.time()
     mins, secs = compute_time(start_time, end_time)

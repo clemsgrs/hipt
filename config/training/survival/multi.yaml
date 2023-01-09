@@ -1,0 +1,26 @@
+defaults:
+  - single
+  - _self_
+
+data:
+  fold_dir: '/home/user/dataset/tcga/brca/survival/5fold-cv'
+
+experiment_name: 'tcga_brca_survival_multifold'
+level: 'global'
+
+nepochs: 50
+
+optim:
+  name: 'adam'
+  lr: 2e-4
+  wd: 1e-5
+
+early_stopping:
+  enable: False
+  tracking: 'loss'
+  min_max: 'min'
+  patience: 10
+  min_epoch: 30
+
+wandb:
+  exp_name: '${experiment_name}'

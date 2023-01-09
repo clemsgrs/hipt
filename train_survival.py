@@ -67,7 +67,7 @@ def main(cfg: DictConfig):
         tune_df, features_dir, cfg.label_name, nbins=cfg.nbins
     )
 
-    m, n = train_dataset.num_classes, tune_dataset.num_classes
+    # m, n = train_dataset.num_classes, tune_dataset.num_classes
     # assert (
     #     m == n == cfg.nbins
     # ), f"Either train (C={m}) or tune (C={n}) sets doesnt cover full class spectrum (C={cfg.nbins}"

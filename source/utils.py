@@ -380,7 +380,7 @@ def train(
     collate_fn: Callable = partial(collate_features, label_type="int"),
     batch_size: Optional[int] = 1,
     weighted_sampling: Optional[bool] = False,
-    gradient_clipping: Optional[int] = None,
+    gradient_accumulation: Optional[int] = None,
 ):
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -430,8 +430,8 @@ def train(
             loss_value = loss.item()
             epoch_loss += loss_value
 
-            if gradient_clipping:
-                loss = loss / gradient_clipping
+            if gradient_accumulation:
+                loss = loss / gradient_accumulation
 
             loss.backward()
             optimizer.step()
@@ -685,7 +685,7 @@ def train_survival(
         tied_tol=1e-08,
     )[0]
 
-    results["c_index"] = c_index
+    results["c-index"] = c_index
 
     train_loss = epoch_loss / len(loader)
     results["loss"] = train_loss
@@ -756,7 +756,7 @@ def tune_survival(
         tied_tol=1e-08,
     )[0]
 
-    results["c_index"] = c_index
+    results["c-index"] = c_index
 
     tune_loss = epoch_loss / len(loader)
     results["loss"] = tune_loss
@@ -821,6 +821,6 @@ def test_survival(
         tied_tol=1e-08,
     )[0]
 
-    results["c_index"] = c_index
+    results["c-index"] = c_index
 
     return results

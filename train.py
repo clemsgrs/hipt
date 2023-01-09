@@ -29,7 +29,7 @@ from source.utils import (
 
 
 @hydra.main(
-    version_base="1.2.0", config_path="config/training/subtyping", config_name="global"
+    version_base="1.2.0", config_path="config/training/subtyping", config_name="single"
 )
 def main(cfg: DictConfig):
 
@@ -134,7 +134,7 @@ def main(cfg: DictConfig):
                 collate_fn=partial(collate_features, label_type="int"),
                 batch_size=cfg.train_batch_size,
                 weighted_sampling=cfg.weighted_sampling,
-                gradient_clipping=cfg.gradient_clipping,
+                gradient_accumulation=cfg.gradient_accumulation,
             )
 
             if cfg.wandb.enable:

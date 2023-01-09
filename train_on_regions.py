@@ -22,7 +22,7 @@ from source.utils import (
 )
 
 
-@hydra.main(version_base="1.2.0", config_path="config", config_name="region")
+@hydra.main(version_base="1.2.0", config_path="config/training/subtyping", config_name="region")
 def main(cfg: DictConfig):
 
     output_dir = Path(cfg.output_dir, cfg.experiment_name)
@@ -124,7 +124,7 @@ def main(cfg: DictConfig):
             criterion,
             batch_size=cfg.train_batch_size,
             weighted_sampling=cfg.weighted_sampling,
-            gradient_clipping=cfg.gradient_clipping,
+            gradient_accumulation=cfg.gradient_accumulation,
         )
 
         train_dataset.df.to_csv(Path(result_dir, f"train_{epoch}.csv"), index=False)
