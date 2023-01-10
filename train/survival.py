@@ -23,7 +23,7 @@ from source.utils import (
 )
 
 
-@hydra.main(version_base="1.2.0", config_path="config/training/survival", config_name="single")
+@hydra.main(version_base="1.2.0", config_path="../config/training/survival", config_name="single")
 def main(cfg: DictConfig):
 
     output_dir = Path(cfg.output_dir, cfg.experiment_name)
@@ -148,12 +148,12 @@ def main(cfg: DictConfig):
 
             epoch_end_time = time.time()
             epoch_mins, epoch_secs = compute_time(epoch_start_time, epoch_end_time)
-            print(
+            tqdm.tqdm.write(
                 f"End of epoch {epoch+1} / {cfg.nepochs} \t Time Taken:  {epoch_mins}m {epoch_secs}s"
             )
 
             if stop:
-                print(
+                tqdm.tqdm.write(
                     f"Stopping early because best {cfg.early_stopping.tracking} was reached {cfg.early_stopping.patience} epochs ago"
                 )
                 break

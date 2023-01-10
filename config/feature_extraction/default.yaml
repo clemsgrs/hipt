@@ -11,12 +11,10 @@ format: 'jpg'
 level: 'global'
 
 pretrain_256: 'checkpoints/vit_256_small_dino.pth'
-freeze_256: True
-
 pretrain_4096: 'checkpoints/vit_4096_xs_dino.pth'
-freeze_4096: True
 
 wandb:
+  enable: True
   project: 'hipt'
   username: 'clemsg'
   exp_name: '${experiment_name}'

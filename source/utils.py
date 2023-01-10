@@ -222,7 +222,7 @@ def get_roc_auc_curve(probs: np.array(float), labels: List[int], log_to_wandb: b
     if log_to_wandb:
         img = wandb.Image(fig)
     plt.close()
-    return img
+    return fig
 
 
 def log_on_step(

@@ -34,7 +34,7 @@ def main(cfg: DictConfig):
             features_dir.mkdir(parents=True, exist_ok=True)
 
     # set up wandb
-    if cfg.wandb.username:
+    if cfg.wandb.enable:
         key = os.environ.get("WANDB_API_KEY")
         wandb_run = initialize_wandb(cfg, key=key)
         wandb_run.define_metric("processed", summary="max")
@@ -137,7 +137,7 @@ def main(cfg: DictConfig):
                     index=False,
                 )
 
-                if cfg.wandb.username:
+                if cfg.wandb.enable:
                     wandb.log({"processed": already_processed + i + 1})
 
 
