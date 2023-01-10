@@ -42,8 +42,8 @@ If you want to benefit from wandb logging, you need to follow these simple steps
 Create a configuration file under `config/feature_extraction/` taking inspiration from existing files.<br>
 A good starting point is to use the default configuration file `config/default.yaml` where parameters are documented.
 
-- extract region-level features : make sure `level: 'global'` and have 2 gpus available.<br>
-- extract patch-level features : make sure to set `level: 'local'` and have 1 gpu available..<br>
+- extract region-level features : make sure to set `level: 'global'` in your config and have 2 gpus available.<br>
+- extract patch-level features : make sure to set `level: 'local'` in your config and have 1 gpu available..<br>
 
 Then run the following command to kick off feature extraction:
 
