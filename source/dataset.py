@@ -272,7 +272,7 @@ class ExtractedFeaturesSurvivalDataset(torch.utils.data.Dataset):
     def __getitem__(self, idx: int):
 
         row = self.patient_df.loc[idx]
-        case_id = row.slide_id
+        case_id = row.case_id
         slide_ids = self.patient_id_2_slide_id[case_id]
         label = row.disc_label
         event_time = row[self.label_name]
@@ -288,7 +288,7 @@ class ExtractedFeaturesSurvivalDataset(torch.utils.data.Dataset):
         return idx, features, label, event_time, c
 
     def __len__(self):
-        len(self.patient_df)
+        return len(self.patient_df)
 
 
 class StackedRegionsDataset(torch.utils.data.Dataset):
