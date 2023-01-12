@@ -10,7 +10,7 @@ from omegaconf import DictConfig
 
 from source.models import ModelFactory
 from source.components import LossFactory
-from source.dataset import ExtractedFeaturesSurvivalSlideLevelDataset, ExtractedFeaturesSurvivalDataset
+from source.dataset import ExtractedFeaturesSurvivalDataset
 from source.utils import (
     initialize_wandb,
     train_survival,
@@ -23,7 +23,7 @@ from source.utils import (
 )
 
 
-@hydra.main(version_base="1.2.0", config_path="../config/training/survival", config_name="single")
+@hydra.main(version_base="1.2.0", config_path="../config/training/survival", config_name="debug")
 def main(cfg: DictConfig):
 
     output_dir = Path(cfg.output_dir, cfg.experiment_name)
@@ -47,7 +47,7 @@ def main(cfg: DictConfig):
 
     criterion = LossFactory(cfg.task, cfg.loss).get_loss()
 
-    model = ModelFactory(cfg.level, cfg.nbins, cfg.model).get_model()
+    model = ModelFactory(cfg.level, num_classes=cfg.nbins, model_options=cfg.model).get_model()
     model.relocate()
     print(model)
 
@@ -60,10 +60,10 @@ def main(cfg: DictConfig):
         train_df = train_df.sample(frac=cfg.training.pct).reset_index(drop=True)
         tune_df = tune_df.sample(frac=cfg.training.pct).reset_index(drop=True)
 
-    train_dataset = ExtractedFeaturesSurvivalSlideLevelDataset(
+    train_dataset = ExtractedFeaturesSurvivalDataset(
         train_df, features_dir, cfg.label_name, nbins=cfg.nbins
     )
-    tune_dataset = ExtractedFeaturesSurvivalSlideLevelDataset(
+    tune_dataset = ExtractedFeaturesSurvivalDataset(
         tune_df, features_dir, cfg.label_name, nbins=cfg.nbins
     )
 

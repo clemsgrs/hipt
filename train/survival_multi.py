@@ -12,7 +12,7 @@ from omegaconf import DictConfig
 
 from source.models import ModelFactory
 from source.components import LossFactory
-from source.dataset import ExtractedFeaturesSurvivalSlideLevelDataset
+from source.dataset import ExtractedFeaturesSurvivalDataset
 from source.utils import (
     initialize_wandb,
     train_survival,
@@ -76,13 +76,13 @@ def main(cfg: DictConfig):
             print(f"Training on {cfg.training.pct*100}% of the data")
             train_df = train_df.sample(frac=cfg.training.pct).reset_index(drop=True)
 
-        train_dataset = ExtractedFeaturesSurvivalSlideLevelDataset(
+        train_dataset = ExtractedFeaturesSurvivalDataset(
             train_df, features_dir, cfg.label_name, nbins=cfg.nbins
         )
-        tune_dataset = ExtractedFeaturesSurvivalSlideLevelDataset(
+        tune_dataset = ExtractedFeaturesSurvivalDataset(
             tune_df, features_dir, cfg.label_name, nbins=cfg.nbins
         )
-        test_dataset = ExtractedFeaturesSurvivalSlideLevelDataset(
+        test_dataset = ExtractedFeaturesSurvivalDataset(
             test_df, features_dir, cfg.label_name, nbins=cfg.nbins
         )
 

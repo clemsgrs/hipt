@@ -5,6 +5,8 @@ defaults:
 data:
   fold_dir: '/home/user/dataset/tcga/brca/survival/5fold-cv'
 
+features_dir: 'output/tcga_brca_all_slides/features/global'
+# features_dir: '/home/user/code/git/opensource/HIPT/survival_global_features'
 experiment_name: 'tcga_brca_survival_multifold'
 level: 'global'
 

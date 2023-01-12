@@ -656,9 +656,9 @@ def train_survival(
 
             _, x, label, event_time, c = batch
             x, label, c = x.to(device, non_blocking=True), label.to(device, non_blocking=True), c.to(device, non_blocking=True)
-            logits = model(x)
-            hazards = torch.sigmoid(logits)
-            surv = torch.cumprod(1 - hazards, dim=1)
+            logits = model(x)                           # [1, nbins]
+            hazards = torch.sigmoid(logits)             # [1, nbins]
+            surv = torch.cumprod(1 - hazards, dim=1)    # [1, nbins]
 
             loss = criterion(hazards, surv, label, c)
 
@@ -674,7 +674,7 @@ def train_survival(
                 optimizer.step()
                 optimizer.zero_grad()
 
-            risk = -torch.sum(surv, dim=1).detach()
+            risk = -torch.sum(surv, dim=1).detach()     # [1]
             risk_scores.append(risk.item())
             censorships.append(c.item())
             event_times.append(event_time.item())
