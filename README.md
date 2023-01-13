@@ -76,13 +76,13 @@ If you want to run testing at the end, you can provide a `test.csv` file.
 
 **4. Train **single-fold** model on extracted features**
 
-Once features have been extracted, create a configuration file under `config/training/` taking inspiration from existing files.<br>
+Once features have been extracted, create a configuration file under `config/training/subtyping` taking inspiration from `single.yaml`.<br>
 Dump in there the paths to your `train.csv` and `tune.csv` files.<br>
 If you want to run testing as well, add the path to your `test.csv` file. Otherwise, leave it blank (it'll skip testing).
 
 Then, run the following command to kick off model training on a single fold:
 
-`python3 train.py --config-name <training_single_fold_config_filename>`
+`python3 train/subtyping.py --config-name <subtyping_single_fold_config_filename>`
 
 **5. Train **multi-fold** model on extracted features**
 
@@ -98,7 +98,7 @@ fold_dir/
 └── ...
 ```
 
-Create a configuration file under `config/training/` taking inspiration from `config/multi.yaml`.<br>
+Create a configuration file under `config/training/subtyping` taking inspiration from `multi.yaml`.<br>
 Remember to indicate the root directory where your folds are located under `data.fold_dir`.<br>
 
 If you train the top Transformer block only (i.e. leveraging global features), you only need 1 gpu.
@@ -106,7 +106,7 @@ If you train the top & the intermediate Transformer blocks (i.e. leveraging loca
 
 Then, run the following command to kick off model training on multiple folds:
 
-`python3 train_multi.py --config-name <training_multi_fold_config_filename>`
+`python3 train/subtyping_multi.py --config-name <subtyping_multi_fold_config_filename>`
 
 ## Resuming experiment after crash / bug
 
