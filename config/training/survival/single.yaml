@@ -1,0 +1,67 @@
+data:
+  train_csv: '/home/user/dataset/tcga/brca/survival/5fold-cv/fold_0/train.csv'
+  tune_csv: '/home/user/dataset/tcga/brca/survival/5fold-cv/fold_0/tune.csv'
+
+features_dir: 'output/tcga_brca_all_slides/features/global'
+output_dir: 'output'
+experiment_name: 'tcga_brca_survival'
+level: 'global'
+
+nepochs: 50
+label_name: 'survival_months'
+label_mapping:
+nbins: 4
+
+task: 'survival'
+loss:
+
+training:
+  batch_size: 1
+  pct:
+  gradient_accumulation: 32
+
+tuning:
+  batch_size: 1
+  tune_every: 1
+
+testing:
+  retrieve_checkpoint: 'best'
+
+model:
+  pretrain_256: 'checkpoints/vit_256_small_dino.pth'
+  freeze_256: True
+  freeze_256_pos_embed: True
+  img_size_256: 224
+  patch_size_256: 16
+  pretrain_4096: 'checkpoints/vit_4096_xs_dino.pth'
+  freeze_4096: True
+  freeze_4096_pos_embed: True
+  img_size_4096: 3584
+  patch_size_4096: 256
+  dropout: 0.25
+
+optim:
+  name: 'adam'
+  lr: 2e-4
+  wd: 1e-5
+  lr_scheduler:
+    name: 'step'
+    step_size: 50
+    gamma: 0.5
+
+early_stopping:
+  enable: False
+  tracking: 'loss'
+  min_max: 'min'
+  patience: 10
+  min_epoch: 30
+  save_all: False
+
+wandb:
+  enable: True
+  project: 'hipt'
+  username: 'clemsg'
+  exp_name: '${experiment_name}'
+  dir: '/home/user'
+  group:
+  to_log: ['loss', 'c-index']

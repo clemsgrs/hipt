@@ -2,6 +2,7 @@ data/*
 scripts/*
 output/*
 notebooks/*
+checkpoints/*.pth
 
 # un-related python scripts
 convert_svs_slides_to_tif.py
@@ -11,6 +12,9 @@ wandb/
 
 # hydra related
 outputs/
+
+# macOS related
+.DS_Store
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

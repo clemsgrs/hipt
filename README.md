@@ -10,7 +10,8 @@ Re-implementation of original [HIPT](https://github.com/mahmoodlab/HIPT) code.
 
 ## Requirements
 
-install requirements via `pip3 install -r requirements.txt`
+- install requirements via `pip3 install -r requirements.txt`
+- install module via `pip3 install -e .`
 
 ## Prerequisite
 
@@ -41,11 +42,8 @@ If you want to benefit from wandb logging, you need to follow these simple steps
 Create a configuration file under `config/feature_extraction/` taking inspiration from existing files.<br>
 A good starting point is to use the default configuration file `config/default.yaml` where parameters are documented.
 
-Extract region-level features : take a look at `config/feature_extraction/global.yaml`.<br>
-Make sure `level` is set to 'global'.<br>
-
-Extract patch-level features : take a look at `config/feature_extraction/local.yaml`.<br>
-Make sure `level` is set to 'local'.<br>
+- extract region-level features : make sure to set `level: 'global'` in your config and have 2 gpus available.<br>
+- extract patch-level features : make sure to set `level: 'local'` in your config and have 1 gpu available..<br>
 
 Then run the following command to kick off feature extraction:
 
@@ -102,6 +100,10 @@ fold_dir/
 
 Create a configuration file under `config/training/` taking inspiration from `config/multi.yaml`.<br>
 Remember to indicate the root directory where your folds are located under `data.fold_dir`.<br>
+
+If you train the top Transformer block only (i.e. leveraging global features), you only need 1 gpu.
+If you train the top & the intermediate Transformer blocks (i.e. leveraging local features), you'll need 2 gpus.
+
 Then, run the following command to kick off model training on multiple folds:
 
 `python3 train_multi.py --config-name <training_multi_fold_config_filename>`

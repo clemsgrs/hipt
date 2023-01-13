@@ -1,5 +1,5 @@
 defaults:
-  - default
+  - single
   - _self_
 
 region_dir: '${data_dir}/tcga_brca/patches'
@@ -17,7 +17,6 @@ M_max: 5
 
 nepochs: 50
 num_classes: 2
-tune_every: 1
 
 model:
   pretrain_256: 'checkpoints/vit_256_small_dino.pth'
@@ -36,13 +35,6 @@ optim:
   name: 'adam'
   lr: 2e-4
   wd: 1e-5
-
-early_stopping:
-  enable: True
-  tracking: 'loss'
-  min_max: 'min'
-  patience: 10
-  min_epoch: 30
 
 wandb:
   project: 'hipt'

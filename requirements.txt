@@ -2,6 +2,7 @@ h5py
 numpy
 pandas
 pillow
+gdown
 einops
 webdataset
 matplotlib
@@ -10,7 +11,7 @@ torchvision
 lifelines
 scikit-survival
 scikit-learn
-tqdm==4.33.0
+tqdm
 seaborn==0.12.0
 hydra-core==1.2.0
 opencv-python==4.4.0.46

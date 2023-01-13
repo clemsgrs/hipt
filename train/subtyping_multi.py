@@ -1,5 +1,6 @@
 import os
 import time
+import tqdm
 import wandb
 import torch
 import torch.nn as nn
@@ -8,7 +9,7 @@ import statistics
 import numpy as np
 import pandas as pd
 from pathlib import Path
-from omegaconf import OmegaConf
+from omegaconf import DictConfig
 
 from source.models import ModelFactory
 from source.dataset import ExtractedFeaturesDataset
@@ -26,11 +27,11 @@ from source.utils import (
 
 
 @hydra.main(
-    version_base="1.2.0", config_path="config/training", config_name="multifold_global"
+    version_base="1.2.0", config_path="../config/training/subtyping", config_name="multi"
 )
-def main(cfg):
+def main(cfg: DictConfig):
 
-    output_dir = Path(cfg.output_dir, cfg.dataset_name)
+    output_dir = Path(cfg.output_dir, cfg.experiment_name)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     checkpoint_root_dir = Path(output_dir, "checkpoints", cfg.level)
@@ -40,23 +41,15 @@ def main(cfg):
     result_root_dir.mkdir(parents=True, exist_ok=True)
 
     # set up wandb
-    key = os.environ.get("WANDB_API_KEY")
-    config = OmegaConf.to_container(cfg, resolve=True, throw_on_missing=True)
-    _ = initialize_wandb(
-        cfg.wandb.project,
-        cfg.wandb.username,
-        cfg.wandb.exp_name,
-        dir=cfg.wandb.dir,
-        config=config,
-        key=key,
-    )
+    if cfg.wandb.enable:
+        key = os.environ.get("WANDB_API_KEY")
+        _ = initialize_wandb(cfg, key=key)
 
+    features_dir = Path(output_dir, "features", cfg.level)
     if cfg.features_dir:
         features_dir = Path(cfg.features_dir)
-    else:
-        features_dir = Path(output_dir, "features", cfg.level)
 
-    fold_root_dir = Path(cfg.data_dir, cfg.dataset_name, "splits")
+    fold_root_dir = Path(cfg.data.fold_dir)
     nfold = len([_ for _ in fold_root_dir.glob(f"fold_*")])
     print(f"Training on {nfold} folds")
 
@@ -79,9 +72,9 @@ def main(cfg):
         tune_df = pd.read_csv(tune_df_path)
         test_df = pd.read_csv(test_df_path)
 
-        if cfg.pct:
-            print(f"Training on {cfg.pct*100}% of the data")
-            train_df = train_df.sample(frac=cfg.pct).reset_index(drop=True)
+        if cfg.training.pct:
+            print(f"Training on {cfg.training.pct*100}% of the data")
+            train_df = train_df.sample(frac=cfg.training.pct).reset_index(drop=True)
 
         train_dataset = ExtractedFeaturesDataset(
             train_df, features_dir, cfg.label_name, cfg.label_mapping
@@ -120,90 +113,106 @@ def main(cfg):
             cfg.early_stopping.patience,
             cfg.early_stopping.min_epoch,
             checkpoint_dir=checkpoint_dir,
-            save_all=cfg.save_all,
+            save_all=cfg.early_stopping.save_all,
         )
 
         stop = False
         fold_start_time = time.time()
 
-        wandb.define_metric(f"fold_{i}/train/epoch", summary="max")
-        for epoch in range(cfg.nepochs):
+        if cfg.wandb.enable:
+            wandb.define_metric(f"fold_{i}/train/epoch", summary="max")
 
-            epoch_start_time = time.time()
-            wandb.log({f"fold_{i}/train/epoch": epoch})
+        with tqdm.tqdm(
+            range(cfg.nepochs),
+            desc=(f"Fold {i} Training"),
+            unit=" slide",
+            ncols=100,
+            leave=True,
+        ) as t:
 
-            train_results = train(
-                epoch + 1,
-                model,
-                train_dataset,
-                optimizer,
-                criterion,
-                batch_size=cfg.train_batch_size,
-                weighted_sampling=cfg.weighted_sampling,
-                gradient_clipping=cfg.gradient_clipping,
-            )
+            for epoch in t:
 
-            log_on_step(
-                f"fold_{i}/train",
-                train_results,
-                step=f"fold_{i}/train/epoch",
-                to_log=cfg.wandb.to_log,
-            )
-            train_dataset.df.to_csv(Path(result_dir, f"train_{epoch}.csv"), index=False)
+                epoch_start_time = time.time()
+                if cfg.wandb.enable:
+                    wandb.log({f"fold_{i}/train/epoch": epoch})
 
-            if epoch % cfg.tune_every == 0:
-
-                tune_results = tune(
+                train_results = train(
                     epoch + 1,
                     model,
-                    tune_dataset,
+                    train_dataset,
+                    optimizer,
                     criterion,
-                    batch_size=cfg.tune_batch_size,
+                    batch_size=cfg.training.batch_size,
+                    weighted_sampling=cfg.training.weighted_sampling,
+                    gradient_accumulation=cfg.training.gradient_accumulation,
                 )
 
-                log_on_step(
-                    f"fold_{i}/tune",
-                    tune_results,
-                    step=f"fold_{i}/train/epoch",
-                    to_log=cfg.wandb.to_log,
+                if cfg.wandb.enable:
+                    log_on_step(
+                        f"fold_{i}/train",
+                        train_results,
+                        step=f"fold_{i}/train/epoch",
+                        to_log=cfg.wandb.to_log,
+                    )
+                train_dataset.df.to_csv(Path(result_dir, f"train_{epoch}.csv"), index=False)
+
+                if epoch % cfg.tuning.tune_every == 0:
+
+                    tune_results = tune(
+                        epoch + 1,
+                        model,
+                        tune_dataset,
+                        criterion,
+                        batch_size=cfg.tuning.batch_size,
+                    )
+
+                    if cfg.wandb.enable:
+                        log_on_step(
+                            f"fold_{i}/tune",
+                            tune_results,
+                            step=f"fold_{i}/train/epoch",
+                            to_log=cfg.wandb.to_log,
+                        )
+                    tune_dataset.df.to_csv(
+                        Path(result_dir, f"tune_{epoch}.csv"), index=False
+                    )
+
+                    early_stopping(epoch, model, tune_results)
+                    if early_stopping.early_stop and cfg.early_stopping.enable:
+                        stop = True
+
+                if cfg.wandb.enable:
+                    wandb.define_metric(
+                        f"fold_{i}/train/lr", step_metric=f"fold_{i}/train/epoch"
+                    )
+                if scheduler:
+                    lr = scheduler.get_last_lr()
+                    if cfg.wandb.enable:
+                        wandb.log({f"fold_{i}/train/lr": lr})
+                    scheduler.step()
+                elif cfg.wandb.enable:
+                    wandb.log({f"fold_{i}/train/lr": cfg.optim.lr})
+
+                epoch_end_time = time.time()
+                epoch_mins, epoch_secs = compute_time(epoch_start_time, epoch_end_time)
+                tqdm.tqdm.write(
+                    f"End of epoch {epoch+1} / {cfg.nepochs} \t Time Taken:  {epoch_mins}m {epoch_secs}s"
                 )
-                tune_dataset.df.to_csv(
-                    Path(result_dir, f"tune_{epoch}.csv"), index=False
-                )
 
-                early_stopping(epoch, model, tune_results)
-                if early_stopping.early_stop and cfg.early_stopping.enable:
-                    stop = True
-
-            wandb.define_metric(
-                f"fold_{i}/train/lr", step_metric=f"fold_{i}/train/epoch"
-            )
-            if scheduler:
-                lr = scheduler.get_last_lr()
-                wandb.log({f"fold_{i}/train/lr": lr})
-                scheduler.step()
-            else:
-                wandb.log({f"fold_{i}/train/lr": cfg.optim.lr})
-
-            epoch_end_time = time.time()
-            epoch_mins, epoch_secs = compute_time(epoch_start_time, epoch_end_time)
-            print(
-                f"End of epoch {epoch+1} / {cfg.nepochs} \t Time Taken:  {epoch_mins}m {epoch_secs}s"
-            )
-
-            if stop:
-                print(
-                    f"Stopping early because best {cfg.early_stopping.tracking} was reached {cfg.early_stopping.patience} epochs ago"
-                )
-                break
+                if stop:
+                    tqdm.tqdm.write(
+                        f"Stopping early because best {cfg.early_stopping.tracking} was reached {cfg.early_stopping.patience} epochs ago"
+                    )
+                    break
 
         fold_end_time = time.time()
         fold_mins, fold_secs = compute_time(fold_start_time, fold_end_time)
         print(f"Total time taken for fold {i}: {fold_mins}m {fold_secs}s")
 
         # load best model
-        best_model_fp = Path(checkpoint_dir, f"best_model_{wandb.run.id}.pt")
-        wandb.save(str(best_model_fp))
+        best_model_fp = Path(checkpoint_dir, f"best_model.pt")
+        if cfg.wandb.enable:
+            wandb.save(str(best_model_fp))
         best_model_sd = torch.load(best_model_fp)
         model.load_state_dict(best_model_sd)
 
@@ -214,13 +223,14 @@ def main(cfg):
             if r == "auc":
                 test_aucs.append(v)
                 v = round(v, 3)
-            if r in cfg.wandb.to_log:
+            if r in cfg.wandb.to_log and cfg.wandb.enable:
                 wandb.log({f"fold_{i}/test/{r}": v})
 
     mean_test_auc = round(np.mean(test_aucs), 3)
     std_test_auc = round(statistics.stdev(test_aucs), 3)
-    wandb.log({f"test/auc_mean": mean_test_auc})
-    wandb.log({f"test/auc_std": std_test_auc})
+    if cfg.wandb.enable:
+        wandb.log({f"test/auc_mean": mean_test_auc})
+        wandb.log({f"test/auc_std": std_test_auc})
 
     end_time = time.time()
     mins, secs = compute_time(start_time, end_time)
@@ -229,5 +239,4 @@ def main(cfg):
 
 if __name__ == "__main__":
 
-    # python3 train_global.py
     main()

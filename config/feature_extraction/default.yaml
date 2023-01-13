@@ -1,26 +1,22 @@
-data_dir: 'data'
+region_dir: '/home/user/code/git/clemsgrs/hs2p/output/tcga_brca_survival_debug/patches/'
+
 output_dir: 'output'
-
-dataset_name: 'toy'
-experiment_name: ''
-slide_list: '${data_dir}/${dataset_name}/slide_list.txt'
-
-region_dir: '${data_dir}/tcga_brca/patches'
-
+experiment_name: 'tcga_brca_survival_debug'
 resume: False
+
+slide_list:
 
 region_size: 4096
 format: 'jpg'
 level: 'global'
 
 pretrain_256: 'checkpoints/vit_256_small_dino.pth'
-freeze_256: True
-
 pretrain_4096: 'checkpoints/vit_4096_xs_dino.pth'
-freeze_4096: True
 
 wandb:
+  enable: True
   project: 'hipt'
   username: 'clemsg'
-  exp_name: 'feature_extraction'
-  dir: '/home/user/wandb'
+  exp_name: '${experiment_name}'
+  dir: '/home/user/'
+  group:
