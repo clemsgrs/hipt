@@ -28,14 +28,14 @@ gdown 1Qm-_XrTMYhu9Hl-4FClaOMuroyWlOAxw
 gdown 1A2eHTT0dedHgdCvy6t3d9HwluF8p5yjz
 ```
 
-## Step-by-step guide
+## Feature Extraction
 
 **1. [Optional] Configure wandb**
 
 If you want to benefit from wandb logging, you need to follow these simple steps:
  - grab your wandb API key under your profile and export
  - run the following command in your terminal: `export WANDB_API_KEY=<your_personal_key>`
- - change wandb paramters in the config file under `config/` (mainly `project` and `username`)
+ - change wandb parameters in the config file under `config/` (mainly `project` and `username`)
 
 **2. Extract features**
 
@@ -60,21 +60,23 @@ hipt/
 │          └── ...
 ```
 
-**3. Prepare `train.csv` and `tune.csv`**
+## Subtype Classification
+
+**1. Prepare `train.csv` and `tune.csv`**
 
 For this pipeline you will need two csv files: `train.csv` and `tune.csv`.<br>
 The syntax is easy:
 
 ```
-slide_id,label
+slide_id,classification_label
 TRAIN_1,1
-TRAIN_2,1
+TRAIN_2,0
 ...
 ```
 
 If you want to run testing at the end, you can provide a `test.csv` file.
 
-**4. Train **single-fold** model on extracted features**
+**2. Train a *single-fold* model on extracted features**
 
 Once features have been extracted, create a configuration file under `config/training/subtyping` taking inspiration from `single.yaml`.<br>
 Dump in there the paths to your `train.csv` and `tune.csv` files.<br>
@@ -84,7 +86,7 @@ Then, run the following command to kick off model training on a single fold:
 
 `python3 train/subtyping.py --config-name <subtyping_single_fold_config_filename>`
 
-**5. Train **multi-fold** model on extracted features**
+**3. Train a *multi-fold* model on extracted features**
 
 Your multiple folds should be structured as follow:
 
@@ -107,6 +109,57 @@ If you train the top & the intermediate Transformer blocks (i.e. leveraging loca
 Then, run the following command to kick off model training on multiple folds:
 
 `python3 train/subtyping_multi.py --config-name <subtyping_multi_fold_config_filename>`
+
+
+## Survival Prediction
+
+**1. Prepare `train.csv` and `tune.csv`**
+
+For this pipeline you will need two csv files: `train.csv` and `tune.csv`.<br>
+The syntax is easy:
+
+```
+slide_id,survival_label
+TRAIN_1,1
+TRAIN_2,5
+...
+```
+
+If you want to run testing at the end, you can provide a `test.csv` file.
+
+**2. Train a *single-fold* model on extracted features**
+
+Once features have been extracted, create a configuration file under `config/training/survival` taking inspiration from `single.yaml`.<br>
+Dump in there the paths to your `train.csv` and `tune.csv` files.<br>
+If you want to run testing as well, add the path to your `test.csv` file. Otherwise, leave it blank (it'll skip testing).
+
+Then, run the following command to kick off model training on a single fold:
+
+`python3 train/survival.py --config-name <survival_single_fold_config_filename>`
+
+**3. Train a *multi-fold* model on extracted features**
+
+Your multiple folds should be structured as follow:
+
+```
+fold_dir/
+├── fold_1/
+│     ├── train.csv
+│     ├── tune.csv
+│     └── test.csv
+├── fold_2/
+└── ...
+```
+
+Create a configuration file under `config/training/survival` taking inspiration from `multi.yaml`.<br>
+Remember to indicate the root directory where your folds are located under `data.fold_dir`.<br>
+
+If you train the top Transformer block only (i.e. leveraging global features), you only need 1 gpu.
+If you train the top & the intermediate Transformer blocks (i.e. leveraging local features), you'll need 2 gpus.
+
+Then, run the following command to kick off model training on multiple folds:
+
+`python3 train/survival_multi.py --config-name <survival_multi_fold_config_filename>`
 
 ## Resuming experiment after crash / bug
 
