@@ -1,4 +1,3 @@
-import os
 import datetime
 import time
 import json
@@ -11,10 +10,10 @@ from pathlib import Path
 from omegaconf import DictConfig
 from torchvision import datasets
 
-import vision_transformer as vits
+import source.vision_transformer as vits
 
-from .components import DINOLoss
-from .utils import (
+from components import DINOLoss
+from utils import (
     DataAugmentationDINO,
     MultiCropWrapper,
     train_one_epoch,
@@ -25,18 +24,24 @@ from .utils import (
     cosine_scheduler,
     get_world_size,
     restart_from_checkpoint,
-    save_on_master,
     is_main_process,
+    hydra_argv_remapper,
 )
 
 
-@hydra.main(version_base="1.2.0", config_path="config", config_name="dino")
+@hydra.main(version_base="1.2.0", config_path="../config", config_name="dino")
 def main(cfg: DictConfig):
 
-    init_distributed_mode(cfg)
+    distributed = (torch.cuda.device_count() > 1)
+    if distributed:
+        init_distributed_mode(cfg)
+
     fix_random_seeds(cfg.seed)
 
     cudnn.benchmark = True
+
+    output_dir = Path(cfg.output_dir, cfg.experiment_name)
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     # preparing data
     transform = DataAugmentationDINO(
@@ -57,11 +62,16 @@ def main(cfg: DictConfig):
     print(f"Data loaded: there are {len(dataset)} images.")
 
     # building student and teacher networks
-    student = vits.__dict__[cfg.arch](
+    # student = vits.__dict__[cfg.arch](
+    #     patch_size=cfg.patch_size,
+    #     drop_path_rate=cfg.drop_path_rate,  # stochastic depth
+    # )
+    # teacher = vits.__dict__[cfg.arch](patch_size=cfg.patch_size)
+    student = vits.vit_small(
         patch_size=cfg.patch_size,
-        drop_path_rate=cfg.drop_path_rate,  # stochastic depth
+        drop_path_rate=cfg.drop_path_rate,
     )
-    teacher = vits.__dict__[cfg.arch](patch_size=cfg.patch_size)
+    teacher = vits.vit_small(patch_size=cfg.patch_size)
     embed_dim = student.embed_dim
 
     # multi-crop wrapper handles forward with inputs of different resolutions
@@ -76,7 +86,11 @@ def main(cfg: DictConfig):
     )
     teacher = MultiCropWrapper(
         teacher,
-        vits.DINOHead(embed_dim, cfg.out_dim, cfg.use_bn_in_head),
+        vits.DINOHead(
+            embed_dim,
+            cfg.out_dim,
+            use_bn=cfg.use_bn_in_head,
+        ),
     )
 
     # move networks to gpu
@@ -102,55 +116,53 @@ def main(cfg: DictConfig):
     for p in teacher.parameters():
         p.requires_grad = False
 
-    crops_number = (
-        cfg.local_crops_number + 2
-    )  # total number of crops = 2 global crops + local_crops_number
+    # total number of crops = 2 global crops + local_crops_number
+    crops_number = cfg.local_crops_number + 2
     dino_loss = DINOLoss(
         cfg.out_dim,
         crops_number,
         cfg.warmup_teacher_temp,
         cfg.teacher_temp,
         cfg.warmup_teacher_temp_epochs,
-        cfg.epochs,
+        cfg.nepochs,
     ).cuda()
 
     params_groups = get_params_groups(student)
     if cfg.optimizer == "adamw":
-        optimizer = torch.optim.AdamW(params_groups)  # to use with ViTs
+        optimizer = torch.optim.AdamW(params_groups)
     elif cfg.optimizer == "sgd":
-        optimizer = torch.optim.SGD(
-            params_groups, lr=0, momentum=0.9
-        )  # lr is set by scheduler
+        # lr is set by scheduler
+        optimizer = torch.optim.SGD(params_groups, lr=0, momentum=0.9)
 
     # for mixed precision training
     fp16_scaler = None
     if cfg.use_fp16:
         fp16_scaler = torch.cuda.amp.GradScaler()
 
+    assert cfg.nepochs >= cfg.warmup_epochs, f"nepochs ({cfg.nepochs}) must be greater than or equal to warmup_epochs ({cfg.warmup_epochs})"
+    base_lr = cfg.lr * (cfg.batch_size_per_gpu * get_world_size()) / 256.0
     lr_schedule = cosine_scheduler(
-        cfg.lr
-        * (cfg.batch_size_per_gpu * get_world_size())
-        / 256.0,  # linear scaling rule
+        base_lr,
         cfg.min_lr,
-        cfg.epochs,
+        cfg.nepochs,
         len(data_loader),
         warmup_epochs=cfg.warmup_epochs,
     )
     wd_schedule = cosine_scheduler(
         cfg.weight_decay,
         cfg.weight_decay_end,
-        cfg.epochs,
+        cfg.nepochs,
         len(data_loader),
     )
     # momentum parameter is increased to 1. during training with a cosine schedule
     momentum_schedule = cosine_scheduler(
-        cfg.momentum_teacher, 1, cfg.epochs, len(data_loader)
+        cfg.momentum_teacher, 1, cfg.nepochs, len(data_loader)
     )
 
     # optionally resume training
     to_restore = {"epoch": 0}
     restart_from_checkpoint(
-        os.path.join(cfg.output_dir, "checkpoint.pth"),
+        Path(cfg.output_dir, "checkpoint.pth"),
         run_variables=to_restore,
         student=student,
         teacher=teacher,
@@ -161,7 +173,7 @@ def main(cfg: DictConfig):
 
     start_epoch = to_restore["epoch"]
     start_time = time.time()
-    for epoch in range(start_epoch, cfg.epochs):
+    for epoch in range(start_epoch, cfg.nepochs):
         data_loader.sampler.set_epoch(epoch)
 
         # training one epoch of DINO
@@ -188,24 +200,26 @@ def main(cfg: DictConfig):
             "teacher": teacher.state_dict(),
             "optimizer": optimizer.state_dict(),
             "epoch": epoch + 1,
+            "cfg": cfg,
             "dino_loss": dino_loss.state_dict(),
         }
 
         if fp16_scaler is not None:
             save_dict["fp16_scaler"] = fp16_scaler.state_dict()
-        save_on_master(save_dict, os.path.join(cfg.output_dir, "checkpoint.pth"))
+        if is_main_process():
+            save_path = Path(cfg.output_dir, "checkpoint.pth")
+            torch.save(save_dict, save_path)
 
-        if cfg.saveckp_freq and epoch % cfg.saveckp_freq == 0:
-            save_on_master(
-                save_dict, os.path.join(cfg.output_dir, f"checkpoint{epoch:04}.pth")
-            )
+        if cfg.saveckp_freq and epoch % cfg.saveckp_freq == 0 and is_main_process():
+            save_path = Path(cfg.output_dir, f"checkpoint{epoch:04}.pth")
+            torch.save(save_dict, save_path)
 
         log_stats = {
             **{f"train_{k}": v for k, v in train_stats.items()},
             "epoch": epoch,
         }
         if is_main_process():
-            with (Path(cfg.output_dir) / "log.txt").open("a") as f:
+            with open(Path(cfg.output_dir, "log.txt"), "a") as f:
                 f.write(json.dumps(log_stats) + "\n")
 
     total_time = time.time() - start_time
@@ -214,5 +228,13 @@ def main(cfg: DictConfig):
 
 
 if __name__ == "__main__":
+
+    # python3 -m torch.distributed.launch pre-train/dino.py --config-name 'dino'
+
+    m = {}
+    for i in range(torch.cuda.device_count()):
+        m_i = {f'--local_rank={i}': 'local_rank'}
+        m.update(m_i)
+    hydra_argv_remapper(m)
 
     main()

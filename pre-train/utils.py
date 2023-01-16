@@ -3,6 +3,7 @@ import sys
 import math
 import time
 import torch
+import torch.nn as nn
 import random
 import datetime
 import numpy as np
@@ -12,6 +13,29 @@ from pathlib import Path
 from torchvision import transforms
 from collections import defaultdict, deque
 from PIL import Image, ImageFilter, ImageOps
+
+
+def hydra_argv_remapper(argv_map):
+    '''
+    Call this function before main
+    argv_map is a dict that remaps specific args to something else that hydra will gracefully not choke on
+        ex: {'--foo':'standard.hydra.override.foo', '--bar':'example.bar'}
+    workaround hydra behaviour with command line flags
+    kindly given at: https://github.com/facebookresearch/hydra/issues/446#issuecomment-881031746
+    '''
+
+    argv = sys.argv
+
+    # Remap the args
+    for k in argv_map.keys():
+        if k in argv:
+            i = argv.index(k)
+            new_arg = f"{argv_map[k]}={argv[i].split('=')[-1]}"
+            argv.append(new_arg)
+            del argv[i]
+
+    # Replace sys.argv with our remapped argv
+    sys.argv = argv
 
 
 class GaussianBlur(object):
@@ -141,11 +165,6 @@ def get_rank():
 
 def is_main_process():
     return get_rank() == 0
-
-
-def save_on_master(*args, **kwargs):
-    if is_main_process():
-        torch.save(*args, **kwargs)
 
 
 class SmoothedValue(object):
@@ -320,6 +339,66 @@ class MetricLogger(object):
         )
 
 
+class MultiCropWrapper(nn.Module):
+    """
+    Perform forward pass separately on each resolution input.
+    The inputs corresponding to a single resolution are clubbed and single
+    forward is run on the same resolution inputs. Hence we do several
+    forward passes = number of different resolutions used. We then
+    concatenate all the output features and run the head forward on these
+    concatenated features.
+    """
+    def __init__(self, backbone, head):
+        super(MultiCropWrapper, self).__init__()
+        # disable layers dedicated to ImageNet labels classification
+        backbone.fc, backbone.head = nn.Identity(), nn.Identity()
+        self.backbone = backbone
+        self.head = head
+
+    def forward(self, x):
+        # convert to list
+        if not isinstance(x, list):
+            x = [x]
+        idx_crops = torch.cumsum(torch.unique_consecutive(
+            torch.tensor([inp.shape[-1] for inp in x]),
+            return_counts=True,
+        )[1], 0)
+        start_idx, output = 0, torch.empty(0).to(x[0].device)
+        for end_idx in idx_crops:
+            _out = self.backbone(torch.cat(x[start_idx: end_idx]))
+            # The output is a tuple with XCiT model. See:
+            # https://github.com/facebookresearch/xcit/blob/master/xcit.py#L404-L405
+            if isinstance(_out, tuple):
+                _out = _out[0]
+            # accumulate outputs
+            output = torch.cat((output, _out))
+            start_idx = end_idx
+        # Run the head forward on the concatenated features.
+        return self.head(output)
+
+
+def get_params_groups(model):
+    regularized = []
+    not_regularized = []
+    for name, param in model.named_parameters():
+        if not param.requires_grad:
+            continue
+        # we do not regularize biases nor Norm parameters
+        if name.endswith(".bias") or len(param.shape) == 1:
+            not_regularized.append(param)
+        else:
+            regularized.append(param)
+    return [{'params': regularized}, {'params': not_regularized, 'weight_decay': 0.}]
+
+
+def has_batchnorms(model):
+    bn_types = (nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d, nn.SyncBatchNorm)
+    for name, module in model.named_modules():
+        if isinstance(module, bn_types):
+            return True
+    return False
+
+
 def clip_gradients(model, clip):
     norms = []
     for name, p in model.named_parameters():
@@ -384,20 +463,20 @@ def restart_from_checkpoint(ckp_path, run_variables=None, **kwargs):
 
 
 def cosine_scheduler(
-    base_value, final_value, epochs, niter_per_ep, warmup_epochs=0, start_warmup_value=0
+    base_value, final_value, nepochs, niter_per_ep, warmup_epochs=0, start_warmup_value=0
 ):
     warmup_schedule = np.array([])
     warmup_iters = warmup_epochs * niter_per_ep
     if warmup_epochs > 0:
         warmup_schedule = np.linspace(start_warmup_value, base_value, warmup_iters)
 
-    iters = np.arange(epochs * niter_per_ep - warmup_iters)
+    iters = np.arange(nepochs * niter_per_ep - warmup_iters)
     schedule = final_value + 0.5 * (base_value - final_value) * (
         1 + np.cos(np.pi * iters / len(iters))
     )
 
     schedule = np.concatenate((warmup_schedule, schedule))
-    assert len(schedule) == epochs * niter_per_ep
+    assert len(schedule) == nepochs * niter_per_ep
     return schedule
 
 
@@ -427,6 +506,7 @@ def init_distributed_mode(cfg):
     elif "SLURM_PROCID" in os.environ:
         cfg.rank = int(os.environ["SLURM_PROCID"])
         cfg.gpu = cfg.rank % torch.cuda.device_count()
+        cfg.world_size = int(os.environ["SLURM_NTASKS"])
     # launched naively with `python main_dino.py`
     # we manually add MASTER_ADDR and MASTER_PORT to env variables
     elif torch.cuda.is_available():
