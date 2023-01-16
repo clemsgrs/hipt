@@ -1,6 +1,7 @@
 import os
 import sys
 import math
+import tqdm
 import time
 import torch
 import torch.nn as nn
@@ -306,7 +307,7 @@ class MetricLogger(object):
                 eta_seconds = iter_time.global_avg * (len(iterable) - i)
                 eta_string = str(datetime.timedelta(seconds=int(eta_seconds)))
                 if torch.cuda.is_available():
-                    print(
+                    tqdm.tqdm.write(
                         log_msg.format(
                             i,
                             len(iterable),
@@ -318,7 +319,7 @@ class MetricLogger(object):
                         )
                     )
                 else:
-                    print(
+                    tqdm.tqdm.write(
                         log_msg.format(
                             i,
                             len(iterable),
@@ -332,7 +333,7 @@ class MetricLogger(object):
             end = time.time()
         total_time = time.time() - start_time
         total_time_str = str(datetime.timedelta(seconds=int(total_time)))
-        print(
+        tqdm.tqdm.write(
             "{} Total time: {} ({:.6f} s / it)".format(
                 header, total_time_str, total_time / len(iterable)
             )
@@ -579,7 +580,7 @@ def train_one_epoch(
             loss = dino_loss(student_output, teacher_output, epoch)
 
         if not math.isfinite(loss.item()):
-            print("Loss is {}, stopping training".format(loss.item()), force=True)
+            tqdm.tqdm.write("Loss is {}, stopping training".format(loss.item()), force=True)
             sys.exit(1)
 
         # student update
@@ -618,5 +619,5 @@ def train_one_epoch(
 
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
-    print("Averaged stats:", metric_logger)
+    tqdm.tqdm.write("Averaged stats:", metric_logger)
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
