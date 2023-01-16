@@ -1,3 +1,7 @@
+data_path: 'data/tcga_brca_dino'
+output_dir: 'output/dino'
+experiment_name: 'debug'
+
 arch: 'vit_small'
 patch_size: 16
 out_dim: 65536 # dimensionality of the DINO head output. For complex and large datasets large values (like 65k) work well
@@ -15,8 +19,8 @@ use_fp16: True # whether or not to use half precision for training ; improves tr
 weight_decay: 0.04 # initial value of the weight decay ; with ViT, a smaller value at the beginning of training works well
 weight_decay_end: 0.4 # final value of the weight decay ; we use a cosine schedule for WD and using a larger decay by the end of training improves performance for ViTs
 clip_grad: 3.0 # maximal parameter gradient norm if using gradient clipping ; clipping with norm .3 ~ 1.0 can help optimization for larger ViT architectures. 0 for disabling
-batch_size_per_gpu: 64
-epochs: 100
+batch_size_per_gpu: 16
+nepochs: 12
 freeze_last_layer: 1 # number of epochs during which we keep the output layer fixed ; typically doing so during the first epoch helps training ; try increasing this value if the loss does not decrease
 lr: 0.0005 # learning rate at the end of linear warmup (highest LR used during training) ; the learning rate is linearly scaled with the batch size, and specified here for a reference batch size of 256
 warmup_epochs: 10 # number of epochs for the linear learning-rate warm up.
@@ -36,10 +40,13 @@ local_crops_scale:
   - 0.4
 
 # misc
-data_path: '/path/to/imagenet/train/'
-output_dir: 'output'
 saveckp_freq: 20 # save checkpoint every x epochs
 seed: 0
 num_workers: 10
 dist_url: "env://" # url used to set up distributed training; see https://pytorch.org/docs/stable/distributed.html
 local_rank: 0 # ignore and do not set this argument
+
+# ignore and do not set this argument
+rank:
+gpu:
+world_size:

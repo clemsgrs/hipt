@@ -17,6 +17,7 @@ from sklearn import metrics
 from sklearn.model_selection import train_test_split
 from sksurv.metrics import concordance_index_censored
 
+
 def write_dictconfig(d, f, child: bool = False, ntab=0):
     for k, v in d.items():
         if isinstance(v, dict):
