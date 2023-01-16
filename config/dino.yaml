@@ -1,6 +1,8 @@
 data_dir: 'data/tcga_brca_dino'
 output_dir: 'output/dino'
 experiment_name: 'debug'
+resume: False
+
 seed: 0
 
 model:
@@ -17,8 +19,8 @@ model:
 
 # training/optimization parameters
 training:
-  nepochs: 10
-  warmup_epochs: 10 # number of epochs for the linear learning-rate warm up.
+  nepochs: 2
+  warmup_epochs: 2 # number of epochs for the linear learning-rate warm up.
   freeze_last_layer: 1 # number of epochs during which we keep the output layer fixed ; typically doing so during the first epoch helps training ; try increasing this value if the loss does not decrease
   batch_size_per_gpu: 16
   clip_grad: 3.0 # maximal parameter gradient norm if using gradient clipping ; clipping with norm .3 ~ 1.0 can help optimization for larger ViT architectures. 0 for disabling

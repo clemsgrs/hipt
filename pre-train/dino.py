@@ -1,9 +1,11 @@
 import os
+import sys
 import tqdm
 import time
 import json
 import hydra
 import wandb
+import shutil
 import datetime
 import torch
 import torch.nn as nn
@@ -45,7 +47,12 @@ def main(cfg: DictConfig):
     cudnn.benchmark = True
 
     output_dir = Path(cfg.output_dir, cfg.experiment_name)
-    output_dir.mkdir(parents=True, exist_ok=True)
+    if not cfg.resume:
+        if output_dir.exists():
+            shutil.rmtree(output_dir)
+            output_dir.mkdir(parents=True)
+        else:
+            output_dir.mkdir(parents=True, exist_ok=True)
 
     # set up wandb
     if cfg.wandb.enable:
@@ -76,7 +83,7 @@ def main(cfg: DictConfig):
         patch_size=cfg.model.patch_size,
         drop_path_rate=cfg.model.drop_path_rate,
     )
-    teacher = vits.__dict__[cfg.model.arch](patch_size=cfg.patch_size)
+    teacher = vits.__dict__[cfg.model.arch](patch_size=cfg.model.patch_size)
     embed_dim = student.embed_dim
 
     # multi-crop wrapper handles forward with inputs of different resolutions
@@ -124,7 +131,7 @@ def main(cfg: DictConfig):
     # total number of crops = 2 global crops + local_crops_number
     crops_number = cfg.aug.local_crops_number + 2
     dino_loss = DINOLoss(
-        cfg.modle.out_dim,
+        cfg.model.out_dim,
         crops_number,
         cfg.model.warmup_teacher_temp,
         cfg.model.teacher_temp,
@@ -167,7 +174,7 @@ def main(cfg: DictConfig):
     # optionally resume training
     to_restore = {"epoch": 0}
     restart_from_checkpoint(
-        Path(cfg.output_dir, "checkpoint.pth"),
+        Path(output_dir, "checkpoint.pth"),
         run_variables=to_restore,
         student=student,
         teacher=teacher,
@@ -182,9 +189,10 @@ def main(cfg: DictConfig):
     with tqdm.tqdm(
         range(start_epoch, cfg.training.nepochs),
         desc=(f"DINO Pre-Training"),
-        unit=" patch",
+        unit=" epoch",
         ncols=100,
-        leave=True,
+        file=sys.stdout,
+        leave=False,
     ) as t:
 
         for epoch in t:
@@ -213,6 +221,14 @@ def main(cfg: DictConfig):
                 cfg.training.freeze_last_layer,
             )
 
+            lr = train_stats["lr"]
+            loss = lr = train_stats["loss"]
+            if cfg.wandb.enable:
+                wandb.define_metric("lr", step_metric="epoch")
+                wandb.define_metric("loss", step_metric="epoch")
+                wandb.log({"lr": lr})
+                wandb.log({"loss": loss})
+
             # writing logs
             save_dict = {
                 "student": student.state_dict(),
@@ -226,11 +242,11 @@ def main(cfg: DictConfig):
             if fp16_scaler is not None:
                 save_dict["fp16_scaler"] = fp16_scaler.state_dict()
             if is_main_process():
-                save_path = Path(cfg.output_dir, "checkpoint.pth")
+                save_path = Path(output_dir, "checkpoint.pth")
                 torch.save(save_dict, save_path)
 
             if cfg.logging.saveckp_freq and epoch % cfg.logging.saveckp_freq == 0 and is_main_process():
-                save_path = Path(cfg.output_dir, f"checkpoint{epoch:04}.pth")
+                save_path = Path(output_dir, f"checkpoint{epoch:04}.pth")
                 torch.save(save_dict, save_path)
 
             log_stats = {
@@ -238,7 +254,7 @@ def main(cfg: DictConfig):
                 "epoch": epoch,
             }
             if is_main_process():
-                with open(Path(cfg.output_dir, "log.txt"), "a") as f:
+                with open(Path(output_dir, "log.txt"), "a") as f:
                     f.write(json.dumps(log_stats) + "\n")
 
             epoch_end_time = time.time()

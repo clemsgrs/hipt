@@ -620,4 +620,5 @@ def train_one_epoch(
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
     tqdm.tqdm.write("Averaged stats:", metric_logger)
-    return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
+    train_stats = {k: meter.global_avg for k, meter in metric_logger.meters.items()}
+    return train_stats
