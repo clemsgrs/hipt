@@ -1,0 +1,63 @@
+data_dir: 'data/tcga_brca_dino'
+output_dir: 'output/dino'
+experiment_name: 'dino_4k'
+resume: False
+
+seed: 0
+
+model:
+  arch: 'vit4k_xs'
+  patch_size: 256
+  out_dim: 65536 # dimensionality of the DINO head output. For complex and large datasets large values (like 65k) work well
+  norm_last_layer: False # whether or not to weight normalize the last layer of the DINO head ; not normalizing leads to better performance but can make the training unstable.
+  momentum_teacher: 0.996 # base EMA parameter for teacher update. The value is increased to 1 during training with cosine schedule ; we recommend setting a higher value with small batches: for example use 0.9995 with batch size of 256
+  use_bn_in_head: False # whether to use batch normalizations in projection head
+  warmup_teacher_temp: 0.04 # initial value for the teacher temperature: 0.04 works well in most cases ; try decreasing it if the training loss does not decrease
+  teacher_temp: 0.04 # final value (after linear warmup) of the teacher temperature ; for most experiments, anything above 0.07 is unstable ; we recommend starting with the default value of 0.04 and increase this slightly if needed
+  warmup_teacher_temp_epochs: 0 # number of warmup epochs for the teacher temperature
+  drop_path_rate: 0.1 # stochastic depth rate
+
+# training/optimization parameters
+training:
+  nepochs: 10
+  warmup_epochs: 5 # number of epochs for the linear learning-rate warm up.
+  freeze_last_layer: 1 # number of epochs during which we keep the output layer fixed ; typically doing so during the first epoch helps training ; try increasing this value if the loss does not decrease
+  batch_size_per_gpu: 16
+  clip_grad: 3.0 # maximal parameter gradient norm if using gradient clipping ; clipping with norm .3 ~ 1.0 can help optimization for larger ViT architectures. 0 for disabling
+  pct: 0.01
+
+optim:
+  name: 'adamw' # type of optimizer ; we recommend using adamw with ViTs
+  lr: 0.0005 # learning rate at the end of linear warmup (highest LR used during training) ; the learning rate is linearly scaled with the batch size, and specified here for a reference batch size of 256
+  wd: 1e-5
+  lr_scheduler:
+    name: 'cosine'
+    min_lr: 1e-6 # target LR at the end of optimization ; we use a cosine LR schedule with linear warmup
+    weight_decay: 0.04 # initial value of the weight decay ; with ViT, a smaller value at the beginning of training works well
+    weight_decay_end: 0.4 # final value of the weight decay ; we use a cosine schedule for WD and using a larger decay by the end of training improves performance for ViTs
+
+aug:
+  local_crops_number: 8 # number of small local views to generate. Set this parameter to 0 to disable multi-crop training ; when disabling multi-crop we recommend to use global_crops_scale = (0.14, 1)
+
+speed:
+  use_fp16: True # whether or not to use half precision for training ; improves training time and memory requirements, but can provoke instability and slight decay of performance ; we recommend disabling mixed precision if the loss is unstable, if reducing the patch size or if training with bigger ViTs
+  num_workers: 10
+
+logging:
+  saveckp_freq: 20 # save checkpoint every x epochs
+
+wandb:
+  enable: False
+  project: 'hipt'
+  username: 'clemsg'
+  exp_name: 'dino_4k_${experiment_name}'
+  dir: '/home/user'
+  group:
+  to_log: ['loss']
+
+# ignore these argument
+rank:
+gpu:
+world_size:
+dist_url: "env://" # url used to set up distributed training; see https://pytorch.org/docs/stable/distributed.html
+local_rank: 0

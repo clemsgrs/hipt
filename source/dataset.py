@@ -396,3 +396,22 @@ class RegionFilepathsDataset(torch.utils.data.Dataset):
 
     def __len__(self):
         return len(self.df)
+
+
+class HierarchicalPretrainingDataset(torch.utils.data.Dataset):
+    def __init__(
+        self,
+        features_dir: Path,
+        transform: Callable,
+    ):
+        self.features_list = [Path(f).stem for f in features_dir.glob('*.pt')]
+        self.transform = transform
+
+    def __getitem__(self, idx: int):
+        f = torch.load(self.features_list[idx])
+        f = self.transform(f)
+        label = torch.zeros(1,1)
+        return f, label
+
+    def __len__(self):
+        return len(self.features_list)

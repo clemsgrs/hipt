@@ -81,6 +81,7 @@ class DINOLoss(nn.Module):
                 np.ones(nepochs - warmup_teacher_temp_epochs) * teacher_temp,
             )
         )
+        self.distributed = (torch.cuda.device_count() > 1)
 
     def forward(self, student_output, teacher_output, epoch):
         """
@@ -114,8 +115,11 @@ class DINOLoss(nn.Module):
         Update center used for teacher output.
         """
         batch_center = torch.sum(teacher_output, dim=0, keepdim=True)
-        dist.all_reduce(batch_center)
-        batch_center = batch_center / (len(teacher_output) * dist.get_world_size())
+        m = 1
+        if self.distributed:
+            dist.all_reduce(batch_center)
+            m = dist.get_world_size()
+        batch_center = batch_center / (len(teacher_output) * m)
 
         # ema update
         self.center = self.center * self.center_momentum + batch_center * (

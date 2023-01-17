@@ -103,7 +103,7 @@ class DataAugmentationDINO(object):
         self.global_transfo1 = transforms.Compose(
             [
                 transforms.RandomResizedCrop(
-                    224, scale=global_crops_scale, interpolation=Image.BICUBIC
+                    224, scale=global_crops_scale, interpolation=transforms.InterpolationMode.BICUBIC
                 ),
                 flip_and_color_jitter,
                 GaussianBlur(1.0),
@@ -114,7 +114,7 @@ class DataAugmentationDINO(object):
         self.global_transfo2 = transforms.Compose(
             [
                 transforms.RandomResizedCrop(
-                    224, scale=global_crops_scale, interpolation=Image.BICUBIC
+                    224, scale=global_crops_scale, interpolation=transforms.InterpolationMode.BICUBIC
                 ),
                 flip_and_color_jitter,
                 GaussianBlur(0.1),
@@ -127,7 +127,7 @@ class DataAugmentationDINO(object):
         self.local_transfo = transforms.Compose(
             [
                 transforms.RandomResizedCrop(
-                    96, scale=local_crops_scale, interpolation=Image.BICUBIC
+                    96, scale=local_crops_scale, interpolation=transforms.InterpolationMode.BICUBIC
                 ),
                 flip_and_color_jitter,
                 GaussianBlur(p=0.5),
@@ -137,6 +137,44 @@ class DataAugmentationDINO(object):
 
     def __call__(self, image):
         crops = []
+        crops.append(self.global_transfo1(image))
+        crops.append(self.global_transfo2(image))
+        for _ in range(self.local_crops_number):
+            crops.append(self.local_transfo(image))
+        return crops
+
+
+class DataAugmentationDINO4K(object):
+    """
+    Modified Data Augmentaton for DINO for 4K x 4K resolutions for performing local / global crops on features in image grid
+    """
+    def __init__(self, local_crops_number):
+        flip = transforms.Compose([
+            transforms.RandomHorizontalFlip(p=0.5),
+        ])
+
+        # first global crop
+        self.global_transfo1 = transforms.Compose([
+            transforms.RandomCrop(14),
+            transforms.RandomHorizontalFlip(p=0.5),
+        ])
+
+        # second global crop
+        self.global_transfo2 = transforms.Compose([
+            transforms.RandomCrop(14),
+            transforms.RandomHorizontalFlip(p=0.5),
+        ])
+
+        # transformation for the local small crops
+        self.local_crops_number = local_crops_number
+        self.local_transfo = transforms.Compose([
+            transforms.RandomCrop(6),
+            transforms.RandomHorizontalFlip(p=0.5),
+        ])
+
+    def __call__(self, image):
+        crops = []
+        image = image.unfold(0, 16, 16).transpose(0,1)
         crops.append(self.global_transfo1(image))
         crops.append(self.global_transfo2(image))
         for _ in range(self.local_crops_number):
@@ -527,9 +565,6 @@ def init_distributed_mode(cfg):
     )
 
     torch.cuda.set_device(cfg.gpu)
-    print(
-        "| distributed init (rank {}): {}".format(cfg.rank, cfg.dist_url), flush=True
-    )
     dist.barrier()
     setup_for_distributed(cfg.rank == 0)
 
@@ -560,65 +595,77 @@ def train_one_epoch(
     freeze_last_layer,
 ):
     metric_logger = MetricLogger(delimiter="  ")
-    header = "Epoch: [{}/{}]".format(epoch, nepochs)
-    for it, (images, _) in enumerate(metric_logger.log_every(data_loader, 10, header)):
-        # update weight decay and learning rate according to their schedule
-        it = len(data_loader) * epoch + it  # global training iteration
-        for i, param_group in enumerate(optimizer.param_groups):
-            param_group["lr"] = lr_schedule[it]
-            if i == 0:  # only the first group is regularized
-                param_group["weight_decay"] = wd_schedule[it]
+    with tqdm.tqdm(
+        data_loader,
+        desc=(f"Epoch [{epoch+1}/{nepochs}]"),
+        unit=" img",
+        ncols=80,
+        unit_scale=data_loader.batch_size,
+        leave=False,
+        file=sys.stdout,
+    ) as t:
+        for it, (images, _) in enumerate(t):
+            # update weight decay and learning rate according to their schedule
+            it = len(data_loader) * epoch + it  # global training iteration
+            for i, param_group in enumerate(optimizer.param_groups):
+                param_group["lr"] = lr_schedule[it]
+                if i == 0:  # only the first group is regularized
+                    param_group["weight_decay"] = wd_schedule[it]
 
-        # move images to gpu
-        images = [im.cuda(non_blocking=True) for im in images]
-        # teacher and student forward passes + compute dino loss
-        with torch.cuda.amp.autocast(fp16_scaler is not None):
-            teacher_output = teacher(
-                images[:2]
-            )  # only the 2 global views pass through the teacher
-            student_output = student(images)
-            loss = dino_loss(student_output, teacher_output, epoch)
+            # move images to gpu
+            images = [im.cuda(non_blocking=True) for im in images]
+            # teacher and student forward passes + compute dino loss
+            with torch.cuda.amp.autocast(fp16_scaler is not None):
+                teacher_output = teacher(
+                    images[:2]
+                )  # only the 2 global views pass through the teacher
+                student_output = student(images)
+                loss = dino_loss(student_output, teacher_output, epoch)
 
-        if not math.isfinite(loss.item()):
-            tqdm.tqdm.write("Loss is {}, stopping training".format(loss.item()), force=True)
-            sys.exit(1)
+            if not math.isfinite(loss.item()):
+                tqdm.tqdm.write("Loss is {}, stopping training".format(loss.item()), force=True)
+                sys.exit(1)
 
-        # student update
-        optimizer.zero_grad()
-        param_norms = None
-        if fp16_scaler is None:
-            loss.backward()
-            if clip_grad:
-                param_norms = clip_gradients(student, clip_grad)
-            cancel_gradients_last_layer(epoch, student, freeze_last_layer)
-            optimizer.step()
-        else:
-            fp16_scaler.scale(loss).backward()
-            if clip_grad:
-                fp16_scaler.unscale_(
-                    optimizer
-                )  # unscale the gradients of optimizer's assigned params in-place
-                param_norms = clip_gradients(student, clip_grad)
-            cancel_gradients_last_layer(epoch, student, freeze_last_layer)
-            fp16_scaler.step(optimizer)
-            fp16_scaler.update()
+            # student update
+            optimizer.zero_grad()
+            param_norms = None
+            if fp16_scaler is None:
+                loss.backward()
+                if clip_grad:
+                    param_norms = clip_gradients(student, clip_grad)
+                cancel_gradients_last_layer(epoch, student, freeze_last_layer)
+                optimizer.step()
+            else:
+                fp16_scaler.scale(loss).backward()
+                if clip_grad:
+                    fp16_scaler.unscale_(
+                        optimizer
+                    )  # unscale the gradients of optimizer's assigned params in-place
+                    param_norms = clip_gradients(student, clip_grad)
+                cancel_gradients_last_layer(epoch, student, freeze_last_layer)
+                fp16_scaler.step(optimizer)
+                fp16_scaler.update()
 
-        # EMA update for the teacher
-        with torch.no_grad():
-            m = momentum_schedule[it]  # momentum parameter
-            for param_q, param_k in zip(
-                student.module.parameters(), teacher_without_ddp.parameters()
-            ):
-                param_k.data.mul_(m).add_((1 - m) * param_q.detach().data)
+            # EMA update for the teacher
+            with torch.no_grad():
+                m = momentum_schedule[it]  # momentum parameter
+                if (torch.cuda.device_count() > 1):
+                    student_params = student.module.parameters()
+                else:
+                    student_params = student.parameters()
+                for param_q, param_k in zip(
+                    student_params, teacher_without_ddp.parameters()
+                ):
+                    param_k.data.mul_(m).add_((1 - m) * param_q.detach().data)
 
-        # logging
-        torch.cuda.synchronize()
-        metric_logger.update(loss=loss.item())
-        metric_logger.update(lr=optimizer.param_groups[0]["lr"])
-        metric_logger.update(wd=optimizer.param_groups[0]["weight_decay"])
+            # logging
+            torch.cuda.synchronize()
+            metric_logger.update(loss=loss.item())
+            metric_logger.update(lr=optimizer.param_groups[0]["lr"])
+            metric_logger.update(wd=optimizer.param_groups[0]["weight_decay"])
 
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
-    tqdm.tqdm.write("Averaged stats:", metric_logger)
+    # print("Averaged stats:", metric_logger)
     train_stats = {k: meter.global_avg for k, meter in metric_logger.meters.items()}
     return train_stats
