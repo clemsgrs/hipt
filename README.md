@@ -1,7 +1,7 @@
 <h1 align="center">Hierarchical Image Pyramid Transformer</h2>
 
 
-Re-implementation of original [HIPT](https://github.com/mahmoodlab/HIPT) code. 
+Re-implementation of original [HIPT](https://github.com/mahmoodlab/HIPT) code.
 
 <p>
    <a href="https://github.com/psf/black"><img alt="empty" src=https://img.shields.io/badge/code%20style-black-000000.svg></a>
@@ -49,18 +49,18 @@ Then run the following command to kick off feature extraction:
 
 `python3 extract_features.py --config-name <feature_extraction_config_filename>`
 
-This will produce one .pt file per slide and save it under `output/<dataset_name>/<experiment_name>/<level>/`:
+This will produce one .pt file per slide and save it under `output/<experiment_name>/<level>/`:
 
 ```
 hipt/
-├── output/<dataset_name>/<experiment_name>/
+├── output/<experiment_name>/
 │     └── level/
 │          ├── slide_1.pt
 │          ├── slide_2.pt
 │          └── ...
 ```
 
-## Step-by-Step Guide 
+## Step-by-Step Guide
 
 **1. Prepare `train.csv` and `tune.csv`**
 
@@ -80,8 +80,8 @@ If you want to run testing at the end, you can provide a `test.csv` file.
 
 Once features have been extracted, create a configuration file under:
 
-- `config/training/subtyping` for training a subtyping model 
-- `config/training/survival` for training a survival model 
+- `config/training/subtyping` for training a subtyping model
+- `config/training/survival` for training a survival model
 
 You can take inspiration from `single.yaml` files.<br>
 Dump in there the paths to your `train.csv` and `tune.csv` files.<br>
@@ -111,8 +111,8 @@ fold_dir/
 
 Create a configuration file under:
 
-- `config/training/subtyping` for training a subtyping model 
-- `config/training/survival` for training a survival model 
+- `config/training/subtyping` for training a subtyping model
+- `config/training/survival` for training a survival model
 
 You can take inspiration from `multi.yaml` files.<br>
 Remember to indicate the root directory where your folds are located under `data.fold_dir`.<br>

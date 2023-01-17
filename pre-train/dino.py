@@ -6,6 +6,7 @@ import json
 import hydra
 import wandb
 import shutil
+import random
 import datetime
 import torch
 import torch.nn as nn
@@ -66,8 +67,17 @@ def main(cfg: DictConfig):
         cfg.aug.local_crops_scale,
         cfg.aug.local_crops_number,
     )
+
     dataset = datasets.ImageFolder(cfg.data_dir, transform=transform)
-    sampler = torch.utils.data.DistributedSampler(dataset, shuffle=True)
+    if cfg.training.pct:
+        print(f"Pre-training on {cfg.training.pct*100}% of the data")
+        nsample = int(cfg.training.pct*len(dataset))
+        idxs = random.sample(range(len(dataset)), k=nsample)
+        dataset = torch.utils.data.Subset(dataset, idxs)
+
+    sampler = torch.utils.data.RandomSampler(dataset)
+    if distributed:
+        sampler = torch.utils.data.DistributedSampler(dataset, shuffle=True)
     data_loader = torch.utils.data.DataLoader(
         dataset,
         sampler=sampler,
@@ -109,20 +119,23 @@ def main(cfg: DictConfig):
     student, teacher = student.cuda(), teacher.cuda()
 
     # synchronize batch norms (if any)
-    if has_batchnorms(student):
+    if has_batchnorms(student) and distributed:
+        # we need DDP wrapper to have synchro batch norms working...
         student = nn.SyncBatchNorm.convert_sync_batchnorm(student)
         teacher = nn.SyncBatchNorm.convert_sync_batchnorm(teacher)
-        # we need DDP wrapper to have synchro batch norms working...
         teacher = nn.parallel.DistributedDataParallel(teacher, device_ids=[cfg.gpu])
         teacher_without_ddp = teacher.module
     else:
         # teacher_without_ddp and teacher are the same thing
         teacher_without_ddp = teacher
 
-    student = nn.parallel.DistributedDataParallel(student, device_ids=[cfg.gpu])
+    if distributed:
+        student = nn.parallel.DistributedDataParallel(student, device_ids=[cfg.gpu])
 
     # teacher and student start with the same weights
-    teacher_without_ddp.load_state_dict(student.module.state_dict())
+    student_sd = student.state_dict()
+    nn.modules.utils.consume_prefix_in_state_dict_if_present(student_sd, "module.")
+    teacher_without_ddp.load_state_dict(student_sd)
 
     # there is no backpropagation through the teacher, so no need for gradients
     for p in teacher.parameters():
@@ -140,11 +153,7 @@ def main(cfg: DictConfig):
     ).cuda()
 
     params_groups = get_params_groups(student)
-    if cfg.optim.name == "adamw":
-        optimizer = torch.optim.AdamW(params_groups)
-    elif cfg.optim.name == "sgd":
-        # lr is set by scheduler
-        optimizer = torch.optim.SGD(params_groups, lr=0, momentum=0.9)
+    optimizer = torch.optim.AdamW(params_groups)
 
     # for mixed precision training
     fp16_scaler = None
@@ -191,8 +200,8 @@ def main(cfg: DictConfig):
         desc=(f"DINO Pre-Training"),
         unit=" epoch",
         ncols=100,
+        leave=True,
         file=sys.stdout,
-        leave=False,
     ) as t:
 
         for epoch in t:
@@ -201,7 +210,8 @@ def main(cfg: DictConfig):
             if cfg.wandb.enable:
                 wandb.log({"epoch": epoch + 1})
 
-            data_loader.sampler.set_epoch(epoch)
+            if distributed:
+                data_loader.sampler.set_epoch(epoch)
 
             # training one epoch of DINO
             train_stats = train_one_epoch(
@@ -246,7 +256,7 @@ def main(cfg: DictConfig):
                 torch.save(save_dict, save_path)
 
             if cfg.logging.saveckp_freq and epoch % cfg.logging.saveckp_freq == 0 and is_main_process():
-                save_path = Path(output_dir, f"checkpoint{epoch:04}.pth")
+                save_path = Path(output_dir, f"checkpoint_{epoch:03}.pth")
                 torch.save(save_dict, save_path)
 
             log_stats = {
@@ -260,7 +270,7 @@ def main(cfg: DictConfig):
             epoch_end_time = time.time()
             epoch_mins, epoch_secs = compute_time(epoch_start_time, epoch_end_time)
             tqdm.tqdm.write(
-                f"End of epoch {epoch+1} / {cfg.training.nepochs} \t Time Taken:  {epoch_mins}m {epoch_secs}s"
+                f"End of epoch {epoch+1}/{cfg.training.nepochs} \t Time Taken:  {epoch_mins}m {epoch_secs}s"
             )
 
     total_time = time.time() - start_time
@@ -271,6 +281,7 @@ def main(cfg: DictConfig):
 if __name__ == "__main__":
 
     # python3 -m torch.distributed.launch pre-train/dino.py --config-name 'dino'
+    # torchrun pre-train/dino.py --config-name 'dino'
 
     m = {}
     for i in range(torch.cuda.device_count()):
