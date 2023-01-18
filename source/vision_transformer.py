@@ -224,7 +224,7 @@ class VisionTransformer(nn.Module):
     ):
 
         super().__init__()
-        self.num_features = self.embed_dim = embed_dim
+        self.embed_dim = embed_dim
 
         self.patch_embed = PatchEmbed(
             img_size=img_size,
@@ -428,7 +428,8 @@ class VisionTransformer4K(nn.Module):
     ):
 
         super().__init__()
-        embed_dim = output_embed_dim
+        self.embed_dim = output_embed_dim
+
         self.phi = nn.Sequential(
             *[
                 nn.Linear(input_embed_dim, output_embed_dim),
@@ -441,8 +442,8 @@ class VisionTransformer4K(nn.Module):
             f"Number of [{patch_size},{patch_size}] patches in [{img_size},{img_size}] image: {num_patches}"
         )
 
-        self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
-        self.pos_embed = nn.Parameter(torch.zeros(1, num_patches + 1, embed_dim))
+        self.cls_token = nn.Parameter(torch.zeros(1, 1, self.embed_dim))
+        self.pos_embed = nn.Parameter(torch.zeros(1, num_patches + 1, self.embed_dim))
         self.pos_drop = nn.Dropout(p=drop_rate)
 
         dpr = [
@@ -451,7 +452,7 @@ class VisionTransformer4K(nn.Module):
         self.blocks = nn.ModuleList(
             [
                 Block(
-                    dim=embed_dim,
+                    dim=self.embed_dim,
                     num_heads=num_heads,
                     mlp_ratio=mlp_ratio,
                     qkv_bias=qkv_bias,
@@ -464,11 +465,11 @@ class VisionTransformer4K(nn.Module):
                 for i in range(depth)
             ]
         )
-        self.norm = norm_layer(embed_dim)
+        self.norm = norm_layer(self.embed_dim)
 
         # Classifier head
         self.head = (
-            nn.Linear(embed_dim, num_classes) if num_classes > 0 else nn.Identity()
+            nn.Linear(self.embed_dim, num_classes) if num_classes > 0 else nn.Identity()
         )
 
         trunc_normal_(self.pos_embed, std=0.02)
@@ -566,6 +567,7 @@ def vit4k_xs(
     input_embed_dim: int = 384,
     output_embed_dim: int = 192,
     num_classes: int = 0,
+    **kwargs,
 ):
     model = VisionTransformer4K(
         num_classes=num_classes,
@@ -578,6 +580,7 @@ def vit4k_xs(
         mlp_ratio=4,
         qkv_bias=True,
         norm_layer=partial(nn.LayerNorm, eps=1e-6),
+        **kwargs,
     )
     return model
 

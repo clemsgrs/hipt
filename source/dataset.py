@@ -401,10 +401,10 @@ class RegionFilepathsDataset(torch.utils.data.Dataset):
 class HierarchicalPretrainingDataset(torch.utils.data.Dataset):
     def __init__(
         self,
-        features_dir: Path,
+        features_dir: str,
         transform: Callable,
     ):
-        self.features_list = [Path(f).stem for f in features_dir.glob('*.pt')]
+        self.features_list = [f for f in Path(features_dir).glob('*.pt')]
         self.transform = transform
 
     def __getitem__(self, idx: int):

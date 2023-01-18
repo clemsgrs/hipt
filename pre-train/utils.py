@@ -135,12 +135,12 @@ class DataAugmentationDINO(object):
             ]
         )
 
-    def __call__(self, image):
+    def __call__(self, x):
         crops = []
-        crops.append(self.global_transfo1(image))
-        crops.append(self.global_transfo2(image))
+        crops.append(self.global_transfo1(x))
+        crops.append(self.global_transfo2(x))
         for _ in range(self.local_crops_number):
-            crops.append(self.local_transfo(image))
+            crops.append(self.local_transfo(x))
         return crops
 
 
@@ -172,13 +172,13 @@ class DataAugmentationDINO4K(object):
             transforms.RandomHorizontalFlip(p=0.5),
         ])
 
-    def __call__(self, image):
+    def __call__(self, x):
         crops = []
-        image = image.unfold(0, 16, 16).transpose(0,1)
-        crops.append(self.global_transfo1(image))
-        crops.append(self.global_transfo2(image))
+        x = x.unfold(0, 16, 16).transpose(0, 1) # [256, 384] -> [16, 384, 16] -> [384, 16, 16]
+        crops.append(self.global_transfo1(x))
+        crops.append(self.global_transfo2(x))
         for _ in range(self.local_crops_number):
-            crops.append(self.local_transfo(image))
+            crops.append(self.local_transfo(x))
         return crops
 
 
