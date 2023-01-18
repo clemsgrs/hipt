@@ -232,7 +232,7 @@ def main(cfg: DictConfig):
             )
 
             lr = train_stats["lr"]
-            loss = lr = train_stats["loss"]
+            loss = train_stats["loss"]
             if cfg.wandb.enable:
                 wandb.define_metric("lr", step_metric="epoch")
                 wandb.define_metric("loss", step_metric="epoch")

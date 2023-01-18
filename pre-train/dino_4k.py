@@ -36,7 +36,7 @@ from utils import (
 )
 
 
-@hydra.main(version_base="1.2.0", config_path="../config", config_name="dino_4k")
+@hydra.main(version_base="1.2.0", config_path="../config/pre-train", config_name="dino_4k")
 def main(cfg: DictConfig):
 
     distributed = (torch.cuda.device_count() > 1)
@@ -88,11 +88,11 @@ def main(cfg: DictConfig):
     print(f"Data loaded: there are {len(dataset)} images.")
 
     # building student and teacher networks
-    student = vits.__dict__[cfg.arch](
+    student = vits.__dict__[cfg.model.arch](
         patch_size=cfg.model.patch_size,
         drop_path_rate=cfg.model.drop_path_rate,
     )
-    teacher = vits.__dict__[cfg.arch](patch_size=cfg.model.patch_size)
+    teacher = vits.__dict__[cfg.model.arch](patch_size=cfg.model.patch_size)
     embed_dim = student.embed_dim
 
     # multi-crop wrapper handles forward with inputs of different resolutions
@@ -156,7 +156,7 @@ def main(cfg: DictConfig):
 
     # for mixed precision training
     fp16_scaler = None
-    if cfg.use_fp16:
+    if cfg.speed.use_fp16:
         fp16_scaler = torch.cuda.amp.GradScaler()
 
     assert cfg.training.nepochs >= cfg.training.warmup_epochs, f"nepochs ({cfg.training.nepochs}) must be greater than or equal to warmup_epochs ({cfg.training.warmup_epochs})"
@@ -176,7 +176,7 @@ def main(cfg: DictConfig):
     )
     # momentum parameter is increased to 1. during training with a cosine schedule
     momentum_schedule = cosine_scheduler(
-        cfg.momentum_teacher,
+        cfg.model.momentum_teacher,
         1,
         cfg.training.nepochs,
         len(data_loader),
@@ -184,15 +184,16 @@ def main(cfg: DictConfig):
 
     # optionally resume training
     to_restore = {"epoch": 0}
-    restart_from_checkpoint(
-        Path(output_dir, "checkpoint.pth"),
-        run_variables=to_restore,
-        student=student,
-        teacher=teacher,
-        optimizer=optimizer,
-        fp16_scaler=fp16_scaler,
-        dino_loss=dino_loss,
-    )
+    if cfg.resume:
+        restart_from_checkpoint(
+            Path(output_dir, "checkpoint.pth"),
+            run_variables=to_restore,
+            student=student,
+            teacher=teacher,
+            optimizer=optimizer,
+            fp16_scaler=fp16_scaler,
+            dino_loss=dino_loss,
+        )
 
     start_epoch = to_restore["epoch"]
     start_time = time.time()
@@ -234,7 +235,7 @@ def main(cfg: DictConfig):
             )
 
             lr = train_stats["lr"]
-            loss = lr = train_stats["loss"]
+            loss = train_stats["loss"]
             if cfg.wandb.enable:
                 wandb.define_metric("lr", step_metric="epoch")
                 wandb.define_metric("loss", step_metric="epoch")
@@ -282,8 +283,8 @@ def main(cfg: DictConfig):
 
 if __name__ == '__main__':
 
-    # python3 -m torch.distributed.launch pre-train/dino.py --config-name 'dino'
-    # torchrun pre-train/dino.py --config-name 'dino'
+    # python3 -m torch.distributed.launch pre-train/dino_4k.py --config-name 'dino_4k'
+    # torchrun pre-train/dino_4k.py --config-name 'dino_4k'
 
     m = {}
     for i in range(torch.cuda.device_count()):
