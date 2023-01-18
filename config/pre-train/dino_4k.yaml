@@ -1,4 +1,4 @@
-data_dir: 'data/tcga_brca_dino'
+data_dir: 'data/tcga_brca_dino/region_4k_pretraining'
 output_dir: 'output/dino'
 experiment_name: 'dino_4k'
 resume: False
@@ -22,9 +22,9 @@ training:
   nepochs: 10
   warmup_epochs: 5 # number of epochs for the linear learning-rate warm up.
   freeze_last_layer: 1 # number of epochs during which we keep the output layer fixed ; typically doing so during the first epoch helps training ; try increasing this value if the loss does not decrease
-  batch_size_per_gpu: 16
+  batch_size_per_gpu: 1
   clip_grad: 3.0 # maximal parameter gradient norm if using gradient clipping ; clipping with norm .3 ~ 1.0 can help optimization for larger ViT architectures. 0 for disabling
-  pct: 0.01
+  pct:
 
 optim:
   name: 'adamw' # type of optimizer ; we recommend using adamw with ViTs
@@ -44,13 +44,13 @@ speed:
   num_workers: 10
 
 logging:
-  saveckp_freq: 20 # save checkpoint every x epochs
+  saveckp_freq: 10 # save checkpoint every x epochs
 
 wandb:
-  enable: False
+  enable: True
   project: 'hipt'
   username: 'clemsg'
-  exp_name: 'dino_4k_${experiment_name}'
+  exp_name: '${experiment_name}'
   dir: '/home/user'
   group:
   to_log: ['loss']
