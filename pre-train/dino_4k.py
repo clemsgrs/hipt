@@ -211,7 +211,7 @@ def main(cfg: DictConfig):
 
             epoch_start_time = time.time()
             if cfg.wandb.enable:
-                wandb.log({"epoch": epoch + 1})
+                wandb.log({"epoch": epoch})
 
             if distributed:
                 data_loader.sampler.set_epoch(epoch)
@@ -247,7 +247,7 @@ def main(cfg: DictConfig):
                 "student": student.state_dict(),
                 "teacher": teacher.state_dict(),
                 "optimizer": optimizer.state_dict(),
-                "epoch": epoch + 1,
+                "epoch": epoch,
                 "cfg": cfg,
                 "dino_loss": dino_loss.state_dict(),
             }
@@ -258,7 +258,7 @@ def main(cfg: DictConfig):
                 save_path = Path(output_dir, "checkpoint.pth")
                 torch.save(save_dict, save_path)
 
-            if cfg.logging.saveckp_freq and epoch % cfg.logging.saveckp_freq == 0 and is_main_process():
+            if cfg.logging.save_ckpt_every and epoch % cfg.logging.save_ckpt_every == 0 and is_main_process():
                 save_path = Path(output_dir, f"checkpoint_{epoch:03}.pth")
                 torch.save(save_dict, save_path)
 
@@ -283,7 +283,7 @@ def main(cfg: DictConfig):
 
 if __name__ == '__main__':
 
-    # python3 -m torch.distributed.launch pre-train/dino_4k.py --config-name 'dino_4k'
+    # python3 pre-train/dino_4k.py --config-name 'dino_4k'
     # torchrun pre-train/dino_4k.py --config-name 'dino_4k'
 
     m = {}

@@ -438,9 +438,9 @@ class VisionTransformer4K(nn.Module):
             ]
         )
         num_patches = int(img_size // patch_size) ** 2
-        print(
-            f"Number of [{patch_size},{patch_size}] patches in [{img_size},{img_size}] image: {num_patches}"
-        )
+        # print(
+        #     f"Number of [{patch_size},{patch_size}] patches in [{img_size},{img_size}] image: {num_patches}"
+        # )
 
         self.cls_token = nn.Parameter(torch.zeros(1, 1, self.embed_dim))
         self.pos_embed = nn.Parameter(torch.zeros(1, num_patches + 1, self.embed_dim))

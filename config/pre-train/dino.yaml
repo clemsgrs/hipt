@@ -52,7 +52,7 @@ speed:
   num_workers: 4
 
 logging:
-  saveckp_freq: 10 # save checkpoint every x epochs
+  save_ckpt_every: 10 # save checkpoint every x epochs
 
 wandb:
   enable: True
