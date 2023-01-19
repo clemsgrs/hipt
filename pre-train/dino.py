@@ -182,15 +182,17 @@ def main(cfg: DictConfig):
 
     # optionally resume training
     to_restore = {"epoch": 0}
-    restart_from_checkpoint(
-        Path(output_dir, "checkpoint.pth"),
-        run_variables=to_restore,
-        student=student,
-        teacher=teacher,
-        optimizer=optimizer,
-        fp16_scaler=fp16_scaler,
-        dino_loss=dino_loss,
-    )
+    if cfg.resume:
+        ckpt_path = Path(output_dir, cfg.resume_from_ckpt)
+        restart_from_checkpoint(
+            ckpt_path,
+            run_variables=to_restore,
+            student=student,
+            teacher=teacher,
+            optimizer=optimizer,
+            fp16_scaler=fp16_scaler,
+            dino_loss=dino_loss,
+        )
 
     start_epoch = to_restore["epoch"]
     start_time = time.time()
@@ -208,7 +210,7 @@ def main(cfg: DictConfig):
 
             epoch_start_time = time.time()
             if cfg.wandb.enable:
-                wandb.log({"epoch": epoch})
+                wandb.log({"epoch": epoch+1})
 
             if distributed:
                 data_loader.sampler.set_epoch(epoch)
@@ -252,7 +254,7 @@ def main(cfg: DictConfig):
             if fp16_scaler is not None:
                 save_dict["fp16_scaler"] = fp16_scaler.state_dict()
             if is_main_process():
-                save_path = Path(output_dir, "checkpoint.pth")
+                save_path = Path(output_dir, "latest.pth")
                 torch.save(save_dict, save_path)
 
             if cfg.logging.save_ckpt_every and epoch % cfg.logging.save_ckpt_every == 0 and is_main_process():
@@ -280,7 +282,7 @@ def main(cfg: DictConfig):
 
 if __name__ == "__main__":
 
-    # python3 -m torch.distributed.launch pre-train/dino.py --config-name 'dino'
+    # python3 pre-train/dino.py --config-name 'dino'
     # torchrun pre-train/dino.py --config-name 'dino'
 
     m = {}

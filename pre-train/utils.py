@@ -458,16 +458,16 @@ def cancel_gradients_last_layer(epoch, model, freeze_last_layer):
             p.grad = None
 
 
-def restart_from_checkpoint(ckp_path, run_variables=None, **kwargs):
+def restart_from_checkpoint(ckpt_path, run_variables=None, **kwargs):
     """
     Re-start from checkpoint
     """
-    if not Path(ckp_path).is_file():
+    if not Path(ckpt_path).is_file():
         return
-    print("Found checkpoint at {}".format(ckp_path))
+    print("Found checkpoint at {}".format(ckpt_path))
 
     # open checkpoint file
-    checkpoint = torch.load(ckp_path, map_location="cpu")
+    checkpoint = torch.load(ckpt_path, map_location="cpu")
 
     # key is what to look for in the checkpoint file
     # value is the object to load
@@ -478,21 +478,21 @@ def restart_from_checkpoint(ckp_path, run_variables=None, **kwargs):
                 msg = value.load_state_dict(checkpoint[key], strict=False)
                 print(
                     "=> loaded '{}' from checkpoint '{}' with msg {}".format(
-                        key, ckp_path, msg
+                        key, ckpt_path, msg
                     )
                 )
             except TypeError:
                 try:
                     msg = value.load_state_dict(checkpoint[key])
-                    print("=> loaded '{}' from checkpoint: '{}'".format(key, ckp_path))
+                    print("=> loaded '{}' from checkpoint: '{}'".format(key, ckpt_path))
                 except ValueError:
                     print(
                         "=> failed to load '{}' from checkpoint: '{}'".format(
-                            key, ckp_path
+                            key, ckpt_path
                         )
                     )
         else:
-            print("=> key '{}' not found in checkpoint: '{}'".format(key, ckp_path))
+            print("=> key '{}' not found in checkpoint: '{}'".format(key, ckpt_path))
 
     # re load variable important for the run
     if run_variables is not None:

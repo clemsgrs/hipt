@@ -1,7 +1,9 @@
 data_dir: 'data/tcga_brca_dino/region_4k_pretraining'
 output_dir: 'output/dino'
 experiment_name: 'dino_4k'
+
 resume: False
+resume_from_ckpt: 'latest'
 
 seed: 0
 
