@@ -9,6 +9,7 @@ seed: 0
 
 model:
   arch: 'vit4k_xs'
+  region_size: 4096
   patch_size: 256
   out_dim: 65536 # dimensionality of the DINO head output. For complex and large datasets large values (like 65k) work well
   norm_last_layer: False # whether or not to weight normalize the last layer of the DINO head ; not normalizing leads to better performance but can make the training unstable.
@@ -39,7 +40,9 @@ optim:
     weight_decay_end: 0.4 # final value of the weight decay ; we use a cosine schedule for WD and using a larger decay by the end of training improves performance for ViTs
 
 aug:
+  global_crops_scale: 0.875
   local_crops_number: 8 # number of small local views to generate. Set this parameter to 0 to disable multi-crop training ; when disabling multi-crop we recommend to use global_crops_scale = (0.14, 1)
+  local_crops_scale: 0.375
 
 speed:
   use_fp16: True # whether or not to use half precision for training ; improves training time and memory requirements, but can provoke instability and slight decay of performance ; we recommend disabling mixed precision if the loss is unstable, if reducing the patch size or if training with bigger ViTs

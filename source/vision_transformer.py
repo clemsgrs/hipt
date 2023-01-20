@@ -184,19 +184,13 @@ class Block(nn.Module):
 class PatchEmbed(nn.Module):
     """Image to Patch Embedding"""
 
-    def __init__(self, img_size=224, patch_size=16, in_chans=3, embed_dim=768):
+    def __init__(self, patch_size=16, in_chans=3, embed_dim=768):
         super().__init__()
-        num_patches = (img_size // patch_size) * (img_size // patch_size)
-        self.img_size = img_size
-        self.patch_size = patch_size
-        self.num_patches = num_patches
-
         self.proj = nn.Conv2d(
             in_chans, embed_dim, kernel_size=patch_size, stride=patch_size
         )
 
     def forward(self, x):
-        B, C, H, W = x.shape
         x = x.to(torch.float32)
         x = self.proj(x).flatten(2).transpose(1, 2)
         return x
@@ -207,32 +201,32 @@ class VisionTransformer(nn.Module):
 
     def __init__(
         self,
-        img_size=224,
-        patch_size=16,
-        in_chans=3,
-        num_classes=0,
-        embed_dim=768,
-        depth=12,
-        num_heads=12,
-        mlp_ratio=4.0,
-        qkv_bias=False,
-        qk_scale=None,
-        drop_rate=0.0,
-        attn_drop_rate=0.0,
-        drop_path_rate=0.0,
-        norm_layer=nn.LayerNorm,
+        img_size: int = 224,
+        patch_size: int = 16,
+        in_chans: int = 3,
+        num_classes: int = 0,
+        embed_dim: int = 768,
+        depth: int = 12,
+        num_heads: int = 12,
+        mlp_ratio: float = 4.0,
+        qkv_bias: bool = False,
+        qk_scale: Optional[float] = None,
+        drop_rate: float = 0.0,
+        attn_drop_rate: float = 0.0,
+        drop_path_rate: float = 0.0,
+        norm_layer: Callable = nn.LayerNorm,
     ):
 
         super().__init__()
         self.embed_dim = embed_dim
 
+        num_patches = int(img_size // patch_size) ** 2
+
         self.patch_embed = PatchEmbed(
-            img_size=img_size,
             patch_size=patch_size,
             in_chans=in_chans,
             embed_dim=embed_dim,
         )
-        num_patches = self.patch_embed.num_patches
 
         self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
         self.pos_embed = nn.Parameter(torch.zeros(1, num_patches + 1, embed_dim))
@@ -412,8 +406,9 @@ class VisionTransformer4K(nn.Module):
     def __init__(
         self,
         num_classes: int = 0,
-        img_size: int = 3584,
+        img_size: int = 4096,
         patch_size: int = 256,
+        dino_max_crop_scale: float = 0.875,
         input_embed_dim: int = 384,
         output_embed_dim: int = 192,
         depth: int = 12,
@@ -437,10 +432,7 @@ class VisionTransformer4K(nn.Module):
                 nn.Dropout(p=drop_rate),
             ]
         )
-        num_patches = int(img_size // patch_size) ** 2
-        # print(
-        #     f"Number of [{patch_size},{patch_size}] patches in [{img_size},{img_size}] image: {num_patches}"
-        # )
+        num_patches = int(img_size * dino_max_crop_scale // patch_size) ** 2
 
         self.cls_token = nn.Parameter(torch.zeros(1, 1, self.embed_dim))
         self.pos_embed = nn.Parameter(torch.zeros(1, num_patches + 1, self.embed_dim))
@@ -535,6 +527,7 @@ class VisionTransformer4K(nn.Module):
         return self.pos_drop(x)
 
     def forward(self, x):
+        # x = [M, 384, 16, 16]
         x = self.prepare_tokens(x)  # [M, 1+256, 192]
         for blk in self.blocks:
             x = blk(x)
@@ -562,7 +555,7 @@ class VisionTransformer4K(nn.Module):
 
 
 def vit4k_xs(
-    img_size: int = 3584,
+    img_size: int = 4096,
     patch_size: int = 256,
     input_embed_dim: int = 384,
     output_embed_dim: int = 192,

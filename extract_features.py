@@ -41,12 +41,17 @@ def main(cfg: DictConfig):
 
     if cfg.level == "global":
         model = GlobalFeatureExtractor(
-            pretrain_256=cfg.pretrain_256,
-            pretrain_4096=cfg.pretrain_4096,
+            region_size=cfg.region_size,
+            patch_size=cfg.patch_size,
+            mini_patch_size=cfg.mini_patch_size,
+            pretrain_vit_patch=cfg.pretrain_vit_patch,
+            pretrain_vit_region=cfg.pretrain_vit_region,
         )
     elif cfg.level == "local":
         model = LocalFeatureExtractor(
-            pretrain_256=cfg.pretrain_256,
+            patch_size=cfg.patch_size,
+            mini_patch_size=cfg.mini_patch_size,
+            pretrain_vit_patch=cfg.pretrain_vit_patch,
         )
     else:
         raise ValueError(f"cfg.level ({cfg.level} not supported")

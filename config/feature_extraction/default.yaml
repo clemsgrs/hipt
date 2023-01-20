@@ -7,11 +7,14 @@ resume: False
 slide_list:
 
 region_size: 4096
+patch_size: 256
+mini_patch_size: 16
+
 format: 'jpg'
 level: 'global'
 
-pretrain_256: 'checkpoints/vit_256_small_dino.pth'
-pretrain_4096: 'checkpoints/vit_4096_xs_dino.pth'
+pretrain_vit_patch: 'checkpoints/vit_256_small_dino.pth'
+pretrain_vit_region: 'checkpoints/vit_4096_xs_dino.pth'
 
 wandb:
   enable: True

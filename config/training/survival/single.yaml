@@ -28,16 +28,15 @@ testing:
   retrieve_checkpoint: 'best'
 
 model:
-  pretrain_256: 'checkpoints/vit_256_small_dino.pth'
-  freeze_256: True
-  freeze_256_pos_embed: True
-  img_size_256: 224
-  patch_size_256: 16
-  pretrain_4096: 'checkpoints/vit_4096_xs_dino.pth'
-  freeze_4096: True
-  freeze_4096_pos_embed: True
-  img_size_4096: 3584
-  patch_size_4096: 256
+  pretrain_vit_patch: 'checkpoints/vit_256_small_dino.pth'
+  freeze_vit_patch: True
+  freeze_vit_patch_pos_embed: True
+  mini_patch_size: 16
+  pretrain_vit_region: 'checkpoints/vit_4096_xs_dino.pth'
+  freeze_vit_region: True
+  freeze_vit_region_pos_embed: True
+  region_size: 4096
+  patch_size: 256
   dropout: 0.25
 
 optim:
