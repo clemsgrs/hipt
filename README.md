@@ -1,7 +1,7 @@
 <h1 align="center">Hierarchical Image Pyramid Transformer</h2>
 
 
-Re-implementation of original [HIPT](https://github.com/mahmoodlab/HIPT) code. 
+Re-implementation of original [HIPT](https://github.com/mahmoodlab/HIPT) code.
 
 <p>
    <a href="https://github.com/psf/black"><img alt="empty" src=https://img.shields.io/badge/code%20style-black-000000.svg></a>
@@ -18,15 +18,20 @@ Re-implementation of original [HIPT](https://github.com/mahmoodlab/HIPT) code.
 You need to have extracted square regions from each WSI you intend to train on.<br>
 To do so, you can take a look at [HS2P](https://github.com/clemsgrs/hs2p), which segments tissue and extract relevant patches at a given pixel spacing.
 
+Download HIPT pre-trained weights via the following commands:
 
-download HIPT pre-trained weights via:
-
+<details>
+<summary>
+Download commands
+</summary>
+  
 ```
 mkdir checkpoints
 cd checkpoints
 gdown 1Qm-_XrTMYhu9Hl-4FClaOMuroyWlOAxw
 gdown 1A2eHTT0dedHgdCvy6t3d9HwluF8p5yjz
 ```
+</details>
 
 ## Feature Extraction
 
@@ -49,18 +54,18 @@ Then run the following command to kick off feature extraction:
 
 `python3 extract_features.py --config-name <feature_extraction_config_filename>`
 
-This will produce one .pt file per slide and save it under `output/<dataset_name>/<experiment_name>/<level>/`:
+This will produce one .pt file per slide and save it under `output/<experiment_name>/<level>/`:
 
 ```
 hipt/
-├── output/<dataset_name>/<experiment_name>/
+├── output/<experiment_name>/
 │     └── level/
 │          ├── slide_1.pt
 │          ├── slide_2.pt
 │          └── ...
 ```
 
-## Step-by-Step Guide 
+## HIPT Training
 
 **1. Prepare `train.csv` and `tune.csv`**
 
@@ -80,8 +85,8 @@ If you want to run testing at the end, you can provide a `test.csv` file.
 
 Once features have been extracted, create a configuration file under:
 
-- `config/training/subtyping` for training a subtyping model 
-- `config/training/survival` for training a survival model 
+- `config/training/subtyping` for training a subtyping model
+- `config/training/survival` for training a survival model
 
 You can take inspiration from `single.yaml` files.<br>
 Dump in there the paths to your `train.csv` and `tune.csv` files.<br>
@@ -99,7 +104,12 @@ Then, run the following command to kick off model training on a single fold:
 
 Your multiple folds should be structured as follow:
 
-```
+<details>
+<summary>
+Folds structure
+</summary>
+
+```bash
 fold_dir/
 ├── fold_1/
 │     ├── train.csv
@@ -108,11 +118,12 @@ fold_dir/
 ├── fold_2/
 └── ...
 ```
+</details>
 
 Create a configuration file under:
 
-- `config/training/subtyping` for training a subtyping model 
-- `config/training/survival` for training a survival model 
+- `config/training/subtyping` for training a subtyping model
+- `config/training/survival` for training a survival model
 
 You can take inspiration from `multi.yaml` files.<br>
 Remember to indicate the root directory where your folds are located under `data.fold_dir`.<br>
@@ -121,6 +132,43 @@ Then, run the following command to kick off model training on multiple folds:
 
 - subtyping: `python3 train/subtyping_multi.py --config-name <subtyping_multi_fold_config_filename>`
 - survival: `python3 train/survival_multi.py --config-name <survival_single_fold_config_filename>`
+
+## Hierarchical Pretraining
+
+<details>
+<summary>
+Example Directory
+</summary>
+
+```bash
+PRETRAINING_DIR/
+  └──patch_256_pretraining/
+        └──imgs/
+            ├── patch_1.png
+            ├── patch_2.png
+            └── ...
+  └──region_4096_pretraining/
+      ├── slide_1_1.pt
+      ├── slide_1_2.pt
+      └── ...
+```
+</details>
+
+Where:
+- `.../path/to/patch_256_pretraining/imgs/`: directory of raw `[256 × 256]` patches (as `*.png` format) extracted using HS2P, used to pretrain the first Transformer block (ViT_256-16).
+- `.../path/to/region_4096_pretraining/`: directory of pre-extracted region-level **local** features for each `[4096 × 4096]` region across all WSIs using `python3 pre-train/extract_features.py`. Each `*.pt` file is a `[256 × 384]`-sized Tensor, which is a 256-length sequence of pre-extracted ViT_256-16 features for each `[256 × 256]` patch. This folder is used to pretain the intermediate Transformer block (ViT_4096-256).
+
+NB: you should be able to user differently sized regions (e.g. `[1024 × 1024]`) seamlessly.
+
+Create two configuration files under `config/pre-training/` (one for each pre-training stage).<br>
+You can take inspiration from existing files.<br>
+
+The following commands are used for pretraining:
+
+```bash
+python3 pre-train/dino.py --config-name <name_of_your_dino_config>
+python3 pre-train/dino_4k.py --config-name <name_of_your_dino_4k_config>
+```
 
 ## Resuming experiment after crash / bug
 

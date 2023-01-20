@@ -1,8 +1,7 @@
-import os
 import math
+import warnings
 import torch
 import torch.nn as nn
-from pathlib import Path
 from functools import partial
 from typing import Optional, Callable
 
@@ -225,6 +224,7 @@ class VisionTransformer(nn.Module):
     ):
 
         super().__init__()
+        self.embed_dim = embed_dim
 
         self.patch_embed = PatchEmbed(
             img_size=img_size,
@@ -349,16 +349,19 @@ class VisionTransformer(nn.Module):
 def vit_tiny(
     img_size: int = 224,
     patch_size: int = 16,
+    embed_dim: int = 192,
+    **kwargs,
 ):
     model = VisionTransformer(
         img_size=img_size,
         patch_size=patch_size,
-        embed_dim=192,
+        embed_dim=embed_dim,
         depth=12,
         num_heads=3,
         mlp_ratio=4,
         qkv_bias=True,
         norm_layer=partial(nn.LayerNorm, eps=1e-6),
+        **kwargs
     )
     return model
 
@@ -367,6 +370,7 @@ def vit_small(
     img_size: int = 224,
     patch_size: int = 16,
     embed_dim: int = 384,
+    **kwargs,
 ):
     model = VisionTransformer(
         img_size=img_size,
@@ -377,6 +381,7 @@ def vit_small(
         mlp_ratio=4,
         qkv_bias=True,
         norm_layer=partial(nn.LayerNorm, eps=1e-6),
+        **kwargs
     )
     return model
 
@@ -384,16 +389,19 @@ def vit_small(
 def vit_base(
     img_size: int = 224,
     patch_size: int = 16,
+    embed_dim: int = 768,
+    **kwargs,
 ):
     model = VisionTransformer(
         img_size=img_size,
         patch_size=patch_size,
-        embed_dim=768,
+        embed_dim=embed_dim,
         depth=12,
         num_heads=12,
         mlp_ratio=4,
         qkv_bias=True,
         norm_layer=partial(nn.LayerNorm, eps=1e-6),
+        **kwargs
     )
     return model
 
@@ -420,7 +428,8 @@ class VisionTransformer4K(nn.Module):
     ):
 
         super().__init__()
-        embed_dim = output_embed_dim
+        self.embed_dim = output_embed_dim
+
         self.phi = nn.Sequential(
             *[
                 nn.Linear(input_embed_dim, output_embed_dim),
@@ -429,12 +438,12 @@ class VisionTransformer4K(nn.Module):
             ]
         )
         num_patches = int(img_size // patch_size) ** 2
-        print(
-            f"Number of [{patch_size},{patch_size}] patches in [{img_size},{img_size}] image: {num_patches}"
-        )
+        # print(
+        #     f"Number of [{patch_size},{patch_size}] patches in [{img_size},{img_size}] image: {num_patches}"
+        # )
 
-        self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
-        self.pos_embed = nn.Parameter(torch.zeros(1, num_patches + 1, embed_dim))
+        self.cls_token = nn.Parameter(torch.zeros(1, 1, self.embed_dim))
+        self.pos_embed = nn.Parameter(torch.zeros(1, num_patches + 1, self.embed_dim))
         self.pos_drop = nn.Dropout(p=drop_rate)
 
         dpr = [
@@ -443,7 +452,7 @@ class VisionTransformer4K(nn.Module):
         self.blocks = nn.ModuleList(
             [
                 Block(
-                    dim=embed_dim,
+                    dim=self.embed_dim,
                     num_heads=num_heads,
                     mlp_ratio=mlp_ratio,
                     qkv_bias=qkv_bias,
@@ -456,11 +465,11 @@ class VisionTransformer4K(nn.Module):
                 for i in range(depth)
             ]
         )
-        self.norm = norm_layer(embed_dim)
+        self.norm = norm_layer(self.embed_dim)
 
         # Classifier head
         self.head = (
-            nn.Linear(embed_dim, num_classes) if num_classes > 0 else nn.Identity()
+            nn.Linear(self.embed_dim, num_classes) if num_classes > 0 else nn.Identity()
         )
 
         trunc_normal_(self.pos_embed, std=0.02)
@@ -558,6 +567,7 @@ def vit4k_xs(
     input_embed_dim: int = 384,
     output_embed_dim: int = 192,
     num_classes: int = 0,
+    **kwargs,
 ):
     model = VisionTransformer4K(
         num_classes=num_classes,
@@ -570,5 +580,54 @@ def vit4k_xs(
         mlp_ratio=4,
         qkv_bias=True,
         norm_layer=partial(nn.LayerNorm, eps=1e-6),
+        **kwargs,
     )
     return model
+
+
+class DINOHead(nn.Module):
+    def __init__(
+        self,
+        in_dim,
+        out_dim,
+        use_bn=False,
+        norm_last_layer=True,
+        nlayers=3,
+        hidden_dim=2048,
+        bottleneck_dim=256,
+    ):
+        super().__init__()
+        nlayers = max(nlayers, 1)
+        if nlayers == 1:
+            self.mlp = nn.Linear(in_dim, bottleneck_dim)
+        else:
+            layers = [nn.Linear(in_dim, hidden_dim)]
+            if use_bn:
+                layers.append(nn.BatchNorm1d(hidden_dim))
+            layers.append(nn.GELU())
+            for _ in range(nlayers - 2):
+                layers.append(nn.Linear(hidden_dim, hidden_dim))
+                if use_bn:
+                    layers.append(nn.BatchNorm1d(hidden_dim))
+                layers.append(nn.GELU())
+            layers.append(nn.Linear(hidden_dim, bottleneck_dim))
+            self.mlp = nn.Sequential(*layers)
+        self.apply(self._init_weights)
+        self.last_layer = nn.utils.weight_norm(
+            nn.Linear(bottleneck_dim, out_dim, bias=False)
+        )
+        self.last_layer.weight_g.data.fill_(1)
+        if norm_last_layer:
+            self.last_layer.weight_g.requires_grad = False
+
+    def _init_weights(self, m):
+        if isinstance(m, nn.Linear):
+            trunc_normal_(m.weight, std=0.02)
+            if isinstance(m, nn.Linear) and m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+
+    def forward(self, x):
+        x = self.mlp(x)
+        x = nn.functional.normalize(x, dim=-1, p=2)
+        x = self.last_layer(x)
+        return x

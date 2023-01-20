@@ -1,0 +1,21 @@
+region_dir: '/home/user/code/git/cpg/hs2p/output/tcga_brca_subtyping_4096/patches'
+
+output_dir: 'output'
+experiment_name: 'dino'
+resume: False
+
+slide_list:
+
+region_size: 4096
+format: 'png'
+
+pretrain_256: 'output/dino/dino/checkpoint.pth'
+freeze_256: True
+
+wandb:
+  enable: True
+  project: 'hipt'
+  username: 'clemsg'
+  exp_name: '${experiment_name}'
+  dir: '/home/user/'
+  group:
