@@ -25,7 +25,7 @@ Download HIPT pre-trained weights via the following commands:
 Download commands
 </summary>
   
-```bash
+```
 mkdir checkpoints
 cd checkpoints
 gdown 1Qm-_XrTMYhu9Hl-4FClaOMuroyWlOAxw
@@ -165,7 +165,7 @@ You can take inspiration from existing files.<br>
 
 The following commands are used for pretraining:
 
-```python
+```bash
 python3 pre-train/dino.py --config-name <name_of_your_dino_config>
 python3 pre-train/dino_4k.py --config-name <name_of_your_dino_4k_config>
 ```
