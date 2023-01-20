@@ -86,7 +86,7 @@ def main(cfg: DictConfig):
         pin_memory=True,
         drop_last=True,
     )
-    print(f"Data loaded: there are {len(dataset)} images.")
+    print(f"Data loaded: there are {len(dataset)} patches.")
 
     # building student and teacher networks
     student = vits.__dict__[cfg.model.arch](
