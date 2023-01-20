@@ -156,7 +156,7 @@ PRETRAINING_DIR/
 
 Where:
 - `.../path/to/patch_256_pretraining/imgs/`: directory of raw `[256 × 256]` patches (as `*.png` format) extracted using HS2P, used to pretrain the first Transformer block (ViT_256-16).
-- `.../path/to/region_4096_pretraining/`: directory of pre-extracted region-level **local** features for each `[4096 × 4096]` region across all WSIs using `python3 pre-train/extract_features.py'`. Each `*.pt` file is a `[256 × 384]`-sized Tensor, which is a 256-length sequence of pre-extracted ViT_256-16 features for each `[256 × 256]` patch. This folder is used to pretain the intermediate Transformer block (ViT_4096-256).
+- `.../path/to/region_4096_pretraining/`: directory of pre-extracted region-level **local** features for each `[4096 × 4096]` region across all WSIs using `python3 pre-train/extract_features.py`. Each `*.pt` file is a `[256 × 384]`-sized Tensor, which is a 256-length sequence of pre-extracted ViT_256-16 features for each `[256 × 256]` patch. This folder is used to pretain the intermediate Transformer block (ViT_4096-256).
 
 NB: you should be able to user differently sized regions (e.g. `[1024 × 1024]`) seamlessly.
 
