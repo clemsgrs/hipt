@@ -56,13 +56,13 @@ def main(cfg: DictConfig):
     else:
         raise ValueError(f"cfg.level ({cfg.level} not supported")
 
-    region_dir = Path(cfg.region_dir, cfg.region_size, cfg.format)
+    region_dir = Path(cfg.region_dir, str(cfg.region_size), cfg.format)
     slide_ids = sorted([s.name for s in region_dir.iterdir()])
     print(f"{len(slide_ids)} slides with extracted patches found")
 
     if cfg.slide_list:
         with open(Path(cfg.slide_list), "r") as f:
-            slide_ids = sorted([x.strip() for x in f.readlines()])
+            slide_ids = sorted([Path(x.strip()).stem for x in f.readlines()])
         print(f"restricting to {len(slide_ids)} slides from slide list .txt file")
 
     process_list_fp = None

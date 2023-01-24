@@ -386,7 +386,7 @@ class RegionFilepathsDataset(torch.utils.data.Dataset):
     def __getitem__(self, idx: int):
         row = self.df.loc[idx]
         slide_id = row.slide_id
-        slide_dir = Path(self.region_dir, slide_id)
+        slide_dir = Path(self.region_dir, slide_id, 'imgs')
         regions = [str(fp) for fp in slide_dir.glob(f"*.{self.format}")]
         return idx, regions
 
