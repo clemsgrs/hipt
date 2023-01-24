@@ -1,27 +1,27 @@
 import os
 import sys
 import tqdm
+import wandb
+import datetime
 import time
 import json
 import hydra
-import wandb
 import shutil
 import random
-import datetime
 import torch
 import torch.nn as nn
 import torch.backends.cudnn as cudnn
 
 from pathlib import Path
 from omegaconf import DictConfig
-from torchvision import datasets
 
 import source.vision_transformer as vits
 
 from source.utils import initialize_wandb, compute_time
+from source.dataset import HierarchicalPretrainingDataset
 from source.components import DINOLoss
 from utils import (
-    DataAugmentationDINO,
+    DataAugmentationDINO4K,
     MultiCropWrapper,
     train_one_epoch,
     init_distributed_mode,
@@ -36,7 +36,7 @@ from utils import (
 )
 
 
-@hydra.main(version_base="1.2.0", config_path="../config/pre-training", config_name="dino")
+@hydra.main(version_base="1.2.0", config_path="../config/pre-training", config_name="region")
 def main(cfg: DictConfig):
 
     distributed = (torch.cuda.device_count() > 1)
@@ -62,13 +62,12 @@ def main(cfg: DictConfig):
         wandb_run.define_metric("epoch", summary="max")
 
     # preparing data
-    transform = DataAugmentationDINO(
-        cfg.aug.global_crops_scale,
-        cfg.aug.local_crops_scale,
-        cfg.aug.local_crops_number,
+    transform = DataAugmentationDINO4K(
+        cfg.aug.local_crops_number
     )
 
-    dataset = datasets.ImageFolder(cfg.data_dir, transform=transform)
+    # using custom dataset for our [256 x 384] tensors
+    dataset = HierarchicalPretrainingDataset(cfg.data_dir, transform)
     if cfg.training.pct:
         print(f"Pre-training on {cfg.training.pct*100}% of the data")
         nsample = int(cfg.training.pct*len(dataset))
@@ -86,7 +85,7 @@ def main(cfg: DictConfig):
         pin_memory=True,
         drop_last=True,
     )
-    print(f"Data loaded: there are {len(dataset)} patches.")
+    print(f"Data loaded: there are {len(dataset)} regions.")
 
     # building student and teacher networks
     student = vits.__dict__[cfg.model.arch](
@@ -130,7 +129,7 @@ def main(cfg: DictConfig):
         teacher_without_ddp = teacher
 
     if distributed:
-        student = nn.parallel.DistributedDataParallel(student, device_ids=[cfg.gpu])
+        student = nn.parallel.DistributedDataParallel(student, device_ids=[cfg.gpu], find_unused_parameters=True)
 
     # teacher and student start with the same weights
     student_sd = student.state_dict()
@@ -153,7 +152,7 @@ def main(cfg: DictConfig):
     ).cuda()
 
     params_groups = get_params_groups(student)
-    optimizer = torch.optim.AdamW(params_groups)
+    optimizer = torch.optim.AdamW(params_groups)  # to use with ViTs
 
     # for mixed precision training
     fp16_scaler = None
@@ -177,7 +176,10 @@ def main(cfg: DictConfig):
     )
     # momentum parameter is increased to 1. during training with a cosine schedule
     momentum_schedule = cosine_scheduler(
-        cfg.model.momentum_teacher, 1, cfg.training.nepochs, len(data_loader)
+        cfg.model.momentum_teacher,
+        1,
+        cfg.training.nepochs,
+        len(data_loader),
     )
 
     # optionally resume training
@@ -199,7 +201,7 @@ def main(cfg: DictConfig):
 
     with tqdm.tqdm(
         range(start_epoch, cfg.training.nepochs),
-        desc=(f"DINO Pre-Training"),
+        desc=(f"Hierarchical DINO Pre-Training"),
         unit=" epoch",
         ncols=100,
         leave=True,
@@ -277,13 +279,13 @@ def main(cfg: DictConfig):
 
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
-    print("Training time {}".format(total_time_str))
+    print('Training time {}'.format(total_time_str))
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
 
-    # python3 pre-train/dino.py --config-name 'dino'
-    # torchrun pre-train/dino.py --config-name 'dino'
+    # python3 pre-train/dino_4k.py --config-name 'dino_4k'
+    # torchrun pre-train/dino_4k.py --config-name 'dino_4k'
 
     m = {}
     for i in range(torch.cuda.device_count()):

@@ -1,6 +1,6 @@
-data_dir: 'data/tcga_brca_dino/patch_256_pretraining'
-output_dir: 'output/dino'
-experiment_name: 'debug'
+data_dir: 'data/panda_radboud/dino/patch_256_pretraining'
+output_dir: 'output/panda_radboud'
+experiment_name: 'dino'
 
 resume: False
 resume_from_ckpt: 'latest'
