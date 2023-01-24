@@ -44,6 +44,27 @@ If you want to benefit from wandb logging, you need to follow these simple steps
 
 **2. Extract features**
 
+Your folder containing the extracted square regions should be structured as follow:
+
+<details>
+<summary>
+Folder structure
+</summary>
+
+```bash
+region_dir/
+└── region_size/format/
+│     ├── slide_1/
+│     │    ├── slide_1.h5
+│     │    └── imgs/
+│     │         ├── region_1.fmt
+│     │         ├── region_2.fmt
+│     │         └── ...
+│     ├── slide_2/
+│     └── ...
+```
+</details>
+
 Create a configuration file under `config/feature_extraction/` taking inspiration from existing files.<br>
 A good starting point is to use the default configuration file `config/default.yaml` where parameters are documented.
 
