@@ -56,7 +56,7 @@ def main(cfg: DictConfig):
     else:
         raise ValueError(f"cfg.level ({cfg.level} not supported")
 
-    region_dir = Path(cfg.region_dir)
+    region_dir = Path(cfg.region_dir, cfg.region_size, cfg.format)
     slide_ids = sorted([s.name for s in region_dir.iterdir()])
     print(f"{len(slide_ids)} slides with extracted patches found")
 
@@ -82,7 +82,7 @@ def main(cfg: DictConfig):
     total = len(process_stack)
     already_processed = len(df) - total
 
-    region_dataset = RegionFilepathsDataset(df, region_dir, cfg.region_size, cfg.format)
+    region_dataset = RegionFilepathsDataset(df, region_dir, cfg.format)
     region_subset = torch.utils.data.Subset(
         region_dataset, indices=process_stack.index.tolist()
     )
