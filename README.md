@@ -1,4 +1,4 @@
-<h1 align="center">Hierarchical Image Pyramid Transformer</h2>
+<h1 align="center">Hierarchical Image Pyramid Transformer</h1>
 
 
 Re-implementation of original [HIPT](https://github.com/mahmoodlab/HIPT) code.
@@ -40,7 +40,7 @@ gdown 1A2eHTT0dedHgdCvy6t3d9HwluF8p5yjz
 If you want to benefit from wandb logging, you need to follow these simple steps:
  - grab your wandb API key under your profile and export
  - run the following command in your terminal: `export WANDB_API_KEY=<your_personal_key>`
- - change wandb parameters in the config file under `config/` (mainly `project` and `username`)
+ - change wandb parameters in the config file under `config/feature_extraction/` (mainly `project` and `username`)
 
 **2. Extract features**
 

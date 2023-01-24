@@ -376,22 +376,18 @@ class RegionFilepathsDataset(torch.utils.data.Dataset):
     def __init__(
         self,
         df: pd.DataFrame,
-        region_root_dir: Path,
-        region_size: int,
+        region_dir: Path,
         fmt: str,
     ):
         self.df = df
-        self.region_root_dir = region_root_dir
-        self.region_size = region_size
+        self.region_dir = region_dir
         self.format = fmt
 
     def __getitem__(self, idx: int):
         row = self.df.loc[idx]
         slide_id = row.slide_id
-        region_dir = Path(
-            self.region_root_dir, slide_id, str(self.region_size), self.format
-        )
-        regions = [str(fp) for fp in region_dir.glob(f"*.{self.format}")]
+        slide_dir = Path(self.region_dir, slide_id)
+        regions = [str(fp) for fp in slide_dir.glob(f"*.{self.format}")]
         return idx, regions
 
     def __len__(self):
