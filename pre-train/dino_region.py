@@ -36,7 +36,7 @@ from utils import (
 )
 
 
-@hydra.main(version_base="1.2.0", config_path="../config/pre-training", config_name="dino_4k")
+@hydra.main(version_base="1.2.0", config_path="../config/pre-training", config_name="region")
 def main(cfg: DictConfig):
 
     distributed = (torch.cuda.device_count() > 1)

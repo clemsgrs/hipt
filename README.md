@@ -166,8 +166,8 @@ You can take inspiration from existing files.<br>
 The following commands are used for pretraining:
 
 ```bash
-python3 pre-train/dino.py --config-name <name_of_your_dino_config>
-python3 pre-train/dino_4k.py --config-name <name_of_your_dino_4k_config>
+python3 pre-train/dino_patch.py --config-name <name_of_your_dino_config>
+python3 pre-train/dino_region.py --config-name <name_of_your_dino_4k_config>
 ```
 
 ## Resuming experiment after crash / bug
