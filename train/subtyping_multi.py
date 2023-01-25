@@ -19,7 +19,7 @@ from source.utils import (
     tune,
     test,
     compute_time,
-    log_on_step,
+    update_log_dict,
     EarlyStopping,
     OptimizerFactory,
     SchedulerFactory,
@@ -120,7 +120,7 @@ def main(cfg: DictConfig):
         fold_start_time = time.time()
 
         if cfg.wandb.enable:
-            wandb.define_metric(f"fold_{i}/train/epoch", summary="max")
+            wandb.define_metric(f"train/fold_{i}/epoch", summary="max")
 
         with tqdm.tqdm(
             range(cfg.nepochs),
@@ -134,10 +134,10 @@ def main(cfg: DictConfig):
 
                 epoch_start_time = time.time()
                 if cfg.wandb.enable:
-                    wandb.log({f"fold_{i}/train/epoch": epoch})
+                    log_dict = {f"train/fold_{i}/epoch": epoch+1}
 
                 train_results = train(
-                    epoch + 1,
+                    epoch+1,
                     model,
                     train_dataset,
                     optimizer,
@@ -148,10 +148,11 @@ def main(cfg: DictConfig):
                 )
 
                 if cfg.wandb.enable:
-                    log_on_step(
-                        f"fold_{i}/train",
+                    update_log_dict(
+                        f"train/fold_{i}",
                         train_results,
-                        step=f"fold_{i}/train/epoch",
+                        log_dict,
+                        step=f"train/fold_{i}/epoch",
                         to_log=cfg.wandb.to_log,
                     )
                 train_dataset.df.to_csv(Path(result_dir, f"train_{epoch}.csv"), index=False)
@@ -167,10 +168,11 @@ def main(cfg: DictConfig):
                     )
 
                     if cfg.wandb.enable:
-                        log_on_step(
-                            f"fold_{i}/tune",
+                        update_log_dict(
+                            f"tune/fold_{i}",
                             tune_results,
-                            step=f"fold_{i}/train/epoch",
+                            log_dict,
+                            step=f"train/fold_{i}/epoch",
                             to_log=cfg.wandb.to_log,
                         )
                     tune_dataset.df.to_csv(
@@ -181,17 +183,18 @@ def main(cfg: DictConfig):
                     if early_stopping.early_stop and cfg.early_stopping.enable:
                         stop = True
 
+                lr = cfg.optim.lr
+                if scheduler:
+                    lr = scheduler.get_last_lr()[0]
+                    scheduler.step()
                 if cfg.wandb.enable:
                     wandb.define_metric(
-                        f"fold_{i}/train/lr", step_metric=f"fold_{i}/train/epoch"
+                        f"train/fold_{i}/lr", step_metric=f"train/fold_{i}/epoch"
                     )
-                if scheduler:
-                    lr = scheduler.get_last_lr()
-                    if cfg.wandb.enable:
-                        wandb.log({f"fold_{i}/train/lr": lr})
-                    scheduler.step()
-                elif cfg.wandb.enable:
-                    wandb.log({f"fold_{i}/train/lr": cfg.optim.lr})
+                    log_dict.update({f"train/fold_{i}/lr": lr})
+
+                if cfg.wandb.enable:
+                    wandb.log(log_dict)
 
                 epoch_end_time = time.time()
                 epoch_mins, epoch_secs = compute_time(epoch_start_time, epoch_end_time)
@@ -224,7 +227,7 @@ def main(cfg: DictConfig):
                 test_aucs.append(v)
                 v = round(v, 3)
             if r in cfg.wandb.to_log and cfg.wandb.enable:
-                wandb.log({f"fold_{i}/test/{r}": v})
+                wandb.log({f"test/fold_{i}/{r}": v})
 
     mean_test_auc = round(np.mean(test_aucs), 3)
     std_test_auc = round(statistics.stdev(test_aucs), 3)

@@ -20,7 +20,7 @@ from source.utils import (
     tune,
     test,
     compute_time,
-    log_on_step,
+    update_log_dict,
     collate_features,
     EarlyStopping,
     OptimizerFactory,
@@ -123,10 +123,10 @@ def main(cfg: DictConfig):
 
             epoch_start_time = time.time()
             if cfg.wandb.enable:
-                wandb.log({"epoch": epoch + 1})
+                log_dict = {"epoch": epoch+1}
 
             train_results = train(
-                epoch + 1,
+                epoch+1,
                 model,
                 train_dataset,
                 optimizer,
@@ -138,7 +138,7 @@ def main(cfg: DictConfig):
             )
 
             if cfg.wandb.enable:
-                log_on_step("train", train_results, to_log=cfg.wandb.to_log)
+                update_log_dict("train", train_results, log_dict, to_log=cfg.wandb.to_log)
             train_dataset.df.to_csv(Path(result_dir, f"train_{epoch}.csv"), index=False)
 
             if epoch % cfg.tuning.tune_every == 0:
@@ -153,7 +153,7 @@ def main(cfg: DictConfig):
                 )
 
                 if cfg.wandb.enable:
-                    log_on_step("tune", tune_results, to_log=cfg.wandb.to_log)
+                    update_log_dict("tune", tune_results, log_dict, to_log=cfg.wandb.to_log)
                 tune_dataset.df.to_csv(
                     Path(result_dir, f"tune_{epoch}.csv"), index=False
                 )
@@ -162,15 +162,16 @@ def main(cfg: DictConfig):
                 if early_stopping.early_stop and cfg.early_stopping.enable:
                     stop = True
 
-            if cfg.wandb.enable:
-                wandb.define_metric("train/lr", step_metric="epoch")
+            lr = cfg.optim.lr
             if scheduler:
-                lr = scheduler.get_last_lr()
-                if cfg.wandb.enable:
-                    wandb.log({"train/lr": lr})
+                lr = scheduler.get_last_lr()[0]
                 scheduler.step()
-            elif cfg.wandb.enable:
-                wandb.log({"train/lr": cfg.optim.lr})
+            if cfg.wandb.enable:
+                log_dict.update({"train/lr": lr})
+
+            # logging
+            if cfg.wandb.enable:
+                wandb.log(log_dict, step=epoch+1)
 
             epoch_end_time = time.time()
             epoch_mins, epoch_secs = compute_time(epoch_start_time, epoch_end_time)
