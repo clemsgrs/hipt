@@ -4,19 +4,21 @@ import tqdm
 import wandb
 import hydra
 import pandas as pd
+import matplotlib.pyplot as plt
 
 from pathlib import Path
 from omegaconf import DictConfig
 
 from source.models import ModelFactory
 from source.components import LossFactory
-from source.dataset import ExtractedFeaturesSurvivalDataset
+from source.dataset import ExtractedFeaturesSurvivalDataset, ppcess_tcga_survival_data
 from source.utils import (
     initialize_wandb,
     train_survival,
     tune_survival,
     compute_time,
-    log_on_step,
+    update_log_dict,
+    plot_cumulative_dynamic_auc,
     EarlyStopping,
     OptimizerFactory,
     SchedulerFactory,
@@ -51,7 +53,7 @@ def main(cfg: DictConfig):
     model.relocate()
     print(model)
 
-    print(f"Loading data")
+    print("Loading data")
     train_df = pd.read_csv(cfg.data.train_csv)
     tune_df = pd.read_csv(cfg.data.tune_csv)
 
@@ -60,18 +62,25 @@ def main(cfg: DictConfig):
         train_df = train_df.sample(frac=cfg.training.pct).reset_index(drop=True)
         tune_df = tune_df.sample(frac=cfg.training.pct).reset_index(drop=True)
 
+    train_df['partition'] = ['train'] * len(train_df)
+    tune_df['partition'] = ['tune'] * len(tune_df)
+
+    train_tune_df = pd.concat([train_df, tune_df], ignore_index=True)
+    patient_df, slide_df = ppcess_tcga_survival_data(train_tune_df, cfg.label_name, nbins=cfg.nbins)
+
+    train_patient_df = patient_df[patient_df.partition == 'train'].reset_index(drop=True)
+    tune_patient_df = patient_df[patient_df.partition == 'tune'].reset_index(drop=True)
+    train_slide_df = slide_df[slide_df.partition == 'train']
+    tune_slide_df = slide_df[slide_df.partition == 'tune']
+
     train_dataset = ExtractedFeaturesSurvivalDataset(
-        train_df, features_dir, cfg.label_name, nbins=cfg.nbins
+        train_patient_df, train_slide_df, features_dir, cfg.label_name,
     )
     tune_dataset = ExtractedFeaturesSurvivalDataset(
-        tune_df, features_dir, cfg.label_name, nbins=cfg.nbins
+        tune_patient_df, tune_slide_df, features_dir, cfg.label_name,
     )
 
-    # m, n = train_dataset.num_classes, tune_dataset.num_classes
-    # assert (
-    #     m == n == cfg.nbins
-    # ), f"Either train (C={m}) or tune (C={n}) sets doesnt cover full class spectrum (C={cfg.nbins}"
-
+    print("Configuring optimmizer & scheduler")
     model_params = filter(lambda p: p.requires_grad, model.parameters())
     optimizer = OptimizerFactory(
         cfg.optim.name, model_params, lr=cfg.optim.lr, weight_decay=cfg.optim.wd
@@ -93,7 +102,7 @@ def main(cfg: DictConfig):
     with tqdm.tqdm(
         range(cfg.nepochs),
         desc=(f"HIPT Training"),
-        unit=" slide",
+        unit=" patient",
         ncols=100,
         leave=True,
     ) as t:
@@ -102,10 +111,10 @@ def main(cfg: DictConfig):
 
             epoch_start_time = time.time()
             if cfg.wandb.enable:
-                wandb.log({"epoch": epoch + 1})
+                log_dict = {"epoch": epoch+1}
 
             train_results = train_survival(
-                epoch + 1,
+                epoch+1,
                 model,
                 train_dataset,
                 optimizer,
@@ -115,13 +124,13 @@ def main(cfg: DictConfig):
             )
 
             if cfg.wandb.enable:
-                log_on_step("train", train_results, to_log=cfg.wandb.to_log)
+                update_log_dict("train", train_results, log_dict, to_log=cfg.wandb.to_log)
             # train_dataset.df.to_csv(Path(result_dir, f"train_{epoch}.csv"), index=False)
 
             if epoch % cfg.tuning.tune_every == 0:
 
                 tune_results = tune_survival(
-                    epoch + 1,
+                    epoch+1,
                     model,
                     tune_dataset,
                     criterion,
@@ -129,22 +138,26 @@ def main(cfg: DictConfig):
                 )
 
                 if cfg.wandb.enable:
-                    log_on_step("tune", tune_results, to_log=cfg.wandb.to_log)
+                    update_log_dict("tune", tune_results, log_dict, to_log=cfg.wandb.to_log)
+                    fig = plot_cumulative_dynamic_auc(train_patient_df, tune_patient_df, tune_results["risks"], cfg.label_name, epoch)
+                    log_dict.update({"tune/cumulative_dynamic_auc": wandb.Image(fig)})
+                    plt.close(fig)
                 # tune_dataset.df.to_csv(Path(result_dir, f"tune_{epoch}.csv"), index=False)
 
                 early_stopping(epoch, model, tune_results)
                 if early_stopping.early_stop and cfg.early_stopping.enable:
                     stop = True
 
-            if cfg.wandb.enable:
-                wandb.define_metric("train/lr", step_metric="epoch")
+            lr = cfg.optim.lr
             if scheduler:
-                lr = scheduler.get_last_lr()
-                if cfg.wandb.enable:
-                    wandb.log({"train/lr": lr})
+                lr = scheduler.get_last_lr()[0]
                 scheduler.step()
-            elif cfg.wandb.enable:
-                wandb.log({"train/lr": cfg.optim.lr})
+            if cfg.wandb.enable:
+                log_dict.update({"train/lr": lr})
+
+            # logging
+            if cfg.wandb.enable:
+                wandb.log(log_dict, step=epoch+1)
 
             epoch_end_time = time.time()
             epoch_mins, epoch_secs = compute_time(epoch_start_time, epoch_end_time)

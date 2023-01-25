@@ -7,19 +7,22 @@ import hydra
 import statistics
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
+
 from pathlib import Path
 from omegaconf import DictConfig
 
 from source.models import ModelFactory
 from source.components import LossFactory
-from source.dataset import ExtractedFeaturesSurvivalDataset
+from source.dataset import ExtractedFeaturesSurvivalDataset, ppcess_tcga_survival_data
 from source.utils import (
     initialize_wandb,
     train_survival,
     tune_survival,
     test_survival,
     compute_time,
-    log_on_step,
+    update_log_dict,
+    plot_cumulative_dynamic_auc,
     EarlyStopping,
     OptimizerFactory,
     SchedulerFactory,
@@ -65,35 +68,34 @@ def main(cfg: DictConfig):
         result_dir.mkdir(parents=True, exist_ok=True)
 
         print(f"Loading data for fold {i}")
-        train_df_path = Path(fold_dir, "train.csv")
-        tune_df_path = Path(fold_dir, "tune.csv")
-        test_df_path = Path(fold_dir, "tune.csv")
-        train_df = pd.read_csv(train_df_path)
-        tune_df = pd.read_csv(tune_df_path)
-        test_df = pd.read_csv(test_df_path)
+        dfs = {}
+        for partition in ["train", "tune"]:
+            df_path = Path(fold_dir, f"{partition}.csv")
+            df = pd.read_csv(df_path)
+            df['partition'] = [partition] * len(df)
+            dfs[partition] = df
 
         if cfg.training.pct:
             print(f"Training on {cfg.training.pct*100}% of the data")
-            train_df = train_df.sample(frac=cfg.training.pct).reset_index(drop=True)
+            dfs["train"] = dfs["train"].sample(frac=cfg.training.pct).reset_index(drop=True)
+
+        train_tune_df = pd.concat([df for df in dfs.values()], ignore_index=True)
+        patient_df, slide_df = ppcess_tcga_survival_data(train_tune_df, cfg.label_name, nbins=cfg.nbins)
+
+        patient_dfs, slide_dfs = {}, {}
+        for partition in ["train", "tune"]:
+            patient_dfs[partition] = patient_df[patient_df.partition == partition].reset_index(drop=True)
+            slide_dfs[partition] = slide_df[slide_df.partition == partition]
 
         train_dataset = ExtractedFeaturesSurvivalDataset(
-            train_df, features_dir, cfg.label_name, nbins=cfg.nbins
+            patient_dfs["train"], slide_dfs["train"], features_dir, cfg.label_name,
         )
         tune_dataset = ExtractedFeaturesSurvivalDataset(
-            tune_df, features_dir, cfg.label_name, nbins=cfg.nbins
+            patient_dfs["tune"], slide_dfs["tune"], features_dir, cfg.label_name,
         )
         test_dataset = ExtractedFeaturesSurvivalDataset(
-            test_df, features_dir, cfg.label_name, nbins=cfg.nbins
+            patient_dfs["tune"], slide_dfs["tune"], features_dir, cfg.label_name,
         )
-
-        # train_c, tune_c, test_c = (
-        #     train_dataset.num_classes,
-        #     tune_dataset.num_classes,
-        #     test_dataset.num_classes,
-        # )
-        # assert (
-        #     train_c == tune_c == test_c
-        # ), f"Different number of classes C in train (C={train_c}), tune (C={tune_c}) and test (C={test_c}) sets!"
 
         model = ModelFactory(cfg.level, cfg.nbins, cfg.model).get_model()
         model.relocate()
@@ -120,7 +122,7 @@ def main(cfg: DictConfig):
         fold_start_time = time.time()
 
         if cfg.wandb.enable:
-            wandb.define_metric(f"fold_{i}/train/epoch", summary="max")
+            wandb.define_metric(f"train/fold_{i}/epoch", summary="max")
 
         with tqdm.tqdm(
             range(cfg.nepochs),
@@ -134,10 +136,10 @@ def main(cfg: DictConfig):
 
                 epoch_start_time = time.time()
                 if cfg.wandb.enable:
-                    wandb.log({f"fold_{i}/train/epoch": epoch})
+                    log_dict = {f"train/fold_{i}/epoch": epoch+1}
 
                 train_results = train_survival(
-                    epoch + 1,
+                    epoch+1,
                     model,
                     train_dataset,
                     optimizer,
@@ -147,18 +149,13 @@ def main(cfg: DictConfig):
                 )
 
                 if cfg.wandb.enable:
-                    log_on_step(
-                        f"fold_{i}/train",
-                        train_results,
-                        step=f"fold_{i}/train/epoch",
-                        to_log=cfg.wandb.to_log,
-                    )
+                    update_log_dict(f"train/fold_{i}", train_results, log_dict, step=f"train/fold_{i}/epoch", to_log=cfg.wandb.to_log)
                 # train_dataset.df.to_csv(Path(result_dir, f"train_{epoch}.csv"), index=False)
 
                 if epoch % cfg.tuning.tune_every == 0:
 
                     tune_results = tune_survival(
-                        epoch + 1,
+                        epoch+1,
                         model,
                         tune_dataset,
                         criterion,
@@ -166,12 +163,10 @@ def main(cfg: DictConfig):
                     )
 
                     if cfg.wandb.enable:
-                        log_on_step(
-                            f"fold_{i}/tune",
-                            tune_results,
-                            step=f"fold_{i}/train/epoch",
-                            to_log=cfg.wandb.to_log,
-                        )
+                        update_log_dict(f"tune/fold_{i}", tune_results, log_dict, step=f"train/fold_{i}/epoch", to_log=cfg.wandb.to_log)
+                        fig = plot_cumulative_dynamic_auc(patient_dfs["train"], patient_dfs["tune"], tune_results["risks"], cfg.label_name, epoch)
+                        log_dict.update({"tune/cumulative_dynamic_auc": wandb.Image(fig)})
+                        plt.close(fig)
                     # tune_dataset.df.to_csv(
                     #     Path(result_dir, f"tune_{epoch}.csv"), index=False
                     # )
@@ -180,17 +175,19 @@ def main(cfg: DictConfig):
                     if early_stopping.early_stop and cfg.early_stopping.enable:
                         stop = True
 
+                lr = cfg.optim.lr
+                if scheduler:
+                    lr = scheduler.get_last_lr()[0]
+                    scheduler.step()
                 if cfg.wandb.enable:
                     wandb.define_metric(
-                        f"fold_{i}/train/lr", step_metric=f"fold_{i}/train/epoch"
+                        f"train/fold_{i}/lr", step_metric=f"train/fold_{i}/epoch"
                     )
-                if scheduler:
-                    lr = scheduler.get_last_lr()
-                    if cfg.wandb.enable:
-                        wandb.log({f"fold_{i}/train/lr": lr})
-                    scheduler.step()
-                elif cfg.wandb.enable:
-                    wandb.log({f"fold_{i}/train/lr": cfg.optim.lr})
+                    log_dict.update({f"train/fold_{i}/lr": lr})
+
+                # logging
+                if cfg.wandb.enable:
+                    wandb.log(log_dict)
 
                 epoch_end_time = time.time()
                 epoch_mins, epoch_secs = compute_time(epoch_start_time, epoch_end_time)
@@ -227,7 +224,7 @@ def main(cfg: DictConfig):
                 test_metrics.append(v)
                 v = round(v, 3)
             if r in cfg.wandb.to_log and cfg.wandb.enable:
-                wandb.log({f"fold_{i}/test/{r}": v})
+                wandb.log({f"test/fold_{i}/{r}": v})
 
     mean_test_metric = round(np.mean(test_metrics), 3)
     std_test_metric = round(statistics.stdev(test_metrics), 3)
