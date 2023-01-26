@@ -7,10 +7,13 @@ resume: False
 slide_list:
 
 region_size: 4096
+patch_size: 256
+mini_patch_size: 16
+
 format: 'png'
 
-pretrain_256: 'output/dino/dino/checkpoint.pth'
-freeze_256: True
+pretrain_vit_patch: 'output/dino/dino/checkpoint.pth'
+freeze_vit_patch: True
 
 wandb:
   enable: True

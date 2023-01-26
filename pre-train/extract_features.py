@@ -40,7 +40,9 @@ def main(cfg: DictConfig):
         wandb_run.define_metric("processed", summary="max")
 
     model = LocalFeatureExtractor(
-        pretrain_256=cfg.pretrain_256,
+        patch_size=cfg.patch_size,
+        mini_patch_size=cfg.mini_patch_size,
+        pretrain_vit_patch=cfg.pretrain_vit_patch,
     )
 
     region_dir = Path(cfg.region_dir)
