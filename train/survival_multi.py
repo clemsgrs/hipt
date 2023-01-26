@@ -167,7 +167,7 @@ def main(cfg: DictConfig):
                     if cfg.wandb.enable:
                         update_log_dict(f"tune/fold_{i}", tune_results, log_dict, step=f"train/fold_{i}/epoch", to_log=cfg.wandb.to_log)
                         fig = plot_cumulative_dynamic_auc(auc, mean_auc, times, epoch)
-                        log_dict.update({"tune/cumulative_dynamic_auc": wandb.Image(fig)})
+                        log_dict.update({f"tune/fold_{i}/cumulative_dynamic_auc": wandb.Image(fig)})
                         plt.close(fig)
                     tune_dataset.patient_df.to_csv(
                         Path(result_dir, f"tune_{epoch}.csv"), index=False
