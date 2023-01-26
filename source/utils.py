@@ -1,4 +1,5 @@
 import tqdm
+import math
 import wandb
 import torch
 import subprocess
@@ -15,7 +16,7 @@ from omegaconf import DictConfig, OmegaConf
 from typing import Optional, Callable, List
 from sklearn import metrics
 from sklearn.model_selection import train_test_split
-from sksurv.metrics import concordance_index_censored
+from sksurv.metrics import concordance_index_censored, cumulative_dynamic_auc
 
 
 def write_dictconfig(d, f, child: bool = False, ntab=0):
@@ -226,15 +227,15 @@ def get_roc_auc_curve(probs: np.array(float), labels: List[int], log_to_wandb: b
     return fig
 
 
-def log_on_step(
-    name, results, step: str = "epoch", to_log: Optional[List["str"]] = None
+def update_log_dict(
+    prefix, results, log_dict, step: Optional[str] = "step", to_log: Optional[List["str"]] = None
 ):
     if not to_log:
         to_log = list(results.keys())
     for r, v in results.items():
         if r in to_log:
-            wandb.define_metric(f"{name}/{r}", step_metric=step)
-            wandb.log({f"{name}/{r}": v})
+            wandb.define_metric(f"{prefix}/{r}", step_metric=step)
+            log_dict.update({f"{prefix}/{r}": v})
 
 
 def make_weights_for_balanced_classes(dataset):
@@ -254,6 +255,31 @@ def logit_to_ordinal_prediction(logits):
     with torch.no_grad():
         pred = torch.sigmoid(logits)
     return (pred > 0.5).cumprod(axis=1).sum(axis=1) - 1
+
+
+def get_cumulative_dynamic_auc(train_df, tune_df, risks, label_name):
+    cols = ["censorship", label_name]
+    train_tuples = train_df[cols].values
+    tune_tuples = tune_df[cols].values
+    survival_train = np.array(list(zip(train_tuples[:,0], train_tuples[:,1])), dtype=np.dtype('bool,float'))
+    survival_tune = np.array(list(zip(tune_tuples[:,0], tune_tuples[:,1])), dtype=np.dtype('bool,float'))
+    min_y = math.ceil(tune_df[label_name].min()/12)
+    max_y = math.floor(tune_df[label_name].max()/12)
+    times = np.arange(min_y, max_y, 1)
+    auc, mean_auc = cumulative_dynamic_auc(survival_train, survival_tune, risks, times*12)
+    return auc, mean_auc, times
+
+
+def plot_cumulative_dynamic_auc(auc, mean_auc, times, epoch):
+    fig = plt.figure(dpi=200)
+    plt.plot(times, auc, marker="o")
+    plt.axhline(mean_auc, linestyle="--")
+    plt.xticks(times, [f'{int(t)}' for t in times])
+    plt.xlabel("years from enrollment")
+    plt.ylabel("time-dependent AUC")
+    plt.title(f"Epoch {epoch+1}")
+    plt.grid(True)
+    return fig
 
 
 class OptimizerFactory:
@@ -371,7 +397,7 @@ class EarlyStopping:
             fname = f"epoch_{epoch}.pt"
             torch.save(model.state_dict(), Path(self.checkpoint_dir, fname))
 
-        # overrid latest
+        # override latest
         torch.save(model.state_dict(), Path(self.checkpoint_dir, "latest_model.pt"))
 
 
@@ -632,6 +658,7 @@ def train_survival(
     epoch_loss = 0
     censorships, event_times = [], []
     risk_scores, labels = [], []
+    idxs = []
 
     sampler = torch.utils.data.RandomSampler(dataset)
 
@@ -655,7 +682,7 @@ def train_survival(
 
         for i, batch in enumerate(t):
 
-            _, x, label, event_time, c = batch
+            idx, x, label, event_time, c = batch
             x, label, c = x.to(device, non_blocking=True), label.to(device, non_blocking=True), c.to(device, non_blocking=True)
             logits = model(x)                           # [1, nbins]
             hazards = torch.sigmoid(logits)             # [1, nbins]
@@ -666,6 +693,11 @@ def train_survival(
             loss_value = loss.item()
             epoch_loss += loss_value
 
+            risk = -torch.sum(surv, dim=1).detach()     # [1]
+            risk_scores.append(risk.item())
+            censorships.append(c.item())
+            event_times.append(event_time.item())
+
             if gradient_accumulation:
                 loss = loss / gradient_accumulation
 
@@ -675,12 +707,10 @@ def train_survival(
                 optimizer.step()
                 optimizer.zero_grad()
 
-            risk = -torch.sum(surv, dim=1).detach()     # [1]
-            risk_scores.append(risk.item())
-            censorships.append(c.item())
-            event_times.append(event_time.item())
-
             labels.extend(label.clone().tolist())
+            idxs.extend(list(idx))
+
+    dataset.patient_df.loc[idxs, "risk"] = risk_scores
 
     c_index = concordance_index_censored(
         [bool(1-c) for c in censorships],
@@ -712,6 +742,7 @@ def tune_survival(
     epoch_loss = 0
     censorships, event_times = [], []
     risk_scores, labels = [], []
+    idxs = []
 
     sampler = torch.utils.data.SequentialSampler(dataset)
 
@@ -737,7 +768,7 @@ def tune_survival(
 
             for i, batch in enumerate(t):
 
-                _, x, label, event_time, c = batch
+                idx, x, label, event_time, c = batch
                 x, label,c = x.to(device, non_blocking=True), label.to(device, non_blocking=True), c.to(device, non_blocking=True)
                 logits = model(x)
                 hazards = torch.sigmoid(logits)
@@ -752,6 +783,9 @@ def tune_survival(
                 event_times.append(event_time.item())
 
                 labels.extend(label.clone().tolist())
+                idxs.extend(list(idx))
+
+    dataset.patient_df.loc[idxs, "risk"] = risk_scores
 
     c_index = concordance_index_censored(
         [bool(1-c) for c in censorships],
@@ -761,6 +795,7 @@ def tune_survival(
     )[0]
 
     results["c-index"] = c_index
+    results["risks"] = risk_scores
 
     tune_loss = epoch_loss / len(loader)
     results["loss"] = tune_loss
@@ -780,6 +815,7 @@ def test_survival(
     model.eval()
     censorships, event_times = [], []
     risk_scores, labels = [], []
+    idxs = []
 
     sampler = torch.utils.data.SequentialSampler(dataset)
 
@@ -805,7 +841,7 @@ def test_survival(
 
             for i, batch in enumerate(t):
 
-                _, x, label, event_time, c = batch
+                idx, x, label, event_time, c = batch
                 x, label, c = x.to(device, non_blocking=True), label.to(device, non_blocking=True), c.to(device, non_blocking=True)
                 logits = model(x)
                 hazards = torch.sigmoid(logits)
@@ -817,6 +853,9 @@ def test_survival(
                 event_times.append(event_time.item())
 
                 labels.extend(label.clone().tolist())
+                idxs.extend(list(idx))
+
+    dataset.patient_df.loc[idxs, "risk"] = risk_scores
 
     c_index = concordance_index_censored(
         [bool(1-c) for c in censorships],
