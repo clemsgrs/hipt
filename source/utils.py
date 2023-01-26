@@ -279,7 +279,7 @@ def plot_cumulative_dynamic_auc(auc, mean_auc, times, epoch):
     plt.ylabel("time-dependent AUC")
     plt.title(f"Epoch {epoch+1}")
     plt.grid(True)
-    return auc, fig
+    return fig
 
 
 class OptimizerFactory:
@@ -658,6 +658,7 @@ def train_survival(
     epoch_loss = 0
     censorships, event_times = [], []
     risk_scores, labels = [], []
+    idxs = []
 
     sampler = torch.utils.data.RandomSampler(dataset)
 
@@ -681,7 +682,7 @@ def train_survival(
 
         for i, batch in enumerate(t):
 
-            _, x, label, event_time, c = batch
+            idx, x, label, event_time, c = batch
             x, label, c = x.to(device, non_blocking=True), label.to(device, non_blocking=True), c.to(device, non_blocking=True)
             logits = model(x)                           # [1, nbins]
             hazards = torch.sigmoid(logits)             # [1, nbins]
@@ -707,6 +708,9 @@ def train_survival(
                 optimizer.zero_grad()
 
             labels.extend(label.clone().tolist())
+            idxs.extend(list(idx))
+
+    dataset.patient_df.loc[idxs, "risk"] = risk_scores
 
     c_index = concordance_index_censored(
         [bool(1-c) for c in censorships],
@@ -738,6 +742,7 @@ def tune_survival(
     epoch_loss = 0
     censorships, event_times = [], []
     risk_scores, labels = [], []
+    idxs = []
 
     sampler = torch.utils.data.SequentialSampler(dataset)
 
@@ -763,7 +768,7 @@ def tune_survival(
 
             for i, batch in enumerate(t):
 
-                _, x, label, event_time, c = batch
+                idx, x, label, event_time, c = batch
                 x, label,c = x.to(device, non_blocking=True), label.to(device, non_blocking=True), c.to(device, non_blocking=True)
                 logits = model(x)
                 hazards = torch.sigmoid(logits)
@@ -778,6 +783,9 @@ def tune_survival(
                 event_times.append(event_time.item())
 
                 labels.extend(label.clone().tolist())
+                idxs.extend(list(idx))
+
+    dataset.patient_df.loc[idxs, "risk"] = risk_scores
 
     c_index = concordance_index_censored(
         [bool(1-c) for c in censorships],
@@ -807,6 +815,7 @@ def test_survival(
     model.eval()
     censorships, event_times = [], []
     risk_scores, labels = [], []
+    idxs = []
 
     sampler = torch.utils.data.SequentialSampler(dataset)
 
@@ -832,7 +841,7 @@ def test_survival(
 
             for i, batch in enumerate(t):
 
-                _, x, label, event_time, c = batch
+                idx, x, label, event_time, c = batch
                 x, label, c = x.to(device, non_blocking=True), label.to(device, non_blocking=True), c.to(device, non_blocking=True)
                 logits = model(x)
                 hazards = torch.sigmoid(logits)
@@ -844,6 +853,9 @@ def test_survival(
                 event_times.append(event_time.item())
 
                 labels.extend(label.clone().tolist())
+                idxs.extend(list(idx))
+
+    dataset.patient_df.loc[idxs, "risk"] = risk_scores
 
     c_index = concordance_index_censored(
         [bool(1-c) for c in censorships],

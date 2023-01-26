@@ -126,7 +126,7 @@ def main(cfg: DictConfig):
 
             if cfg.wandb.enable:
                 update_log_dict("train", train_results, log_dict, to_log=cfg.wandb.to_log)
-            # train_dataset.df.to_csv(Path(result_dir, f"train_{epoch}.csv"), index=False)
+            train_dataset.patient_df.to_csv(Path(result_dir, f"train_{epoch}.csv"), index=False)
 
             if epoch % cfg.tuning.tune_every == 0:
 
@@ -144,7 +144,7 @@ def main(cfg: DictConfig):
                     fig = plot_cumulative_dynamic_auc(auc, mean_auc, times, epoch)
                     log_dict.update({"tune/cumulative_dynamic_auc": wandb.Image(fig)})
                     plt.close(fig)
-                # tune_dataset.df.to_csv(Path(result_dir, f"tune_{epoch}.csv"), index=False)
+                tune_dataset.patient_df.to_csv(Path(result_dir, f"tune_{epoch}.csv"), index=False)
 
                 early_stopping(epoch, model, tune_results)
                 if early_stopping.early_stop and cfg.early_stopping.enable:
