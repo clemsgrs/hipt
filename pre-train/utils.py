@@ -76,7 +76,7 @@ class Solarization(object):
             return img
 
 
-class DataAugmentationDINO(object):
+class PatchDataAugmentationDINO(object):
     def __init__(self, global_crops_scale, local_crops_scale, local_crops_number):
         flip_and_color_jitter = transforms.Compose(
             [
@@ -99,11 +99,14 @@ class DataAugmentationDINO(object):
             ]
         )
 
+        global_crop_size = 224
+        local_crop_size = 96
+
         # first global crop
         self.global_transfo1 = transforms.Compose(
             [
                 transforms.RandomResizedCrop(
-                    224, scale=global_crops_scale, interpolation=transforms.InterpolationMode.BICUBIC
+                    global_crop_size, scale=global_crops_scale, interpolation=transforms.InterpolationMode.BICUBIC
                 ),
                 flip_and_color_jitter,
                 GaussianBlur(1.0),
@@ -114,7 +117,7 @@ class DataAugmentationDINO(object):
         self.global_transfo2 = transforms.Compose(
             [
                 transforms.RandomResizedCrop(
-                    224, scale=global_crops_scale, interpolation=transforms.InterpolationMode.BICUBIC
+                    global_crop_size, scale=global_crops_scale, interpolation=transforms.InterpolationMode.BICUBIC
                 ),
                 flip_and_color_jitter,
                 GaussianBlur(0.1),
@@ -127,7 +130,7 @@ class DataAugmentationDINO(object):
         self.local_transfo = transforms.Compose(
             [
                 transforms.RandomResizedCrop(
-                    96, scale=local_crops_scale, interpolation=transforms.InterpolationMode.BICUBIC
+                    local_crop_size, scale=local_crops_scale, interpolation=transforms.InterpolationMode.BICUBIC
                 ),
                 flip_and_color_jitter,
                 GaussianBlur(p=0.5),
@@ -144,37 +147,38 @@ class DataAugmentationDINO(object):
         return crops
 
 
-class DataAugmentationDINO4K(object):
+class RegionDataAugmentationDINO(object):
     """
-    Modified Data Augmentaton for DINO for 4K x 4K resolutions for performing local / global crops on features in image grid
+    Modified Data Augmentaton for DINO for [region_size x region_size] resolutions for performing local / global crops on features in image grid
     """
-    def __init__(self, local_crops_number):
-        flip = transforms.Compose([
-            transforms.RandomHorizontalFlip(p=0.5),
-        ])
+    def __init__(self, global_crops_scale, local_crops_number, local_crops_scale, region_size: int = 4096, patch_size: int = 256):
+
+        self.npatch = int(region_size // patch_size)
+        global_crop_size = int(global_crops_scale * self.npatch)
+        local_crop_size = int(local_crops_scale * self.npatch)
 
         # first global crop
         self.global_transfo1 = transforms.Compose([
-            transforms.RandomCrop(14),
+            transforms.RandomCrop(global_crop_size),
             transforms.RandomHorizontalFlip(p=0.5),
         ])
 
         # second global crop
         self.global_transfo2 = transforms.Compose([
-            transforms.RandomCrop(14),
+            transforms.RandomCrop(global_crop_size),
             transforms.RandomHorizontalFlip(p=0.5),
         ])
 
         # transformation for the local small crops
         self.local_crops_number = local_crops_number
         self.local_transfo = transforms.Compose([
-            transforms.RandomCrop(6),
+            transforms.RandomCrop(local_crop_size),
             transforms.RandomHorizontalFlip(p=0.5),
         ])
 
     def __call__(self, x):
         crops = []
-        x = x.unfold(0, 16, 16).transpose(0, 1) # [256, 384] -> [16, 384, 16] -> [384, 16, 16]
+        x = x.unfold(0, self.npatch, self.npatch).transpose(0, 1) # [m, 384] -> [npatch, 384, npatch] -> [384, npatch, npatch]
         crops.append(self.global_transfo1(x))
         crops.append(self.global_transfo2(x))
         for _ in range(self.local_crops_number):

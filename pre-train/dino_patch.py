@@ -21,7 +21,7 @@ import source.vision_transformer as vits
 from source.utils import initialize_wandb, compute_time
 from source.components import DINOLoss
 from utils import (
-    DataAugmentationDINO,
+    PatchDataAugmentationDINO,
     MultiCropWrapper,
     train_one_epoch,
     init_distributed_mode,
@@ -62,7 +62,7 @@ def main(cfg: DictConfig):
         wandb_run.define_metric("epoch", summary="max")
 
     # preparing data
-    transform = DataAugmentationDINO(
+    transform = PatchDataAugmentationDINO(
         cfg.aug.global_crops_scale,
         cfg.aug.local_crops_scale,
         cfg.aug.local_crops_number,
