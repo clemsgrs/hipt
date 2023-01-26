@@ -257,7 +257,7 @@ def logit_to_ordinal_prediction(logits):
     return (pred > 0.5).cumprod(axis=1).sum(axis=1) - 1
 
 
-def plot_cumulative_dynamic_auc(train_df, tune_df, risks, label_name, epoch):
+def get_cumulative_dynamic_auc(train_df, tune_df, risks, label_name):
     cols = ["censorship", label_name]
     train_tuples = train_df[cols].values
     tune_tuples = tune_df[cols].values
@@ -267,6 +267,10 @@ def plot_cumulative_dynamic_auc(train_df, tune_df, risks, label_name, epoch):
     max_y = math.floor(tune_df[label_name].max()/12)
     times = np.arange(min_y, max_y, 1)
     auc, mean_auc = cumulative_dynamic_auc(survival_train, survival_tune, risks, times*12)
+    return auc, mean_auc, times
+
+
+def plot_cumulative_dynamic_auc(auc, mean_auc, times, epoch):
     fig = plt.figure(dpi=200)
     plt.plot(times, auc, marker="o")
     plt.axhline(mean_auc, linestyle="--")
@@ -275,7 +279,7 @@ def plot_cumulative_dynamic_auc(train_df, tune_df, risks, label_name, epoch):
     plt.ylabel("time-dependent AUC")
     plt.title(f"Epoch {epoch+1}")
     plt.grid(True)
-    return fig
+    return auc, fig
 
 
 class OptimizerFactory:

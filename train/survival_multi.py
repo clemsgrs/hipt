@@ -22,6 +22,7 @@ from source.utils import (
     test_survival,
     compute_time,
     update_log_dict,
+    get_cumulative_dynamic_auc,
     plot_cumulative_dynamic_auc,
     EarlyStopping,
     OptimizerFactory,
@@ -162,9 +163,10 @@ def main(cfg: DictConfig):
                         batch_size=cfg.tuning.batch_size,
                     )
 
+                    auc, mean_auc, times = get_cumulative_dynamic_auc(patient_dfs["train"], patient_dfs["tune"], tune_results["risks"], cfg.label_name)
                     if cfg.wandb.enable:
                         update_log_dict(f"tune/fold_{i}", tune_results, log_dict, step=f"train/fold_{i}/epoch", to_log=cfg.wandb.to_log)
-                        fig = plot_cumulative_dynamic_auc(patient_dfs["train"], patient_dfs["tune"], tune_results["risks"], cfg.label_name, epoch)
+                        fig = plot_cumulative_dynamic_auc(auc, mean_auc, times, epoch)
                         log_dict.update({"tune/cumulative_dynamic_auc": wandb.Image(fig)})
                         plt.close(fig)
                     # tune_dataset.df.to_csv(
