@@ -257,16 +257,23 @@ def logit_to_ordinal_prediction(logits):
     return (pred > 0.5).cumprod(axis=1).sum(axis=1) - 1
 
 
-def get_cumulative_dynamic_auc(train_df, tune_df, risks, label_name):
+def get_cumulative_dynamic_auc(train_df, test_df, risks, label_name, verbose: bool = False):
     cols = ["censorship", label_name]
     train_tuples = train_df[cols].values
-    tune_tuples = tune_df[cols].values
+    tune_tuples = test_df[cols].values
     survival_train = np.array(list(zip(train_tuples[:,0], train_tuples[:,1])), dtype=np.dtype('bool,float'))
     survival_tune = np.array(list(zip(tune_tuples[:,0], tune_tuples[:,1])), dtype=np.dtype('bool,float'))
-    min_y = math.ceil(tune_df[label_name].min()/12)
-    max_y = math.floor(tune_df[label_name].max()/12) - 1
+    train_min, train_max = train_df[label_name].min(), train_df[label_name].max()
+    test_min, test_max = test_df[label_name].min(), test_df[label_name].max()
+    min_y = math.ceil(test_min/12)
+    max_y = math.floor(test_max/12)
     times = np.arange(min_y, max_y, 1)
-    auc, mean_auc = cumulative_dynamic_auc(survival_train, survival_tune, risks, times*12)
+    if train_min <= test_min < test_max < train_max:
+        auc, mean_auc = cumulative_dynamic_auc(survival_train, survival_tune, risks, times*12)
+    else:
+        if verbose:
+            print(f"test data ({test_min},{test_max}) is not within time range of training data ({train_min},{train_max})")
+        auc, mean_auc = None, None
     return auc, mean_auc, times
 
 
