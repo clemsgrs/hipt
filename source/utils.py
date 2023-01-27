@@ -264,7 +264,7 @@ def get_cumulative_dynamic_auc(train_df, tune_df, risks, label_name):
     survival_train = np.array(list(zip(train_tuples[:,0], train_tuples[:,1])), dtype=np.dtype('bool,float'))
     survival_tune = np.array(list(zip(tune_tuples[:,0], tune_tuples[:,1])), dtype=np.dtype('bool,float'))
     min_y = math.ceil(tune_df[label_name].min()/12)
-    max_y = math.floor(tune_df[label_name].max()/12-1)
+    max_y = math.floor(tune_df[label_name].max()/12) - 1
     times = np.arange(min_y, max_y, 1)
     auc, mean_auc = cumulative_dynamic_auc(survival_train, survival_tune, risks, times*12)
     return auc, mean_auc, times
