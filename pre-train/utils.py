@@ -617,6 +617,7 @@ def train_one_epoch(
                     param_group["weight_decay"] = wd_schedule[it]
 
             # move images to gpu
+            # images = [im.to(gpu_id, non_blocking=True) for im in images]
             images = [im.cuda(non_blocking=True) for im in images]
             # teacher and student forward passes + compute dino loss
             with torch.cuda.amp.autocast(fp16_scaler is not None):

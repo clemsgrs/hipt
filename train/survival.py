@@ -3,6 +3,7 @@ import time
 import tqdm
 import wandb
 import hydra
+import torch
 import pandas as pd
 import matplotlib.pyplot as plt
 
@@ -16,6 +17,7 @@ from source.utils import (
     initialize_wandb,
     train_survival,
     tune_survival,
+    test_survival,
     compute_time,
     update_log_dict,
     get_cumulative_dynamic_auc,
@@ -55,30 +57,33 @@ def main(cfg: DictConfig):
     print(model)
 
     print("Loading data")
-    train_df = pd.read_csv(cfg.data.train_csv)
-    tune_df = pd.read_csv(cfg.data.tune_csv)
+    dfs = {}
+    for p in ["train", "tune", "test"]:
+        df_path = Path(cfg.data.fold_dir, f"{p}.csv")
+        df = pd.read_csv(df_path)
+        df['partition'] = [p] * len(df)
+        dfs[p] = df
 
     if cfg.training.pct:
-        print(f"Training & Tuning on {cfg.training.pct*100}% of the data")
-        train_df = train_df.sample(frac=cfg.training.pct).reset_index(drop=True)
-        tune_df = tune_df.sample(frac=cfg.training.pct).reset_index(drop=True)
+        print(f"Training on {cfg.training.pct*100}% of the data")
+        dfs["train"] = dfs["train"].sample(frac=cfg.training.pct).reset_index(drop=True)
 
-    train_df['partition'] = ['train'] * len(train_df)
-    tune_df['partition'] = ['tune'] * len(tune_df)
+    df = pd.concat([df for df in dfs.values()], ignore_index=True)
+    patient_df, slide_df = ppcess_tcga_survival_data(df, cfg.label_name, nbins=cfg.nbins)
 
-    train_tune_df = pd.concat([train_df, tune_df], ignore_index=True)
-    patient_df, slide_df = ppcess_tcga_survival_data(train_tune_df, cfg.label_name, nbins=cfg.nbins)
-
-    train_patient_df = patient_df[patient_df.partition == 'train'].reset_index(drop=True)
-    tune_patient_df = patient_df[patient_df.partition == 'tune'].reset_index(drop=True)
-    train_slide_df = slide_df[slide_df.partition == 'train']
-    tune_slide_df = slide_df[slide_df.partition == 'tune']
+    patient_dfs, slide_dfs = {}, {}
+    for p in ["train", "tune", "test"]:
+        patient_dfs[p] = patient_df[patient_df.partition == p].reset_index(drop=True)
+        slide_dfs[p] = slide_df[slide_df.partition == p]
 
     train_dataset = ExtractedFeaturesSurvivalDataset(
-        train_patient_df, train_slide_df, features_dir, cfg.label_name,
+        patient_dfs["train"], slide_dfs["train"], features_dir, cfg.label_name,
     )
     tune_dataset = ExtractedFeaturesSurvivalDataset(
-        tune_patient_df, tune_slide_df, features_dir, cfg.label_name,
+        patient_dfs["tune"], slide_dfs["tune"], features_dir, cfg.label_name,
+    )
+    test_dataset = ExtractedFeaturesSurvivalDataset(
+        patient_dfs["test"], slide_dfs["test"], features_dir, cfg.label_name,
     )
 
     print("Configuring optimmizer & scheduler")
@@ -138,7 +143,7 @@ def main(cfg: DictConfig):
                     batch_size=cfg.tuning.batch_size,
                 )
 
-                auc, mean_auc, times = get_cumulative_dynamic_auc(train_patient_df, tune_patient_df, tune_results["risks"], cfg.label_name)
+                auc, mean_auc, times = get_cumulative_dynamic_auc(patient_dfs["train"], patient_dfs["tune"], tune_results["risks"], cfg.label_name)
                 if cfg.wandb.enable:
                     update_log_dict("tune", tune_results, log_dict, to_log=cfg.wandb.to_log)
                     if auc is not None:
@@ -173,6 +178,27 @@ def main(cfg: DictConfig):
                     f"Stopping early because best {cfg.early_stopping.tracking} was reached {cfg.early_stopping.patience} epochs ago"
                 )
                 break
+
+    if cfg.testing.run_testing:
+        # load best model
+        best_model_fp = Path(checkpoint_dir, f"{cfg.testing.retrieve_checkpoint}_model.pt")
+        if cfg.wandb.enable:
+            wandb.save(str(best_model_fp))
+        best_model_sd = torch.load(best_model_fp)
+        model.load_state_dict(best_model_sd)
+
+        test_results = test_survival(
+            model,
+            test_dataset,
+            batch_size=1,
+        )
+        test_dataset.patient_df.to_csv(Path(result_dir, f"test.csv"), index=False)
+
+        for r, v in test_results.items():
+            if r == "c-index":
+                v = round(v, 3)
+            if r in cfg.wandb.to_log and cfg.wandb.enable:
+                wandb.log({f"test/{r}": v})
 
     end_time = time.time()
     mins, secs = compute_time(start_time, end_time)
