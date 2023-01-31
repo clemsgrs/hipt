@@ -1,5 +1,5 @@
-data_dir: 'data/panda_radboud/dino/patch_256_pretraining'
-output_dir: 'output/panda_radboud'
+data_dir: '/data/pathology/projects/ais-cap/code/git/clemsgrs/hipt/data/panda_radboud/dino/patch_256_pretraining'
+output_dir: '/data/pathology/projects/ais-cap/code/git/clemsgrs/hipt/output/panda_radboud'
 experiment_name: 'dino'
 
 resume: False
@@ -24,7 +24,7 @@ training:
   nepochs: 100
   warmup_epochs: 10 # number of epochs for the linear learning-rate warm up.
   freeze_last_layer: 1 # number of epochs during which we keep the output layer fixed ; typically doing so during the first epoch helps training ; try increasing this value if the loss does not decrease
-  batch_size_per_gpu: 32
+  batch_size_per_gpu: 128
   clip_grad: 3.0 # maximal parameter gradient norm if using gradient clipping ; clipping with norm .3 ~ 1.0 can help optimization for larger ViT architectures. 0 for disabling
   pct:
 

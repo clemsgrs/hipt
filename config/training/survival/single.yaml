@@ -1,6 +1,5 @@
 data:
-  train_csv: '/home/user/dataset/tcga/brca/survival/5fold-cv/fold_0/train.csv'
-  tune_csv: '/home/user/dataset/tcga/brca/survival/5fold-cv/fold_0/tune.csv'
+  fold_dir: '/home/user/dataset/tcga/brca/survival/5fold-cv/fold_0'
 
 features_dir: 'output/tcga_brca_all_slides/features/global'
 output_dir: 'output'
@@ -25,6 +24,7 @@ tuning:
   tune_every: 1
 
 testing:
+  run_testing: True
   retrieve_checkpoint: 'latest'
 
 model:
