@@ -273,6 +273,7 @@ class VisionTransformer(nn.Module):
             nn.init.constant_(m.weight, 1.0)
 
     def interpolate_pos_encoding(self, x, w, h):
+        # x = [num_patches, num_mini_patches+1, 768]
         npatch = x.shape[1] - 1
         N = self.pos_embed.shape[1] - 1
         if npatch == N and w == h:
@@ -302,12 +303,13 @@ class VisionTransformer(nn.Module):
         return torch.cat((class_pos_embed.unsqueeze(0), patch_pos_embed), dim=1)
 
     def prepare_tokens(self, x):
+        # x = [num_patches, 3, img_size, img_size]
         B, nc, w, h = x.shape
-        x = self.patch_embed(x)  # patch linear embedding
+        x = self.patch_embed(x)  # patch linear embedding, x = [num_patches, num_mini_patches, 768]
 
         # add the [CLS] token to the embed patch tokens
-        cls_tokens = self.cls_token.expand(B, -1, -1)
-        x = torch.cat((cls_tokens, x), dim=1)
+        cls_tokens = self.cls_token.expand(B, -1, -1)       # [num_patches, 1, 768]
+        x = torch.cat((cls_tokens, x), dim=1)               # [num_patches, num_mini_patches+1, 768]
 
         # add positional encoding to each token
         x = x + self.interpolate_pos_encoding(x, w, h)
@@ -315,6 +317,7 @@ class VisionTransformer(nn.Module):
         return self.pos_drop(x)
 
     def forward(self, x):
+        # x_in = [num_patches, 3, img_size, img_size], x_out = [num_patches, num_mini_patches+1, 768]
         x = self.prepare_tokens(x)
         for blk in self.blocks:
             x = blk(x)
@@ -436,7 +439,7 @@ class VisionTransformer4K(nn.Module):
         num_patches = int(img_size * dino_max_crop_scale // patch_size) ** 2
 
         self.cls_token = nn.Parameter(torch.zeros(1, 1, self.embed_dim))
-        self.pos_embed = nn.Parameter(torch.zeros(1, num_patches + 1, self.embed_dim))
+        self.pos_embed = nn.Parameter(torch.zeros(1, num_patches + 1, self.embed_dim)) # [1, 196+1, 192]
         self.pos_drop = nn.Dropout(p=drop_rate)
 
         dpr = [

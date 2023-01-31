@@ -128,7 +128,7 @@ def main(cfg: DictConfig):
         with tqdm.tqdm(
             range(cfg.nepochs),
             desc=(f"Fold {i} Training"),
-            unit=" slide",
+            unit=" patient",
             ncols=100,
             leave=True,
         ) as t:
