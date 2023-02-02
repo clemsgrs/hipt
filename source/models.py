@@ -21,10 +21,16 @@ class ModelFactory:
     ):
 
         if level == "global":
-            self.model = GlobalHIPT(
-                num_classes=num_classes,
-                dropout=model_options.dropout,
-            )
+            if model_options.agg_method == 'concat':
+                self.model = GlobalHIPT(
+                    num_classes=num_classes,
+                    dropout=model_options.dropout,
+                )
+            elif model_options.agg_method == 'self_att':
+                self.model = GlobalPatientLevelHIPT(
+                    num_classes=num_classes,
+                    dropout=model_options.dropout,
+                )
         elif level == "local":
             self.model = LocalGlobalHIPT(
                 num_classes=num_classes,
@@ -612,3 +618,122 @@ class LocalFeatureExtractor(nn.Module):
         patch_feature = self.vit_patch(x).detach().cpu()  # [num_patches, 384]
 
         return patch_feature
+
+
+class GlobalPatientLevelHIPT(nn.Module):
+    def __init__(
+        self,
+        num_classes: int = 2,
+        embed_dim_region: int = 192,
+        embed_dim_slide: int = 192,
+        embed_dim_patient: int = 192,
+        dropout: float = 0.25,
+    ):
+
+        super(GlobalPatientLevelHIPT, self).__init__()
+        self.num_classes = num_classes
+
+        # from region to slide aggregation
+        self.global_phi_slide = nn.Sequential(
+            nn.Linear(embed_dim_region, embed_dim_slide), nn.ReLU(), nn.Dropout(dropout)
+        )
+        self.global_transformer_slide = nn.TransformerEncoder(
+            nn.TransformerEncoderLayer(
+                d_model=embed_dim_slide,
+                nhead=3,
+                dim_feedforward=embed_dim_slide,
+                dropout=dropout,
+                activation="relu",
+            ),
+            num_layers=2,
+        )
+        self.global_attn_pool_slide = Attn_Net_Gated(
+            L=embed_dim_slide, D=embed_dim_slide, dropout=dropout, num_classes=1
+        )
+        self.global_rho_slide = nn.Sequential(
+            *[nn.Linear(embed_dim_slide, embed_dim_slide), nn.ReLU(), nn.Dropout(dropout)]
+        )
+
+        # from slide to patient aggregation
+        self.global_phi_patient = nn.Sequential(
+            nn.Linear(embed_dim_slide, embed_dim_patient), nn.ReLU(), nn.Dropout(dropout)
+        )
+        self.global_transformer_patient = nn.TransformerEncoder(
+            nn.TransformerEncoderLayer(
+                d_model=embed_dim_patient,
+                nhead=3,
+                dim_feedforward=embed_dim_patient,
+                dropout=dropout,
+                activation="relu",
+            ),
+            num_layers=2,
+        )
+        self.global_attn_pool_patient = Attn_Net_Gated(
+            L=embed_dim_patient, D=embed_dim_patient, dropout=dropout, num_classes=1
+        )
+        self.global_rho_patient = nn.Sequential(
+            *[nn.Linear(embed_dim_patient, embed_dim_patient), nn.ReLU(), nn.Dropout(dropout)]
+        )
+
+
+        self.classifier = nn.Linear(embed_dim_patient, num_classes)
+
+    def forward(self, x):
+
+        # x = [ [M1, 192], [M2, 192], ...]
+        N = len(x)
+        slide_seq = []
+        for n in range(N):
+            y = x[n]
+            y = self.global_phi_slide(y)
+            # in nn.TransformerEncoderLayer, batch_first defaults to False
+            # hence, input is expected to be of shape (seq_length, batch, emb_size)
+            y = self.global_transformer_slide(y.unsqueeze(1)).squeeze(1)
+            att_slide, y = self.global_attn_pool_slide(y)
+            att_slide = torch.transpose(att_slide, 1, 0)
+            att_slide = F.softmax(att_slide, dim=1)
+            y_att = torch.mm(att_slide, y)
+            y_slide = self.global_rho_slide(y_att)
+            slide_seq.append(y_slide)
+
+        slide_seq = torch.cat(slide_seq, dim=0)
+        # slide_seq = [N, 192]
+        z = self.global_phi_patient(slide_seq)
+
+        z = self.global_transformer_patient(z.unsqueeze(1)).squeeze(1)
+        att_patient, z = self.global_attn_pool_patient(z)
+        att_patient = torch.transpose(att_patient, 1, 0)
+        att_patient = F.softmax(att_patient, dim=1)
+        z_att = torch.mm(att_patient, z)
+        z_patient = self.global_rho_patient(z_att)
+
+        logits = self.classifier(z_patient)
+
+        return logits
+
+    def relocate(self):
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+        self.global_phi_slide = self.global_phi_slide.to(device)
+        self.global_transformer_slide = self.global_transformer_slide.to(device)
+        self.global_attn_pool_slide = self.global_attn_pool_slide.to(device)
+        self.global_rho_slide = self.global_rho_slide.to(device)
+
+        self.global_phi_patient = self.global_phi_patient.to(device)
+        self.global_transformer_patient = self.global_transformer_patient.to(device)
+        self.global_attn_pool_patient = self.global_attn_pool_patient.to(device)
+        self.global_rho_patient = self.global_rho_patient.to(device)
+
+        self.classifier = self.classifier.to(device)
+
+    def __repr__(self) -> str:
+        num_params = 0
+        num_params_train = 0
+        for param in self.parameters():
+            n = param.numel()
+            num_params += n
+            if param.requires_grad:
+                num_params_train += n
+        main_str = f"Total number of parameters: {num_params}\n"
+        main_str += f"Total number of trainable parameters: {num_params_train}"
+        return main_str
