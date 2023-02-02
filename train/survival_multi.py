@@ -79,7 +79,6 @@ def main(cfg: DictConfig):
         if cfg.training.pct:
             print(f"Training on {cfg.training.pct*100}% of the data")
             dfs["train"] = dfs["train"].sample(frac=cfg.training.pct).reset_index(drop=True)
-
         train_tune_df = pd.concat([df for df in dfs.values()], ignore_index=True)
         patient_df, slide_df = ppcess_tcga_survival_data(train_tune_df, cfg.label_name, nbins=cfg.nbins)
 
