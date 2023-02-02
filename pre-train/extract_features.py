@@ -71,7 +71,7 @@ def main(cfg: DictConfig):
     total = len(process_stack)
     already_processed = len(df) - total
 
-    region_dataset = RegionFilepathsDataset(df, region_dir, cfg.region_size, cfg.format)
+    region_dataset = RegionFilepathsDataset(df, region_dir, cfg.format)
     region_subset = torch.utils.data.Subset(
         region_dataset, indices=process_stack.index.tolist()
     )

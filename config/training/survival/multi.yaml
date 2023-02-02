@@ -3,11 +3,11 @@ defaults:
   - _self_
 
 data:
-  fold_dir: '/data/pathology/projects/ais-cap/dataset/tcga/brca/survival/5fold-cv'
+  fold_dir: '/data/pathology/projects/ais-cap/dataset/tcga/brca/survival/5fold-cv_narrowed'
 
 features_dir: '/data/pathology/projects/ais-cap/code/git/cpg/hipt/output/tcga_brca_all_slides/features/global'
 # features_dir: '/home/user/code/git/opensource/HIPT/3-Self-Supervised-Eval/embeddings_slide_lib/embeddings_slide_lib/vit256mean_tcga_slide_embeddings'
-experiment_name: 'tcga_brca_survival_multifold'
+experiment_name: 'tcga_brca_survival_narrowed_multifold_patient_agg'
 level: 'global'
 
 nepochs: 50

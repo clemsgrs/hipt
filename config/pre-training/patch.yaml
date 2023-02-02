@@ -1,6 +1,6 @@
 data_dir: '/data/pathology/projects/ais-cap/code/git/clemsgrs/hipt/data/panda_radboud/dino/patch_256_pretraining'
 output_dir: '/data/pathology/projects/ais-cap/code/git/clemsgrs/hipt/output/panda_radboud'
-experiment_name: 'dino'
+experiment_name: 'dino_patch'
 
 resume: False
 resume_from_ckpt: 'latest'

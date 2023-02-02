@@ -14,7 +14,7 @@ from omegaconf import DictConfig
 
 from source.models import ModelFactory
 from source.components import LossFactory
-from source.dataset import ExtractedFeaturesSurvivalDataset, ppcess_tcga_survival_data
+from source.dataset import ExtractedFeaturesSurvivalDataset, ExtractedFeaturesPatientLevelSurvivalDataset, ppcess_tcga_survival_data
 from source.utils import (
     initialize_wandb,
     train_survival,
@@ -88,15 +88,26 @@ def main(cfg: DictConfig):
             patient_dfs[partition] = patient_df[patient_df.partition == partition].reset_index(drop=True)
             slide_dfs[partition] = slide_df[slide_df.partition == partition]
 
-        train_dataset = ExtractedFeaturesSurvivalDataset(
-            patient_dfs["train"], slide_dfs["train"], features_dir, cfg.label_name,
-        )
-        tune_dataset = ExtractedFeaturesSurvivalDataset(
-            patient_dfs["tune"], slide_dfs["tune"], features_dir, cfg.label_name,
-        )
-        test_dataset = ExtractedFeaturesSurvivalDataset(
-            patient_dfs["tune"], slide_dfs["tune"], features_dir, cfg.label_name,
-        )
+        if cfg.model.agg_method == 'concat':
+            train_dataset = ExtractedFeaturesSurvivalDataset(
+                patient_dfs["train"], slide_dfs["train"], features_dir, cfg.label_name,
+            )
+            tune_dataset = ExtractedFeaturesSurvivalDataset(
+                patient_dfs["tune"], slide_dfs["tune"], features_dir, cfg.label_name,
+            )
+            test_dataset = ExtractedFeaturesSurvivalDataset(
+                patient_dfs["tune"], slide_dfs["tune"], features_dir, cfg.label_name,
+            )
+        elif cfg.model.agg_method == 'self_att':
+            train_dataset = ExtractedFeaturesPatientLevelSurvivalDataset(
+                patient_dfs["train"], slide_dfs["train"], features_dir, cfg.label_name,
+            )
+            tune_dataset = ExtractedFeaturesPatientLevelSurvivalDataset(
+                patient_dfs["tune"], slide_dfs["tune"], features_dir, cfg.label_name,
+            )
+            test_dataset = ExtractedFeaturesPatientLevelSurvivalDataset(
+                patient_dfs["tune"], slide_dfs["tune"], features_dir, cfg.label_name,
+            )
 
         model = ModelFactory(cfg.level, cfg.nbins, cfg.model).get_model()
         model.relocate()
@@ -145,6 +156,7 @@ def main(cfg: DictConfig):
                     train_dataset,
                     optimizer,
                     criterion,
+                    agg_method=cfg.model.agg_method,
                     batch_size=cfg.training.batch_size,
                     gradient_accumulation=cfg.training.gradient_accumulation,
                 )
@@ -160,6 +172,7 @@ def main(cfg: DictConfig):
                         model,
                         tune_dataset,
                         criterion,
+                        agg_method=cfg.model.agg_method,
                         batch_size=cfg.tuning.batch_size,
                     )
 
@@ -218,6 +231,7 @@ def main(cfg: DictConfig):
         test_results = test_survival(
             model,
             test_dataset,
+            agg_method=cfg.model.agg_method,
             batch_size=1,
         )
         test_dataset.patient_df.to_csv(Path(result_dir, f"test.csv"), index=False)

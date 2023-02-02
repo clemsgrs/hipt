@@ -156,7 +156,58 @@ class ExtractedFeaturesSurvivalDataset(torch.utils.data.Dataset):
             fp = Path(self.features_dir, f"{slide_id}.pt")
             f = torch.load(fp)
             features.append(f)
+
+        # when multiple slides, concatenate region features
         features = torch.cat(features, dim=0)
+
+        return idx, features, label, event_time, c
+
+    def __len__(self):
+        return len(self.patient_df)
+
+
+class ExtractedFeaturesPatientLevelSurvivalDataset(torch.utils.data.Dataset):
+    def __init__(
+        self,
+        patient_df: pd.DataFrame,
+        slide_df: pd.DataFrame,
+        features_dir: Path,
+        label_name: str = "label",
+    ):
+
+        self.features_dir = features_dir
+        self.label_name = label_name
+
+        self.slide_df = self.filter_df(slide_df)
+        self.patient_df = patient_df
+
+    def filter_df(self, df):
+        missing_slide_ids = []
+        for slide_id in df.slide_id:
+            if not Path(self.features_dir, f"{slide_id}.pt").is_file():
+                missing_slide_ids.append(slide_id)
+        if len(missing_slide_ids) > 0:
+            print(f"WARNING: {len(missing_slide_ids)} slides dropped because missing on disk")
+        filtered_df = df[~df.slide_id.isin(missing_slide_ids)].reset_index(drop=True)
+        return filtered_df
+
+    def __getitem__(self, idx: int):
+
+        row = self.patient_df.loc[idx]
+        case_id = row.case_id
+        slide_ids = self.slide_df[self.slide_df.case_id == case_id].slide_id.values.tolist()
+
+        assert len(slide_ids) == len(set(slide_ids))
+
+        label = row.disc_label
+        event_time = row[self.label_name]
+        c = row.censorship
+
+        features = []
+        for slide_id in slide_ids:
+            fp = Path(self.features_dir, f"{slide_id}.pt")
+            f = torch.load(fp)
+            features.append(f)
 
         return idx, features, label, event_time, c
 

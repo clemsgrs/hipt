@@ -189,10 +189,13 @@ def collate_features(batch, label_type: str = "int"):
     return [idx, feature, label]
 
 
-def collate_survival_features(batch, label_type: str = "int"):
+def collate_survival_features(batch, label_type: str = "int", agg_method: str = "concat"):
     idx = torch.LongTensor([item[0] for item in batch])
     # feature = torch.vstack([item[1] for item in batch])
-    feature = torch.cat([item[1] for item in batch], dim=0)
+    if agg_method == "concat":
+        feature = torch.cat([item[1] for item in batch], dim=0)
+    elif agg_method == "self_att":
+        feature = [item[1] for item in batch]
     if label_type == "float":
         label = torch.FloatTensor([item[2] for item in batch])
     elif label_type == "int":
@@ -654,7 +657,7 @@ def train_survival(
     dataset: torch.utils.data.Dataset,
     optimizer: torch.optim.Optimizer,
     criterion: Callable,
-    collate_fn: Callable = partial(collate_survival_features, label_type="int"),
+    agg_method: Optional[str] = "concat",
     batch_size: Optional[int] = 1,
     gradient_accumulation: Optional[int] = 1,
 ):
@@ -668,6 +671,7 @@ def train_survival(
     idxs = []
 
     sampler = torch.utils.data.RandomSampler(dataset)
+    collate_fn = partial(collate_survival_features, label_type="int", agg_method=agg_method)
 
     loader = torch.utils.data.DataLoader(
         dataset,
@@ -690,7 +694,12 @@ def train_survival(
         for i, batch in enumerate(t):
 
             idx, x, label, event_time, c = batch
-            x, label, c = x.to(device, non_blocking=True), label.to(device, non_blocking=True), c.to(device, non_blocking=True)
+            label, c = label.to(device, non_blocking=True), c.to(device, non_blocking=True)
+            if agg_method == "self_att":
+                x = [xx[j].to(device, non_blocking=True) for xx in x for j in range(len(xx))]
+            else:
+                x = x.to(device, non_blocking=True)
+
             logits = model(x)                           # [1, nbins]
             hazards = torch.sigmoid(logits)             # [1, nbins]
             surv = torch.cumprod(1 - hazards, dim=1)    # [1, nbins]
@@ -739,7 +748,7 @@ def tune_survival(
     model: nn.Module,
     dataset: torch.utils.data.Dataset,
     criterion: Callable,
-    collate_fn: Callable = partial(collate_survival_features, label_type="int"),
+    agg_method: Optional[str] = "concat",
     batch_size: Optional[int] = 1,
 ):
 
@@ -752,6 +761,7 @@ def tune_survival(
     idxs = []
 
     sampler = torch.utils.data.SequentialSampler(dataset)
+    collate_fn = partial(collate_survival_features, label_type="int", agg_method=agg_method)
 
     loader = torch.utils.data.DataLoader(
         dataset,
@@ -776,7 +786,12 @@ def tune_survival(
             for i, batch in enumerate(t):
 
                 idx, x, label, event_time, c = batch
-                x, label,c = x.to(device, non_blocking=True), label.to(device, non_blocking=True), c.to(device, non_blocking=True)
+                label, c = label.to(device, non_blocking=True), c.to(device, non_blocking=True)
+                if agg_method == "self_att":
+                    x = [xx[j].to(device, non_blocking=True) for xx in x for j in range(len(xx))]
+                else:
+                    x = x.to(device, non_blocking=True)
+
                 logits = model(x)
                 hazards = torch.sigmoid(logits)
                 surv = torch.cumprod(1 - hazards, dim=1)
@@ -813,7 +828,7 @@ def tune_survival(
 def test_survival(
     model: nn.Module,
     dataset: torch.utils.data.Dataset,
-    collate_fn: Callable = partial(collate_survival_features, label_type="int"),
+    agg_method: Optional[str] = "concat",
     batch_size: Optional[int] = 1,
 ):
 
@@ -825,6 +840,7 @@ def test_survival(
     idxs = []
 
     sampler = torch.utils.data.SequentialSampler(dataset)
+    collate_fn = partial(collate_survival_features, label_type="int", agg_method=agg_method)
 
     loader = torch.utils.data.DataLoader(
         dataset,
@@ -849,7 +865,12 @@ def test_survival(
             for i, batch in enumerate(t):
 
                 idx, x, label, event_time, c = batch
-                x, label, c = x.to(device, non_blocking=True), label.to(device, non_blocking=True), c.to(device, non_blocking=True)
+                label, c = label.to(device, non_blocking=True), c.to(device, non_blocking=True)
+                if agg_method == "self_att":
+                    x = [xx[j].to(device, non_blocking=True) for xx in x for j in range(len(xx))]
+                else:
+                    x = x.to(device, non_blocking=True)
+
                 logits = model(x)
                 hazards = torch.sigmoid(logits)
                 surv = torch.cumprod(1 - hazards, dim=1)

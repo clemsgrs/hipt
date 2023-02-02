@@ -1,4 +1,4 @@
-region_dir: '/home/user/code/git/cpg/hs2p/output/tcga_brca_subtyping_4096/patches'
+region_dir: '/home/user/code/git/cpg/hs2p/output/panda_dino/patches/2048/jpg'
 
 output_dir: 'output'
 experiment_name: 'dino'
@@ -6,13 +6,13 @@ resume: False
 
 slide_list:
 
-region_size: 4096
+region_size: 2048
 patch_size: 256
 mini_patch_size: 16
 
-format: 'png'
+format: 'jpg'
 
-pretrain_vit_patch: 'output/dino/dino/checkpoint.pth'
+pretrain_vit_patch: 'checkpoints/vit_256_small_dino.pth'
 freeze_vit_patch: True
 
 wandb:
