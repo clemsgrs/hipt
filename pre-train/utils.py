@@ -15,6 +15,7 @@ from torchvision import transforms
 from collections import defaultdict, deque
 from PIL import Image, ImageFilter, ImageOps
 
+from source.utils import update_state_dict
 
 def hydra_argv_remapper(argv_map):
     '''
@@ -462,16 +463,33 @@ def cancel_gradients_last_layer(epoch, model, freeze_last_layer):
             p.grad = None
 
 
-def restart_from_checkpoint(ckpt_path, run_variables=None, **kwargs):
+def start_from_checkpoint(ckpt_path, model):
     """
     Re-start from checkpoint
     """
     if not Path(ckpt_path).is_file():
         return
-    print("Found checkpoint at {}".format(ckpt_path))
+    print(f"Pretrained weights found at {ckpt_path}")
 
     # open checkpoint file
     checkpoint = torch.load(ckpt_path, map_location="cpu")
+    state_dict = checkpoint["teacher"]
+    state_dict, msg = update_state_dict(model.state_dict(), state_dict)
+    model.load_state_dict(state_dict, strict=False)
+    print(msg)
+
+
+def resume_from_checkpoint(ckpt_path, **kwargs):
+    """
+    Re-start from checkpoint
+    """
+    if not Path(ckpt_path).is_file():
+        return
+    print(f"Found checkpoint at {ckpt_path}")
+
+    # open checkpoint file
+    checkpoint = torch.load(ckpt_path, map_location="cpu")
+    epoch = checkpoint["epoch"]
 
     # key is what to look for in the checkpoint file
     # value is the object to load
@@ -480,29 +498,17 @@ def restart_from_checkpoint(ckpt_path, run_variables=None, **kwargs):
         if key in checkpoint and value is not None:
             try:
                 msg = value.load_state_dict(checkpoint[key], strict=False)
-                print(
-                    "=> loaded '{}' from checkpoint '{}' with msg {}".format(
-                        key, ckpt_path, msg
-                    )
-                )
+                print(f"=> loaded '{key}' from checkpoint: '{ckpt_path}' with msg {msg}")
             except TypeError:
                 try:
                     msg = value.load_state_dict(checkpoint[key])
-                    print("=> loaded '{}' from checkpoint: '{}'".format(key, ckpt_path))
+                    print(f"=> loaded '{key}' from checkpoint: '{ckpt_path}'")
                 except ValueError:
                     print(
-                        "=> failed to load '{}' from checkpoint: '{}'".format(
-                            key, ckpt_path
-                        )
-                    )
+                        f"=> failed to load '{key}' from checkpoint: '{ckpt_path}'")
         else:
-            print("=> key '{}' not found in checkpoint: '{}'".format(key, ckpt_path))
-
-    # re load variable important for the run
-    if run_variables is not None:
-        for var_name in run_variables:
-            if var_name in checkpoint:
-                run_variables[var_name] = checkpoint[var_name]
+            print(f"=> key '{key}' not found in checkpoint: '{ckpt_path}'")
+    return epoch
 
 
 def cosine_scheduler(
