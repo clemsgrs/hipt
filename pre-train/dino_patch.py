@@ -27,6 +27,7 @@ from utils import (
     fix_random_seeds,
     has_batchnorms,
     get_params_groups,
+    resume_from_checkpoint,
     cosine_scheduler,
     get_world_size,
     is_main_process,
@@ -191,15 +192,26 @@ def main(cfg: DictConfig):
     )
 
     epochs_run = 0
-    snapshot_path = Path(output_dir, 'snapshot.pt')
-    if snapshot_path.exists():
-        print("Loading snapshot")
-        loc = f"cuda:{gpu_id}"
-        snapshot = torch.load(snapshot_path, map_location=loc)
-        student.load_state_dict(snapshot["STUDENT_STATE"])
-        teacher.load_state_dict(snapshot["TEACHER_STATE"])
-        epochs_run = snapshot["EPOCHS_RUN"]
-        print(f"Resuming training from snapshot at Epoch {epochs_run}")
+    if distributed:
+        snapshot_path = Path(output_dir, 'snapshot.pt')
+        if snapshot_path.exists():
+            print("Loading snapshot")
+            loc = f"cuda:{gpu_id}"
+            snapshot = torch.load(snapshot_path, map_location=loc)
+            student.load_state_dict(snapshot["STUDENT_STATE"])
+            teacher.load_state_dict(snapshot["TEACHER_STATE"])
+            epochs_run = snapshot["EPOCHS_RUN"]
+            print(f"Resuming training from snapshot at Epoch {epochs_run}")
+    elif cfg.resume:
+        ckpt_path = Path(output_dir, cfg.resume_from_checkpoint)
+        epochs_run = resume_from_checkpoint(
+            ckpt_path,
+            student=student,
+            teacher=teacher,
+            optimizer=optimizer,
+            fp16_scaler=fp16_scaler,
+            dino_loss=dino_loss,
+        )
 
     start_time = time.time()
 
@@ -209,6 +221,8 @@ def main(cfg: DictConfig):
         unit=" epoch",
         ncols=100,
         leave=True,
+        initial=epochs_run,
+        total=cfg.training.nepochs,
         file=sys.stdout,
     ) as t:
 
@@ -266,15 +280,17 @@ def main(cfg: DictConfig):
                     snapshot = {
                         "STUDENT_STATE": student.module.state_dict(),
                         "TEACHER_STATE": teacher.module.state_dict(),
+                        "OPTIMIZER_STATE": optimizer.state_dict(),
                         "EPOCHS_RUN": epoch,
                     }
-                else:
-                    snapshot = {
-                        "STUDENT_STATE": student.state_dict(),
-                        "TEACHER_STATE": teacher.state_dict(),
-                        "EPOCHS_RUN": epoch,
-                    }
-                torch.save(snapshot, snapshot_path)
+                # else:
+                #     snapshot = {
+                #         "STUDENT_STATE": student.state_dict(),
+                #         "TEACHER_STATE": teacher.state_dict(),
+                #         "OPTIMIZER_STATE": optimizer.state_dict(),
+                #         "EPOCHS_RUN": epoch,
+                #     }
+                    torch.save(snapshot, snapshot_path)
 
             if is_main_process():
                 save_path = Path(output_dir, "latest.pth")
