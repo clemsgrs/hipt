@@ -54,6 +54,42 @@ def ppcess_tcga_survival_data(
     return patient_df, slide_df
 
 
+def ppcess_survival_data(
+    df,
+    label_name: str = "label",
+    nbins: int = 4,
+    eps: float = 1e-6,
+):
+    patient_df = df.drop_duplicates(['case_id'])
+    patient_df = patient_df.drop('slide_id', axis=1)
+    uncensored_df = patient_df[patient_df['censorship'] < 1]
+
+    _, q_bins = pd.qcut(uncensored_df[label_name], q=nbins, retbins=True, labels=False)
+    q_bins[-1] = df[label_name].max() + eps
+    q_bins[0] = df[label_name].min() - eps
+
+    disc_labels, bins = pd.cut(patient_df[label_name], bins=q_bins, retbins=True, labels=False, right=False, include_lowest=True)
+    patient_df.insert(2, "disc_label", disc_labels.values.astype(int))
+
+    label_dict = {}
+    label_count = 0
+    for label in range(len(bins)-1):
+        for censorship in [0, 1]:
+            label_dict.update({(label, censorship): label_count})
+            label_count += 1
+
+    patient_df.reset_index(drop=True, inplace=True)
+    for i in patient_df.index:
+        disc_label = patient_df.loc[i, "disc_label"]
+        censorship = patient_df.loc[i, "censorship"]
+        key = (disc_label, int(censorship))
+        patient_df.at[i, "label"] = label_dict[key]
+
+    slide_df = pd.merge(df, patient_df[["case_id", "disc_label", "label"]], how="left", on="case_id")
+
+    return patient_df, slide_df
+
+
 class ExtractedFeaturesDataset(torch.utils.data.Dataset):
     def __init__(
         self,
