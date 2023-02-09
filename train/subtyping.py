@@ -3,8 +3,8 @@ import time
 import tqdm
 import wandb
 import torch
-import torch.nn as nn
 import hydra
+import datetime
 import pandas as pd
 
 from pathlib import Path
@@ -33,7 +33,15 @@ from source.utils import (
 )
 def main(cfg: DictConfig):
 
-    output_dir = Path(cfg.output_dir, cfg.experiment_name)
+    run_id = datetime.datetime.now().strftime('%Y-%m-%d_%H_%M')
+    # set up wandb
+    if cfg.wandb.enable:
+        key = os.environ.get("WANDB_API_KEY")
+        wandb_run = initialize_wandb(cfg, key=key)
+        wandb_run.define_metric("epoch", summary="max")
+        run_id = wandb_run.id
+
+    output_dir = Path(cfg.output_dir, cfg.experiment_name, run_id)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     checkpoint_dir = Path(output_dir, "checkpoints", cfg.level)
@@ -42,15 +50,7 @@ def main(cfg: DictConfig):
     result_dir = Path(output_dir, "results", cfg.level)
     result_dir.mkdir(parents=True, exist_ok=True)
 
-    # set up wandb
-    if cfg.wandb.enable:
-        key = os.environ.get("WANDB_API_KEY")
-        wandb_run = initialize_wandb(cfg, key=key)
-        wandb_run.define_metric("epoch", summary="max")
-
-    features_dir = Path(output_dir, "features", cfg.level)
-    if cfg.features_dir:
-        features_dir = Path(cfg.features_dir)
+    features_dir = Path(cfg.features_dir)
 
     num_classes = cfg.num_classes
     criterion = LossFactory(cfg.task, cfg.loss).get_loss()
@@ -69,18 +69,21 @@ def main(cfg: DictConfig):
         train_df = train_df.sample(frac=cfg.training.pct).reset_index(drop=True)
         tune_df = tune_df.sample(frac=cfg.training.pct).reset_index(drop=True)
 
+    print(f"Initializing training dataset")
     train_dataset = ExtractedFeaturesDataset(
         train_df,
         features_dir,
         cfg.label_name,
         cfg.label_mapping,
     )
+    print(f"Initializing tuning dataset")
     tune_dataset = ExtractedFeaturesDataset(
         tune_df,
         features_dir,
         cfg.label_name,
         cfg.label_mapping,
     )
+    print(f"Initializing testing dataset")
     test_dataset = ExtractedFeaturesDataset(
         test_df,
         features_dir,

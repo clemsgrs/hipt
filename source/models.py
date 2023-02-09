@@ -21,13 +21,13 @@ class ModelFactory:
     ):
 
         if level == "global":
-            if model_options.agg_method == 'concat':
-                self.model = GlobalHIPT(
+            if model_options.agg_method == 'self_att':
+                self.model = GlobalPatientLevelHIPT(
                     num_classes=num_classes,
                     dropout=model_options.dropout,
                 )
-            elif model_options.agg_method == 'self_att':
-                self.model = GlobalPatientLevelHIPT(
+            else:
+                self.model = GlobalHIPT(
                     num_classes=num_classes,
                     dropout=model_options.dropout,
                 )

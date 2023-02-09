@@ -3,11 +3,12 @@ numpy
 pandas
 pillow
 gdown
+plotly
 einops
 webdataset
 matplotlib
 torch
-torchvision 
+torchvision
 lifelines
 scikit-survival
 scikit-learn

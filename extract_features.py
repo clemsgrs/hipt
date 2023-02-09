@@ -124,15 +124,20 @@ def main(cfg: DictConfig):
 
                     for fp in t2:
 
+                        x_y = Path(fp).stem
                         img = Image.open(fp)
                         img = transforms.functional.to_tensor(img)  # [3, 4096, 4096]
                         img = img.unsqueeze(0)  # [1, 3, 4096, 4096]
                         img = img.to(device, non_blocking=True)
                         feature = model(img)
+                        if cfg.save_region_features:
+                            region_features_dir = Path(features_dir, "region")
+                            save_path = Path(region_features_dir, f"{slide_id}_{x_y}.pt")
+                            torch.save(feature, save_path)
                         features.append(feature)
 
                 stacked_features = torch.stack(features, dim=0).squeeze(1)
-                save_path = Path(features_dir, f"{slide_id}.pt")
+                save_path = Path(features_dir, "slide", f"{slide_id}.pt")
                 torch.save(stacked_features, save_path)
 
                 df.loc[idx, "process"] = 0

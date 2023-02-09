@@ -685,7 +685,7 @@ def train_survival(
     with tqdm.tqdm(
         loader,
         desc=(f"Train - Epoch {epoch}"),
-        unit=" slide",
+        unit=" patient",
         ncols=80,
         unit_scale=batch_size,
         leave=True,
@@ -775,7 +775,7 @@ def tune_survival(
     with tqdm.tqdm(
         loader,
         desc=(f"Tune - Epoch {epoch}"),
-        unit=" slide",
+        unit=" patient",
         ncols=80,
         unit_scale=batch_size,
         leave=True,
@@ -854,7 +854,7 @@ def test_survival(
     with tqdm.tqdm(
         loader,
         desc=(f"Test"),
-        unit=" slide",
+        unit=" patient",
         ncols=80,
         unit_scale=batch_size,
         leave=True,

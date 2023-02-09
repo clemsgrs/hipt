@@ -84,7 +84,7 @@ class ExtractedFeaturesDataset(torch.utils.data.Dataset):
                 filtered_slide_ids.append(slide_id)
         df_filtered = df[df.slide_id.isin(filtered_slide_ids)].reset_index(drop=True)
         if len(df.slide_id) != len(df_filtered.slide_id):
-            print(f"WARNING: {len(df.slide_id)-len(df_filtered.slide_id)} slides dropped because missing on disk")
+            print(f"WARNING: {len(df.slide_id)-len(df_filtered.slide_id)} slides dropped because .pt files missing")
         return df_filtered
 
     def map_class_to_slide_ids(self):

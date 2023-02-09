@@ -40,6 +40,7 @@ model:
   patch_size: 256
   mini_patch_size: 16
   dropout: 0.25
+  agg_method:
 
 optim:
   name: 'adam'
@@ -59,7 +60,7 @@ early_stopping:
   save_all: False
 
 wandb:
-  enable: False
+  enable: True
   project: 'hipt'
   username: 'clemsg'
   exp_name: '${experiment_name}'
