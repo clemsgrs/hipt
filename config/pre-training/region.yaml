@@ -1,10 +1,10 @@
 data_dir: 'data/tcga_brca_dino/region_4k_pretraining'
 output_dir: 'output/dino'
-experiment_name: 'dino_4k'
+experiment_name: 'region'
 
+start_from_checkpoint:
 resume: False
-resume_from_ckpt: 'latest'
-
+resume_from_checkpoint:
 seed: 0
 
 model:

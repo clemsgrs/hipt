@@ -12,6 +12,7 @@ mini_patch_size: 16
 
 format: 'jpg'
 level: 'global'
+save_region_features: False
 
 pretrain_vit_patch: 'checkpoints/vit_256_small_dino.pth'
 pretrain_vit_region: 'checkpoints/vit_4096_xs_dino.pth'

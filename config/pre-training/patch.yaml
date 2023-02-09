@@ -1,10 +1,10 @@
 data_dir: '/data/pathology/projects/ais-cap/code/git/clemsgrs/hipt/data/panda_radboud/dino/patch_256_pretraining'
-output_dir: '/data/pathology/projects/ais-cap/code/git/clemsgrs/hipt/output/panda_radboud'
-experiment_name: 'dino_patch'
+output_dir: '/data/pathology/projects/ais-cap/code/git/clemsgrs/hipt/output/panda_radboud/dino'
+experiment_name: 'patch'
 
-resume: False
-resume_from_ckpt: 'latest'
-
+start_from_checkpoint:
+resume: True
+resume_from_checkpoint: 'latest.pth'
 seed: 0
 
 model:
