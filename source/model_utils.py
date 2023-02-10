@@ -3,6 +3,10 @@ import torch
 import torch.nn as nn
 
 
+def cantor_diagonal(p: int, q: int):
+    return (p+q)*(1+p+q)/2+q
+
+
 class PositionalEncoding(nn.Module):
 
     def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 5000):
@@ -22,6 +26,33 @@ class PositionalEncoding(nn.Module):
             x: Tensor, shape [seq_len, batch_size, embedding_dim]
         """
         x = x + self.pe[:x.size(0)]
+        return self.dropout(x)
+
+
+class PositionalEncoding2D(nn.Module):
+
+    def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 1000):
+        super().__init__()
+        self.dropout = nn.Dropout(p=dropout)
+
+        X = torch.arange(max_len)
+        Y = torch.arange(max_len)
+        div_term = torch.exp(torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model))
+        pe = torch.zeros(max_len, max_len, d_model)
+        for x in X:
+            for y in Y:
+                position = cantor_diagonal(x,y)
+                pe[x, y, 0::2] = torch.sin(position * div_term)
+                pe[x, y, 1::2] = torch.cos(position * div_term)
+        self.register_buffer('pe', pe)
+
+    def forward(self, x, coords):
+        """
+        Args:
+            x: Tensor, shape [seq_len, embedding_dim]
+            coords: Tensor, shape [seq_len, 2]
+        """
+        x = x + self.pe[coords[:,0], coords[:,1]]
         return self.dropout(x)
 
 

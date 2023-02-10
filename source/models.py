@@ -127,6 +127,8 @@ class GlobalHIPT(nn.Module):
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         self.global_phi = self.global_phi.to(device)
+        if self.use_pos_encoding:
+            self.pos_encoder = self.pos_encoder.to(device)
         self.global_transformer = self.global_transformer.to(device)
         self.global_attn_pool = self.global_attn_pool.to(device)
         self.global_rho = self.global_rho.to(device)
@@ -732,6 +734,8 @@ class GlobalPatientLevelHIPT(nn.Module):
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         self.global_phi_slide = self.global_phi_slide.to(device)
+        if self.use_pos_encoding:
+            self.pos_encoder = self.pos_encoder.to(device)
         self.global_transformer_slide = self.global_transformer_slide.to(device)
         self.global_attn_pool_slide = self.global_attn_pool_slide.to(device)
         self.global_rho_slide = self.global_rho_slide.to(device)
