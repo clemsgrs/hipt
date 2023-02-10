@@ -40,6 +40,7 @@ model:
   patch_size: 256
   mini_patch_size: 16
   dropout: 0.25
+  pos_encoding: False
   agg_method:
 
 optim:

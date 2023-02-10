@@ -38,7 +38,8 @@ model:
   patch_size: 256
   mini_patch_size: 16
   dropout: 0.25
-  agg_method: "concat"
+  pos_encoding: False
+  agg_method: 'concat'
 
 optim:
   name: 'adam'
