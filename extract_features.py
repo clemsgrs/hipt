@@ -24,14 +24,20 @@ def main(cfg: DictConfig):
     output_dir.mkdir(parents=True, exist_ok=True)
 
     features_dir = Path(output_dir, "features", cfg.level)
+    region_features_dir = Path(features_dir, "region")
+    slide_features_dir = Path(features_dir, "slide")
     if not cfg.resume:
         if features_dir.exists():
             print(f"{features_dir} already exists! deleting it...")
             shutil.rmtree(features_dir)
             print("done")
             features_dir.mkdir(parents=False)
+            region_features_dir.mkdir()
+            slide_features_dir.mkdir()
         else:
             features_dir.mkdir(parents=True, exist_ok=True)
+            region_features_dir.mkdir(exist_ok=True)
+            slide_features_dir.mkdir(exist_ok=True)
 
     # set up wandb
     if cfg.wandb.enable:
@@ -131,13 +137,12 @@ def main(cfg: DictConfig):
                         img = img.to(device, non_blocking=True)
                         feature = model(img)
                         if cfg.save_region_features:
-                            region_features_dir = Path(features_dir, "region")
                             save_path = Path(region_features_dir, f"{slide_id}_{x_y}.pt")
                             torch.save(feature, save_path)
                         features.append(feature)
 
                 stacked_features = torch.stack(features, dim=0).squeeze(1)
-                save_path = Path(features_dir, "slide", f"{slide_id}.pt")
+                save_path = Path(slide_features_dir, f"{slide_id}.pt")
                 torch.save(stacked_features, save_path)
 
                 df.loc[idx, "process"] = 0
