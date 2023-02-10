@@ -8,7 +8,7 @@ from einops import rearrange
 from omegaconf import DictConfig
 
 from source.vision_transformer import vit_small, vit4k_xs
-from source.model_utils import Attn_Net_Gated
+from source.model_utils import Attn_Net_Gated, PositionalEncoding
 from source.utils import update_state_dict
 
 
@@ -25,11 +25,13 @@ class ModelFactory:
                 self.model = GlobalPatientLevelHIPT(
                     num_classes=num_classes,
                     dropout=model_options.dropout,
+                    pos_encoding=model_options.pos_encoding,
                 )
             else:
                 self.model = GlobalHIPT(
                     num_classes=num_classes,
                     dropout=model_options.dropout,
+                    pos_encoding=model_options.pos_encoding,
                 )
         elif level == "local":
             self.model = LocalGlobalHIPT(
@@ -65,16 +67,21 @@ class GlobalHIPT(nn.Module):
         self,
         num_classes: int = 2,
         embed_dim_region: int = 192,
+        d_model: int = 192,
         dropout: float = 0.25,
+        pos_encoding: bool = False,
     ):
 
         super(GlobalHIPT, self).__init__()
         self.num_classes = num_classes
+        self.use_pos_encoding = pos_encoding
 
         # Global Aggregation
         self.global_phi = nn.Sequential(
             nn.Linear(embed_dim_region, 192), nn.ReLU(), nn.Dropout(dropout)
         )
+        if self.use_pos_encoding:
+            self.pos_encoder = PositionalEncoding(d_model, dropout)
         self.global_transformer = nn.TransformerEncoder(
             nn.TransformerEncoderLayer(
                 d_model=192,
@@ -98,6 +105,10 @@ class GlobalHIPT(nn.Module):
 
         # x = [M, 192]
         x = self.global_phi(x)
+
+        # PositionalEncoding expects the input to be of shape (seq_length, batch, emb_size)
+        if self.use_pos_encoding:
+            x = self.pos_encoder(x.unsqueeze(1)).squeeze(1)
 
         # in nn.TransformerEncoderLayer, batch_first defaults to False
         # hence, input is expected to be of shape (seq_length, batch, emb_size)
@@ -628,15 +639,19 @@ class GlobalPatientLevelHIPT(nn.Module):
         embed_dim_slide: int = 192,
         embed_dim_patient: int = 192,
         dropout: float = 0.25,
+        pos_encoding: bool = False,
     ):
 
         super(GlobalPatientLevelHIPT, self).__init__()
         self.num_classes = num_classes
+        self.use_pos_encoding = pos_encoding
 
         # from region to slide aggregation
         self.global_phi_slide = nn.Sequential(
             nn.Linear(embed_dim_region, embed_dim_slide), nn.ReLU(), nn.Dropout(dropout)
         )
+        if self.use_pos_encoding:
+            self.pos_encoder = PositionalEncoding(embed_dim_slide, dropout)
         self.global_transformer_slide = nn.TransformerEncoder(
             nn.TransformerEncoderLayer(
                 d_model=embed_dim_slide,
@@ -686,6 +701,8 @@ class GlobalPatientLevelHIPT(nn.Module):
         for n in range(N):
             y = x[n]
             y = self.global_phi_slide(y)
+            if self.use_pos_encoding:
+                y  = self.pos_encoder(y.unsqueeze(1)).squeeze(1)
             # in nn.TransformerEncoderLayer, batch_first defaults to False
             # hence, input is expected to be of shape (seq_length, batch, emb_size)
             y = self.global_transformer_slide(y.unsqueeze(1)).squeeze(1)
