@@ -12,7 +12,7 @@ from omegaconf import DictConfig
 
 from source.models import ModelFactory
 from source.components import LossFactory
-from source.dataset import ExtractedFeaturesSurvivalDataset, ExtractedFeaturesPatientLevelSurvivalDataset, ppcess_tcga_survival_data
+from source.dataset import ExtractedFeaturesSurvivalDataset, ExtractedFeaturesPatientLevelSurvivalDataset, ppcess_survival_data, ppcess_tcga_survival_data
 from source.utils import (
     initialize_wandb,
     train_survival,
@@ -69,7 +69,7 @@ def main(cfg: DictConfig):
         dfs["train"] = dfs["train"].sample(frac=cfg.training.pct).reset_index(drop=True)
 
     df = pd.concat([df for df in dfs.values()], ignore_index=True)
-    patient_df, slide_df = ppcess_tcga_survival_data(df, cfg.label_name, nbins=cfg.nbins)
+    patient_df, slide_df = ppcess_survival_data(df, cfg.label_name, nbins=cfg.nbins)
 
     patient_dfs, slide_dfs = {}, {}
     for p in ["train", "tune", "test"]:
