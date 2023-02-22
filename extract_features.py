@@ -4,6 +4,7 @@ import wandb
 import torch
 import hydra
 import shutil
+import datetime
 import pandas as pd
 from PIL import Image
 from pathlib import Path
@@ -20,30 +21,34 @@ from source.utils import initialize_wandb, initialize_df, collate_region_filepat
 )
 def main(cfg: DictConfig):
 
-    output_dir = Path(cfg.output_dir, cfg.experiment_name)
+    run_id = datetime.datetime.now().strftime('%Y-%m-%d_%H_%M')
+    # set up wandb
+    if cfg.wandb.enable:
+        key = os.environ.get("WANDB_API_KEY")
+        wandb_run = initialize_wandb(cfg, key=key)
+        wandb_run.define_metric("processed", summary="max")
+        run_id = wandb_run.id
+
+    output_dir = Path(cfg.output_dir, cfg.experiment_name, run_id)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     features_dir = Path(output_dir, "features", cfg.level)
-    region_features_dir = Path(features_dir, "region")
     slide_features_dir = Path(features_dir, "slide")
+    region_features_dir = Path(features_dir, "region")
     if not cfg.resume:
         if features_dir.exists():
             print(f"{features_dir} already exists! deleting it...")
             shutil.rmtree(features_dir)
             print("done")
             features_dir.mkdir(parents=False)
-            region_features_dir.mkdir()
             slide_features_dir.mkdir()
+            if cfg.save_region_features:
+                region_features_dir.mkdir()
         else:
             features_dir.mkdir(parents=True, exist_ok=True)
-            region_features_dir.mkdir(exist_ok=True)
             slide_features_dir.mkdir(exist_ok=True)
-
-    # set up wandb
-    if cfg.wandb.enable:
-        key = os.environ.get("WANDB_API_KEY")
-        wandb_run = initialize_wandb(cfg, key=key)
-        wandb_run.define_metric("processed", summary="max")
+            if cfg.save_region_features:
+                region_features_dir.mkdir(exist_ok=True)
 
     if cfg.level == "global":
         model = GlobalFeatureExtractor(
