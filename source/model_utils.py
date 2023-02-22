@@ -1,10 +1,40 @@
 import math
 import torch
 import torch.nn as nn
+import numpy as np
 
+from typing import Optional
+from omegaconf import DictConfig
 
 def cantor_diagonal(p: int, q: int):
     return (p+q)*(1+p+q)/2+q
+
+
+class PositionalEncoderFactory:
+    def __init__(
+        self,
+        type: str,
+        learned: bool,
+        options: Optional[DictConfig] = None,
+    ):
+
+        if type == "1d":
+            if learned:
+                self.pos_encoder = PositionalEmbedding(options.dim, options.max_seq_len)
+            else:
+                self.pos_encoder = PositionalEncoding(options.dim, options.dropout, options.max_seq_len)
+        elif type == "2d":
+            if learned:
+                # self.pos_encoder = PositionalEmbedding2d(options.dim, options.max_seq_len)
+                raise ValueError(f"(type, learned) ({type}, {learned}) combination not supported yet")
+            else:
+                # self.pos_encoder = PositionalEncoding2d(options.dim, options.dropout, options.max_seq_len)
+                raise ValueError(f"(type, learned) ({type}, {learned}) combination not supported yet")
+        else:
+           raise ValueError(f"cfg.model.slide_pos_embed.type ({type}) not supported")
+
+    def get_pos_encoder(self):
+        return self.pos_encoder
 
 
 class PositionalEncoding(nn.Module):
@@ -25,11 +55,12 @@ class PositionalEncoding(nn.Module):
         Args:
             x: Tensor, shape [seq_len, batch_size, embedding_dim]
         """
+        x = x.unsqueeze(1)
         x = x + self.pe[:x.size(0)]
-        return self.dropout(x)
+        return self.dropout(x).squeeze(1)
 
 
-class PositionalEncoding2D(nn.Module):
+class PositionalEncoding2d(nn.Module):
 
     def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 1000):
         super().__init__()
@@ -54,6 +85,53 @@ class PositionalEncoding2D(nn.Module):
         """
         x = x + self.pe[coords[:,0], coords[:,1]]
         return self.dropout(x)
+
+
+class PositionalEmbedding(nn.Module):
+
+    def __init__(self, dim: int, max_len: int = 3000):
+        super().__init__()
+        self.pos_ids = torch.arange(max_len)
+        self.embedder = nn.Embedding(max_len, dim)
+
+    def forward(self, x):
+        """
+        Args:
+            x: Tensor, shape [seq_len, embedding_dim]
+        """
+        seq_length = x.shape[0]
+        position_ids = self.pos_ids[:seq_length]
+        position_embeddings = self.embedder(position_ids)
+        x += position_embeddings
+        return x
+
+
+class PositionalEmbedding2d(nn.Module):
+
+    def __init__(self, tile_size: int, dim: int, max_len: int = 512):
+        super().__init__()
+        self.tile_size = tile_size
+        self.pos_ids = torch.arange(max_len)
+        self.embedder1 = nn.Embedding(max_len, dim//2)
+        self.embedder2 = nn.Embedding(max_len, dim//2)
+
+    def get_grid_values(self, coords: np.ndarray):
+        m = coords.min()
+        grid_coords = torch.div(coords-m, self.tile_size, rounding_mode='floor')
+        return grid_coords
+
+    def forward(self, x, coords):
+        """
+        Args:
+            x: Tensor, shape [seq_len, embedding_dim]
+        """
+        coord1 = self.get_grid_values(coords[:,0])
+        coord2 = self.get_grid_values(coords[:,1])
+        embedding1 = self.embedder1(coord1)
+        embedding2 = self.embedder2(coord2)
+        position_embeddings = torch.cat([embedding1, embedding2], dim=1)
+        x += position_embeddings
+        return x
 
 
 class Attn_Net_Gated(nn.Module):

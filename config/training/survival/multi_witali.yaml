@@ -19,8 +19,12 @@ testing:
   retrieve_checkpoint: 'best'
 
 model:
-  pos_encoding: True
   agg_method: 'self_att'
+  slide_pos_embed:
+    use: True
+    learned: True
+    type: '1d'
+    max_seq_len: 5000
 
 wandb:
   enable: True

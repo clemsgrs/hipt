@@ -5,10 +5,10 @@ import torch.nn.functional as F
 from pathlib import Path
 from typing import Optional
 from einops import rearrange
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 
 from source.vision_transformer import vit_small, vit4k_xs
-from source.model_utils import Attn_Net_Gated, PositionalEncoding
+from source.model_utils import Attn_Net_Gated, PositionalEncoderFactory
 from source.utils import update_state_dict
 
 
@@ -25,14 +25,16 @@ class ModelFactory:
                 self.model = GlobalPatientLevelHIPT(
                     num_classes=num_classes,
                     dropout=model_options.dropout,
-                    pos_encoding=model_options.pos_encoding,
+                    slide_pos_embed=model_options.slide_pos_embed,
                 )
-            else:
+            elif model_options.agg_method == 'concat':
                 self.model = GlobalHIPT(
                     num_classes=num_classes,
                     dropout=model_options.dropout,
-                    pos_encoding=model_options.pos_encoding,
+                    slide_pos_embed=model_options.slide_pos_embed,
                 )
+            else:
+                raise ValueError(f"cfg.model.agg_method ({model_options.agg_method}) not supported")
         elif level == "local":
             self.model = LocalGlobalHIPT(
                 num_classes=num_classes,
@@ -42,6 +44,7 @@ class ModelFactory:
                 freeze_vit_region=model_options.freeze_vit_region,
                 freeze_vit_region_pos_embed=model_options.freeze_vit_region_pos_embed,
                 dropout=model_options.dropout,
+                slide_pos_embed=model_options.slide_pos_embed,
             )
         else:
             self.model = HIPT(
@@ -56,6 +59,7 @@ class ModelFactory:
                 region_size=model_options.region_size,
                 patch_size=model_options.patch_size,
                 dropout=model_options.dropout,
+                slide_pos_embed=model_options.slide_pos_embed,
             )
 
     def get_model(self):
@@ -69,19 +73,22 @@ class GlobalHIPT(nn.Module):
         embed_dim_region: int = 192,
         d_model: int = 192,
         dropout: float = 0.25,
-        pos_encoding: bool = False,
+        slide_pos_embed: Optional[DictConfig] = None,
     ):
 
         super(GlobalHIPT, self).__init__()
         self.num_classes = num_classes
-        self.use_pos_encoding = pos_encoding
+        self.slide_pos_embed = slide_pos_embed
 
         # Global Aggregation
         self.global_phi = nn.Sequential(
             nn.Linear(embed_dim_region, 192), nn.ReLU(), nn.Dropout(dropout)
         )
-        if self.use_pos_encoding:
-            self.pos_encoder = PositionalEncoding(d_model, dropout)
+
+        if self.slide_pos_embed.use:
+            pos_encoding_options = OmegaConf.create({'dim': d_model, 'dropout': dropout, 'max_seq_len': slide_pos_embed.max_seq_len})
+            self.pos_encoder = PositionalEncoderFactory(slide_pos_embed.type, slide_pos_embed.learned, pos_encoding_options).get_pos_encoder()
+
         self.global_transformer = nn.TransformerEncoder(
             nn.TransformerEncoderLayer(
                 d_model=192,
@@ -106,9 +113,8 @@ class GlobalHIPT(nn.Module):
         # x = [M, 192]
         x = self.global_phi(x)
 
-        # PositionalEncoding expects the input to be of shape (seq_length, batch, emb_size)
-        if self.use_pos_encoding:
-            x = self.pos_encoder(x.unsqueeze(1)).squeeze(1)
+        if self.slide_pos_embed.use:
+            x = self.pos_encoder(x)
 
         # in nn.TransformerEncoderLayer, batch_first defaults to False
         # hence, input is expected to be of shape (seq_length, batch, emb_size)
@@ -127,7 +133,7 @@ class GlobalHIPT(nn.Module):
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         self.global_phi = self.global_phi.to(device)
-        if self.use_pos_encoding:
+        if self.slide_pos_embed.use:
             self.pos_encoder = self.pos_encoder.to(device)
         self.global_transformer = self.global_transformer.to(device)
         self.global_attn_pool = self.global_attn_pool.to(device)
@@ -160,11 +166,13 @@ class LocalGlobalHIPT(nn.Module):
         freeze_vit_region: bool = True,
         freeze_vit_region_pos_embed: bool = True,
         dropout: float = 0.25,
+        slide_pos_embed: Optional[DictConfig] = None,
     ):
 
         super(LocalGlobalHIPT, self).__init__()
         self.num_classes = num_classes
         self.npatch = int(region_size // patch_size)
+        self.slide_pos_embed = slide_pos_embed
 
         checkpoint_key = "teacher"
 
@@ -210,6 +218,11 @@ class LocalGlobalHIPT(nn.Module):
         self.global_phi = nn.Sequential(
             nn.Linear(embed_dim_region, 192), nn.ReLU(), nn.Dropout(dropout)
         )
+
+        if self.slide_pos_embed.use:
+            pos_encoding_options = OmegaConf.create({'dim': d_model, 'dropout': dropout, 'max_seq_len': slide_pos_embed.max_seq_len})
+            self.pos_encoder = PositionalEncoderFactory(slide_pos_embed.type, slide_pos_embed.learned, pos_encoding_options).get_pos_encoder()
+
         self.global_transformer = nn.TransformerEncoder(
             nn.TransformerEncoderLayer(
                 d_model=192,
@@ -235,6 +248,9 @@ class LocalGlobalHIPT(nn.Module):
         x = self.vit_region(x.unfold(1, self.npatch, self.npatch).transpose(1, 2))  # [M, 192]
         x = self.global_phi(x)  # [M, 192]
 
+        if self.slide_pos_embed.use:
+            x = self.pos_encoder(x)
+
         # in nn.TransformerEncoderLayer, batch_first defaults to False
         # hence, input is expected to be of shape (seq_length, batch, emb_size)
         x = self.global_transformer(x.unsqueeze(1)).squeeze(1)
@@ -257,6 +273,8 @@ class LocalGlobalHIPT(nn.Module):
             )
 
         self.global_phi = self.global_phi.to(device)
+        if self.slide_pos_embed.use:
+            self.pos_encoder = self.pos_encoder.to(device)
         self.global_transformer = self.global_transformer.to(device)
         self.global_attn_pool = self.global_attn_pool.to(device)
         self.global_rho = self.global_rho.to(device)
@@ -293,6 +311,7 @@ class HIPT(nn.Module):
         freeze_vit_patch_pos_embed: bool = True,
         freeze_vit_region_pos_embed: bool = True,
         dropout: float = 0.25,
+        slide_pos_embed: Optional[DictConfig] = None,
     ):
 
         super(HIPT, self).__init__()
@@ -300,6 +319,7 @@ class HIPT(nn.Module):
         self.npatch = int(region_size // patch_size)
         self.num_patches = self.npatch ** 2
         self.ps = patch_size
+        self.slide_pos_embed = slide_pos_embed
 
         checkpoint_key = "teacher"
 
@@ -374,6 +394,11 @@ class HIPT(nn.Module):
         self.global_phi = nn.Sequential(
             nn.Linear(embed_dim_region, 192), nn.ReLU(), nn.Dropout(dropout)
         )
+
+        if self.slide_pos_embed.use:
+            pos_encoding_options = OmegaConf.create({'dim': d_model, 'dropout': dropout, 'max_seq_len': slide_pos_embed.max_seq_len})
+            self.pos_encoder = PositionalEncoderFactory(slide_pos_embed.type, slide_pos_embed.learned, pos_encoding_options).get_pos_encoder()
+
         self.global_transformer = nn.TransformerEncoder(
             nn.TransformerEncoderLayer(
                 d_model=192,
@@ -416,6 +441,9 @@ class HIPT(nn.Module):
         x = x.to(self.device_patch, non_blocking=True)
         x = self.global_phi(x)
 
+        if self.slide_pos_embed.use:
+            x = self.pos_encoder(x)
+
         # in nn.TransformerEncoderLayer, batch_first defaults to False
         # hence, input is expected to be of shape (seq_length, batch, emb_size)
         x = self.global_transformer(x.unsqueeze(1)).squeeze(1)
@@ -444,6 +472,8 @@ class HIPT(nn.Module):
         self.vit_region = self.vit_region.to(self.device_region)
 
         self.global_phi = self.global_phi.to(device)
+        if self.slide_pos_embed.use:
+            self.pos_encoder = self.pos_encoder.to(device)
         self.global_transformer = self.global_transformer.to(device)
         self.global_attn_pool = self.global_attn_pool.to(device)
         self.global_rho = self.global_rho.to(device)
@@ -641,19 +671,22 @@ class GlobalPatientLevelHIPT(nn.Module):
         embed_dim_slide: int = 192,
         embed_dim_patient: int = 192,
         dropout: float = 0.25,
-        pos_encoding: bool = False,
+        slide_pos_embed: Optional[DictConfig] = None,
     ):
 
         super(GlobalPatientLevelHIPT, self).__init__()
         self.num_classes = num_classes
-        self.use_pos_encoding = pos_encoding
+        self.slide_pos_embed = slide_pos_embed
 
         # from region to slide aggregation
         self.global_phi_slide = nn.Sequential(
             nn.Linear(embed_dim_region, embed_dim_slide), nn.ReLU(), nn.Dropout(dropout)
         )
-        if self.use_pos_encoding:
-            self.pos_encoder = PositionalEncoding(embed_dim_slide, dropout)
+
+        if self.slide_pos_embed.use:
+            pos_encoding_options = OmegaConf.create({'dim': embed_dim_slide, 'dropout': dropout, 'max_seq_len': slide_pos_embed.max_seq_len})
+            self.pos_encoder = PositionalEncoderFactory(slide_pos_embed.type, slide_pos_embed.learned, embed_dim_slide, dropout).get_pos_encoder()
+
         self.global_transformer_slide = nn.TransformerEncoder(
             nn.TransformerEncoderLayer(
                 d_model=embed_dim_slide,
@@ -703,8 +736,8 @@ class GlobalPatientLevelHIPT(nn.Module):
         for n in range(N):
             y = x[n]
             y = self.global_phi_slide(y)
-            if self.use_pos_encoding:
-                y  = self.pos_encoder(y.unsqueeze(1)).squeeze(1)
+            if self.slide_pos_embed.use:
+                y = self.pos_encoder(y)
             # in nn.TransformerEncoderLayer, batch_first defaults to False
             # hence, input is expected to be of shape (seq_length, batch, emb_size)
             y = self.global_transformer_slide(y.unsqueeze(1)).squeeze(1)
@@ -734,7 +767,7 @@ class GlobalPatientLevelHIPT(nn.Module):
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         self.global_phi_slide = self.global_phi_slide.to(device)
-        if self.use_pos_encoding:
+        if self.slide_pos_embed.use:
             self.pos_encoder = self.pos_encoder.to(device)
         self.global_transformer_slide = self.global_transformer_slide.to(device)
         self.global_attn_pool_slide = self.global_attn_pool_slide.to(device)

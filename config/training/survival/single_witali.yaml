@@ -19,5 +19,9 @@ testing:
   retrieve_checkpoint: 'latest'
 
 model:
-  pos_encoding: True
   agg_method: 'concat'
+  slide_pos_embed:
+    use: True
+    learned: False
+    type: '1d'
+    max_seq_len: 3000

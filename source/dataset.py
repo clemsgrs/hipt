@@ -113,7 +113,7 @@ class ExtractedFeaturesDataset(torch.utils.data.Dataset):
         if self.label_mapping:
             df["label"] = df[self.label_name].apply(lambda x: self.label_mapping[x])
         elif self.label_name != "label":
-            df["label"] = df[self.label_name]
+            df["label"] = df.loc[:, self.label_name]
         filtered_slide_ids = []
         for slide_id in df.slide_id:
             if Path(self.features_dir, f"{slide_id}.pt").is_file():
@@ -202,7 +202,7 @@ class ExtractedFeaturesSurvivalDataset(torch.utils.data.Dataset):
         return len(self.patient_df)
 
 
-class ExtractedFeaturesPatientLevelSurvivalDataset(torch.utils.data.Dataset):
+class ExtractedFeaturesPatientLevelSurvivalDataset(ExtractedFeaturesSurvivalDataset):
     def __init__(
         self,
         patient_df: pd.DataFrame,
@@ -211,21 +211,7 @@ class ExtractedFeaturesPatientLevelSurvivalDataset(torch.utils.data.Dataset):
         label_name: str = "label",
     ):
 
-        self.features_dir = features_dir
-        self.label_name = label_name
-
-        self.slide_df = self.filter_df(slide_df)
-        self.patient_df = patient_df
-
-    def filter_df(self, df):
-        missing_slide_ids = []
-        for slide_id in df.slide_id:
-            if not Path(self.features_dir, f"{slide_id}.pt").is_file():
-                missing_slide_ids.append(slide_id)
-        if len(missing_slide_ids) > 0:
-            print(f"WARNING: {len(missing_slide_ids)} slides dropped because missing on disk")
-        filtered_df = df[~df.slide_id.isin(missing_slide_ids)].reset_index(drop=True)
-        return filtered_df
+        super().__init__(patient_df, slide_df, features_dir, label_name)
 
     def __getitem__(self, idx: int):
 
@@ -246,9 +232,6 @@ class ExtractedFeaturesPatientLevelSurvivalDataset(torch.utils.data.Dataset):
             features.append(f)
 
         return idx, features, label, event_time, c
-
-    def __len__(self):
-        return len(self.patient_df)
 
 
 class StackedRegionsDataset(torch.utils.data.Dataset):
@@ -280,7 +263,7 @@ class StackedRegionsDataset(torch.utils.data.Dataset):
         if self.label_mapping:
             df["label"] = df[self.label_name].apply(lambda x: self.label_mapping[x])
         elif self.label_name != "label":
-            df["label"] = df[self.label_name]
+            df["label"] = df.loc[:, self.label_name]
         return df
 
     def map_class_to_slide_ids(self):

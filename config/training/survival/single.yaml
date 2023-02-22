@@ -38,8 +38,12 @@ model:
   patch_size: 256
   mini_patch_size: 16
   dropout: 0.25
-  pos_encoding: False
   agg_method: 'concat'
+  slide_pos_embed:
+    use: False
+    learned: False
+    type: '1d'
+    max_seq_len: 512
 
 optim:
   name: 'adam'

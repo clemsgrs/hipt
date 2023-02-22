@@ -65,7 +65,7 @@ def main(cfg: DictConfig):
             pretrain_vit_patch=cfg.pretrain_vit_patch,
         )
     else:
-        raise ValueError(f"cfg.level ({cfg.level} not supported")
+        raise ValueError(f"cfg.level ({cfg.level}) not supported")
 
     region_dir = Path(cfg.region_dir)
     slide_ids = sorted([s.name for s in region_dir.iterdir()])

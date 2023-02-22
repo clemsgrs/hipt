@@ -30,4 +30,8 @@ model:
   freeze_vit_region_pos_embed:
   region_size: 2048
   agg_method: 'concat'
-  pos_encoding: False
+  slide_pos_embed:
+    use: False
+    learned: False
+    type: '1d'
+    max_seq_len: 512
