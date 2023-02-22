@@ -30,7 +30,7 @@ from utils import (
     get_params_groups,
     cosine_scheduler,
     get_world_size,
-    restart_from_checkpoint,
+    start_from_checkpoint,
     is_main_process,
     hydra_argv_remapper,
 )
@@ -44,22 +44,18 @@ def main(cfg: DictConfig):
         init_distributed_mode(cfg)
 
     fix_random_seeds(cfg.seed)
-
     cudnn.benchmark = True
 
-    output_dir = Path(cfg.output_dir, cfg.experiment_name)
-    if not cfg.resume:
-        if output_dir.exists():
-            shutil.rmtree(output_dir)
-            output_dir.mkdir(parents=True)
-        else:
-            output_dir.mkdir(parents=True, exist_ok=True)
-
+    run_id = datetime.datetime.now().strftime('%Y-%m-%d_%H_%M')
     # set up wandb
     if cfg.wandb.enable:
         key = os.environ.get("WANDB_API_KEY")
         wandb_run = initialize_wandb(cfg, key=key)
         wandb_run.define_metric("epoch", summary="max")
+        run_id = wandb_run.id
+
+    output_dir = Path(cfg.output_dir, cfg.experiment_name, run_id)
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     # preparing data
     transform = RegionDataAugmentationDINO(
@@ -93,10 +89,11 @@ def main(cfg: DictConfig):
 
     # building student and teacher networks
     student = vits.__dict__[cfg.model.arch](
+        img_size=cfg.model.region_size,
         patch_size=cfg.model.patch_size,
         drop_path_rate=cfg.model.drop_path_rate,
     )
-    teacher = vits.__dict__[cfg.model.arch](patch_size=cfg.model.patch_size)
+    teacher = vits.__dict__[cfg.model.arch](img_size=cfg.model.region_size, patch_size=cfg.model.patch_size)
     embed_dim = student.embed_dim
 
     # multi-crop wrapper handles forward with inputs of different resolutions
@@ -134,6 +131,14 @@ def main(cfg: DictConfig):
 
     if distributed:
         student = nn.parallel.DistributedDataParallel(student, device_ids=[cfg.gpu], find_unused_parameters=True)
+
+    # optionally start from existing checkpoint
+    if cfg.start_from_checkpoint:
+        ckpt_path = Path(cfg.start_from_checkpoint)
+        start_from_checkpoint(
+            ckpt_path,
+            student,
+        )
 
     # teacher and student start with the same weights
     student_sd = student.state_dict()
@@ -186,25 +191,10 @@ def main(cfg: DictConfig):
         len(data_loader),
     )
 
-    # optionally resume training
-    to_restore = {"epoch": 0}
-    if cfg.resume:
-        ckpt_path = Path(output_dir, cfg.resume_from_ckpt)
-        restart_from_checkpoint(
-            ckpt_path,
-            run_variables=to_restore,
-            student=student,
-            teacher=teacher,
-            optimizer=optimizer,
-            fp16_scaler=fp16_scaler,
-            dino_loss=dino_loss,
-        )
-
-    start_epoch = to_restore["epoch"]
     start_time = time.time()
 
     with tqdm.tqdm(
-        range(start_epoch, cfg.training.nepochs),
+        range(cfg.training.nepochs),
         desc=(f"Hierarchical DINO Pre-Training"),
         unit=" epoch",
         ncols=100,
