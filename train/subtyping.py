@@ -29,11 +29,13 @@ from source.utils import (
 
 
 @hydra.main(
-    version_base="1.2.0", config_path="../config/training/subtyping", config_name="single"
+    version_base="1.2.0",
+    config_path="../config/training/subtyping",
+    config_name="single",
 )
 def main(cfg: DictConfig):
 
-    run_id = datetime.datetime.now().strftime('%Y-%m-%d_%H_%M')
+    run_id = datetime.datetime.now().strftime("%Y-%m-%d_%H_%M")
     # set up wandb
     if cfg.wandb.enable:
         key = os.environ.get("WANDB_API_KEY")
@@ -126,10 +128,10 @@ def main(cfg: DictConfig):
 
             epoch_start_time = time.time()
             if cfg.wandb.enable:
-                log_dict = {"epoch": epoch+1}
+                log_dict = {"epoch": epoch + 1}
 
             train_results = train(
-                epoch+1,
+                epoch + 1,
                 model,
                 train_dataset,
                 optimizer,
@@ -141,7 +143,9 @@ def main(cfg: DictConfig):
             )
 
             if cfg.wandb.enable:
-                update_log_dict("train", train_results, log_dict, to_log=cfg.wandb.to_log)
+                update_log_dict(
+                    "train", train_results, log_dict, to_log=cfg.wandb.to_log
+                )
             train_dataset.df.to_csv(Path(result_dir, f"train_{epoch}.csv"), index=False)
 
             if epoch % cfg.tuning.tune_every == 0:
@@ -156,7 +160,9 @@ def main(cfg: DictConfig):
                 )
 
                 if cfg.wandb.enable:
-                    update_log_dict("tune", tune_results, log_dict, to_log=cfg.wandb.to_log)
+                    update_log_dict(
+                        "tune", tune_results, log_dict, to_log=cfg.wandb.to_log
+                    )
                 tune_dataset.df.to_csv(
                     Path(result_dir, f"tune_{epoch}.csv"), index=False
                 )
@@ -174,7 +180,7 @@ def main(cfg: DictConfig):
 
             # logging
             if cfg.wandb.enable:
-                wandb.log(log_dict, step=epoch+1)
+                wandb.log(log_dict, step=epoch + 1)
 
             epoch_end_time = time.time()
             epoch_mins, epoch_secs = compute_time(epoch_start_time, epoch_end_time)

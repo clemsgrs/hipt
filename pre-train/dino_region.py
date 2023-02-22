@@ -36,17 +36,19 @@ from utils import (
 )
 
 
-@hydra.main(version_base="1.2.0", config_path="../config/pre-training", config_name="region")
+@hydra.main(
+    version_base="1.2.0", config_path="../config/pre-training", config_name="region"
+)
 def main(cfg: DictConfig):
 
-    distributed = (torch.cuda.device_count() > 1)
+    distributed = torch.cuda.device_count() > 1
     if distributed:
         init_distributed_mode(cfg)
 
     fix_random_seeds(cfg.seed)
     cudnn.benchmark = True
 
-    run_id = datetime.datetime.now().strftime('%Y-%m-%d_%H_%M')
+    run_id = datetime.datetime.now().strftime("%Y-%m-%d_%H_%M")
     # set up wandb
     if cfg.wandb.enable:
         key = os.environ.get("WANDB_API_KEY")
@@ -70,7 +72,7 @@ def main(cfg: DictConfig):
     dataset = HierarchicalPretrainingDataset(cfg.data_dir, transform)
     if cfg.training.pct:
         print(f"Pre-training on {cfg.training.pct*100}% of the data")
-        nsample = int(cfg.training.pct*len(dataset))
+        nsample = int(cfg.training.pct * len(dataset))
         idxs = random.sample(range(len(dataset)), k=nsample)
         dataset = torch.utils.data.Subset(dataset, idxs)
 
@@ -93,7 +95,9 @@ def main(cfg: DictConfig):
         patch_size=cfg.model.patch_size,
         drop_path_rate=cfg.model.drop_path_rate,
     )
-    teacher = vits.__dict__[cfg.model.arch](img_size=cfg.model.region_size, patch_size=cfg.model.patch_size)
+    teacher = vits.__dict__[cfg.model.arch](
+        img_size=cfg.model.region_size, patch_size=cfg.model.patch_size
+    )
     embed_dim = student.embed_dim
 
     # multi-crop wrapper handles forward with inputs of different resolutions
@@ -130,7 +134,9 @@ def main(cfg: DictConfig):
         teacher_without_ddp = teacher
 
     if distributed:
-        student = nn.parallel.DistributedDataParallel(student, device_ids=[cfg.gpu], find_unused_parameters=True)
+        student = nn.parallel.DistributedDataParallel(
+            student, device_ids=[cfg.gpu], find_unused_parameters=True
+        )
 
     # optionally start from existing checkpoint
     if cfg.start_from_checkpoint:
@@ -168,8 +174,12 @@ def main(cfg: DictConfig):
     if cfg.speed.use_fp16:
         fp16_scaler = torch.cuda.amp.GradScaler()
 
-    assert cfg.training.nepochs >= cfg.training.warmup_epochs, f"nepochs ({cfg.training.nepochs}) must be greater than or equal to warmup_epochs ({cfg.training.warmup_epochs})"
-    base_lr = cfg.optim.lr * (cfg.training.batch_size_per_gpu * get_world_size()) / 256.0
+    assert (
+        cfg.training.nepochs >= cfg.training.warmup_epochs
+    ), f"nepochs ({cfg.training.nepochs}) must be greater than or equal to warmup_epochs ({cfg.training.warmup_epochs})"
+    base_lr = (
+        cfg.optim.lr * (cfg.training.batch_size_per_gpu * get_world_size()) / 256.0
+    )
     lr_schedule = cosine_scheduler(
         base_lr,
         cfg.optim.lr_scheduler.min_lr,
@@ -206,7 +216,7 @@ def main(cfg: DictConfig):
 
             epoch_start_time = time.time()
             if cfg.wandb.enable:
-                wandb.log({"epoch": epoch+1})
+                wandb.log({"epoch": epoch + 1})
 
             if distributed:
                 data_loader.sampler.set_epoch(epoch)
@@ -253,7 +263,11 @@ def main(cfg: DictConfig):
                 save_path = Path(output_dir, "latest.pth")
                 torch.save(save_dict, save_path)
 
-            if cfg.logging.save_ckpt_every and epoch % cfg.logging.save_ckpt_every == 0 and is_main_process():
+            if (
+                cfg.logging.save_ckpt_every
+                and epoch % cfg.logging.save_ckpt_every == 0
+                and is_main_process()
+            ):
                 save_path = Path(output_dir, f"checkpoint_{epoch:03}.pth")
                 torch.save(save_dict, save_path)
 
@@ -273,17 +287,17 @@ def main(cfg: DictConfig):
 
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
-    print('Training time {}'.format(total_time_str))
+    print("Training time {}".format(total_time_str))
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
 
     # python3 pre-train/dino_4k.py --config-name 'dino_4k'
     # torchrun pre-train/dino_4k.py --config-name 'dino_4k'
 
     m = {}
     for i in range(torch.cuda.device_count()):
-        m_i = {f'--local_rank={i}': 'local_rank'}
+        m_i = {f"--local_rank={i}": "local_rank"}
         m.update(m_i)
     hydra_argv_remapper(m)
 

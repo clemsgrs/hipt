@@ -189,7 +189,9 @@ def collate_features(batch, label_type: str = "int"):
     return [idx, feature, label]
 
 
-def collate_survival_features(batch, label_type: str = "int", agg_method: str = "concat"):
+def collate_survival_features(
+    batch, label_type: str = "int", agg_method: str = "concat"
+):
     idx = torch.LongTensor([item[0] for item in batch])
     # feature = torch.vstack([item[1] for item in batch])
     if agg_method == "concat":
@@ -212,7 +214,9 @@ def collate_region_filepaths(batch):
     return [idx, fp]
 
 
-def get_roc_auc_curve(probs: np.array(float), labels: List[int], log_to_wandb: bool = False):
+def get_roc_auc_curve(
+    probs: np.array(float), labels: List[int], log_to_wandb: bool = False
+):
     fpr, tpr, _ = metrics.roc_curve(labels, probs)
     auc = metrics.roc_auc_score(labels, probs)
     fig = plt.figure(dpi=600)
@@ -231,7 +235,11 @@ def get_roc_auc_curve(probs: np.array(float), labels: List[int], log_to_wandb: b
 
 
 def update_log_dict(
-    prefix, results, log_dict, step: Optional[str] = "step", to_log: Optional[List["str"]] = None
+    prefix,
+    results,
+    log_dict,
+    step: Optional[str] = "step",
+    to_log: Optional[List["str"]] = None,
 ):
     if not to_log:
         to_log = list(results.keys())
@@ -260,22 +268,32 @@ def logit_to_ordinal_prediction(logits):
     return (pred > 0.5).cumprod(axis=1).sum(axis=1) - 1
 
 
-def get_cumulative_dynamic_auc(train_df, test_df, risks, label_name, verbose: bool = False):
+def get_cumulative_dynamic_auc(
+    train_df, test_df, risks, label_name, verbose: bool = False
+):
     cols = ["censorship", label_name]
     train_tuples = train_df[cols].values
     tune_tuples = test_df[cols].values
-    survival_train = np.array(list(zip(train_tuples[:,0], train_tuples[:,1])), dtype=np.dtype('bool,float'))
-    survival_tune = np.array(list(zip(tune_tuples[:,0], tune_tuples[:,1])), dtype=np.dtype('bool,float'))
+    survival_train = np.array(
+        list(zip(train_tuples[:, 0], train_tuples[:, 1])), dtype=np.dtype("bool,float")
+    )
+    survival_tune = np.array(
+        list(zip(tune_tuples[:, 0], tune_tuples[:, 1])), dtype=np.dtype("bool,float")
+    )
     train_min, train_max = train_df[label_name].min(), train_df[label_name].max()
     test_min, test_max = test_df[label_name].min(), test_df[label_name].max()
-    min_y = math.ceil(test_min/12)
-    max_y = math.floor(test_max/12)
+    min_y = math.ceil(test_min / 12)
+    max_y = math.floor(test_max / 12)
     times = np.arange(min_y, max_y, 1)
     if train_min <= test_min < test_max < train_max:
-        auc, mean_auc = cumulative_dynamic_auc(survival_train, survival_tune, risks, times*12)
+        auc, mean_auc = cumulative_dynamic_auc(
+            survival_train, survival_tune, risks, times * 12
+        )
     else:
         if verbose:
-            print(f"test data ({test_min},{test_max}) is not within time range of training data ({train_min},{train_max})")
+            print(
+                f"test data ({test_min},{test_max}) is not within time range of training data ({train_min},{train_max})"
+            )
         auc, mean_auc = None, None
     return auc, mean_auc, times
 
@@ -284,7 +302,7 @@ def plot_cumulative_dynamic_auc(auc, mean_auc, times, epoch):
     fig = plt.figure(dpi=200)
     plt.plot(times, auc, marker="o")
     plt.axhline(mean_auc, linestyle="--")
-    plt.xticks(times, [f'{int(t)}' for t in times])
+    plt.xticks(times, [f"{int(t)}" for t in times])
     plt.xlabel("years from enrollment")
     plt.ylabel("time-dependent AUC")
     plt.title(f"Epoch {epoch+1}")
@@ -671,7 +689,9 @@ def train_survival(
     idxs = []
 
     sampler = torch.utils.data.RandomSampler(dataset)
-    collate_fn = partial(collate_survival_features, label_type="int", agg_method=agg_method)
+    collate_fn = partial(
+        collate_survival_features, label_type="int", agg_method=agg_method
+    )
 
     loader = torch.utils.data.DataLoader(
         dataset,
@@ -694,22 +714,28 @@ def train_survival(
         for i, batch in enumerate(t):
 
             idx, x, label, event_time, c = batch
-            label, c = label.to(device, non_blocking=True), c.to(device, non_blocking=True)
+            label, c = label.to(device, non_blocking=True), c.to(
+                device, non_blocking=True
+            )
             if agg_method == "self_att":
-                x = [xx[j].to(device, non_blocking=True) for xx in x for j in range(len(xx))]
+                x = [
+                    xx[j].to(device, non_blocking=True)
+                    for xx in x
+                    for j in range(len(xx))
+                ]
             else:
                 x = x.to(device, non_blocking=True)
 
-            logits = model(x)                           # [1, nbins]
-            hazards = torch.sigmoid(logits)             # [1, nbins]
-            surv = torch.cumprod(1 - hazards, dim=1)    # [1, nbins]
+            logits = model(x)  # [1, nbins]
+            hazards = torch.sigmoid(logits)  # [1, nbins]
+            surv = torch.cumprod(1 - hazards, dim=1)  # [1, nbins]
 
             loss = criterion(hazards, surv, label, c)
 
             loss_value = loss.item()
             epoch_loss += loss_value
 
-            risk = -torch.sum(surv, dim=1).detach()     # [1]
+            risk = -torch.sum(surv, dim=1).detach()  # [1]
             risk_scores.append(risk.item())
             censorships.append(c.item())
             event_times.append(event_time.item())
@@ -729,7 +755,7 @@ def train_survival(
     dataset.patient_df.loc[idxs, "risk"] = risk_scores
 
     c_index = concordance_index_censored(
-        [bool(1-c) for c in censorships],
+        [bool(1 - c) for c in censorships],
         event_times,
         risk_scores,
         tied_tol=1e-08,
@@ -761,7 +787,9 @@ def tune_survival(
     idxs = []
 
     sampler = torch.utils.data.SequentialSampler(dataset)
-    collate_fn = partial(collate_survival_features, label_type="int", agg_method=agg_method)
+    collate_fn = partial(
+        collate_survival_features, label_type="int", agg_method=agg_method
+    )
 
     loader = torch.utils.data.DataLoader(
         dataset,
@@ -786,9 +814,15 @@ def tune_survival(
             for i, batch in enumerate(t):
 
                 idx, x, label, event_time, c = batch
-                label, c = label.to(device, non_blocking=True), c.to(device, non_blocking=True)
+                label, c = label.to(device, non_blocking=True), c.to(
+                    device, non_blocking=True
+                )
                 if agg_method == "self_att":
-                    x = [xx[j].to(device, non_blocking=True) for xx in x for j in range(len(xx))]
+                    x = [
+                        xx[j].to(device, non_blocking=True)
+                        for xx in x
+                        for j in range(len(xx))
+                    ]
                 else:
                     x = x.to(device, non_blocking=True)
 
@@ -810,7 +844,7 @@ def tune_survival(
     dataset.patient_df.loc[idxs, "risk"] = risk_scores
 
     c_index = concordance_index_censored(
-        [bool(1-c) for c in censorships],
+        [bool(1 - c) for c in censorships],
         event_times,
         risk_scores,
         tied_tol=1e-08,
@@ -840,7 +874,9 @@ def test_survival(
     idxs = []
 
     sampler = torch.utils.data.SequentialSampler(dataset)
-    collate_fn = partial(collate_survival_features, label_type="int", agg_method=agg_method)
+    collate_fn = partial(
+        collate_survival_features, label_type="int", agg_method=agg_method
+    )
 
     loader = torch.utils.data.DataLoader(
         dataset,
@@ -865,9 +901,15 @@ def test_survival(
             for i, batch in enumerate(t):
 
                 idx, x, label, event_time, c = batch
-                label, c = label.to(device, non_blocking=True), c.to(device, non_blocking=True)
+                label, c = label.to(device, non_blocking=True), c.to(
+                    device, non_blocking=True
+                )
                 if agg_method == "self_att":
-                    x = [xx[j].to(device, non_blocking=True) for xx in x for j in range(len(xx))]
+                    x = [
+                        xx[j].to(device, non_blocking=True)
+                        for xx in x
+                        for j in range(len(xx))
+                    ]
                 else:
                     x = x.to(device, non_blocking=True)
 
@@ -886,7 +928,7 @@ def test_survival(
     dataset.patient_df.loc[idxs, "risk"] = risk_scores
 
     c_index = concordance_index_censored(
-        [bool(1-c) for c in censorships],
+        [bool(1 - c) for c in censorships],
         event_times,
         risk_scores,
         tied_tol=1e-08,

@@ -6,6 +6,7 @@ import numpy as np
 from typing import Optional
 from omegaconf import DictConfig
 
+
 def cantor_diagonal(p: int, q: int):
     return (p+q)*(1+p+q)/2+q
 

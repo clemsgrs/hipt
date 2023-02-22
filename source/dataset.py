@@ -20,24 +20,31 @@ def ppcess_tcga_survival_data(
     nbins: int = 4,
     eps: float = 1e-6,
 ):
-    if "IDC" in df['oncotree_code'].values:
+    if "IDC" in df["oncotree_code"].values:
         # must be BRCA (and if so, use only IDCs)
-        df = df[df['oncotree_code'] == 'IDC']
+        df = df[df["oncotree_code"] == "IDC"]
 
-    patient_df = df.drop_duplicates(['case_id'])
-    patient_df = patient_df.drop('slide_id', axis=1)
-    uncensored_df = patient_df[patient_df['censorship'] < 1]
+    patient_df = df.drop_duplicates(["case_id"])
+    patient_df = patient_df.drop("slide_id", axis=1)
+    uncensored_df = patient_df[patient_df["censorship"] < 1]
 
     _, q_bins = pd.qcut(uncensored_df[label_name], q=nbins, retbins=True, labels=False)
     q_bins[-1] = df[label_name].max() + eps
     q_bins[0] = df[label_name].min() - eps
 
-    disc_labels, bins = pd.cut(patient_df[label_name], bins=q_bins, retbins=True, labels=False, right=False, include_lowest=True)
+    disc_labels, bins = pd.cut(
+        patient_df[label_name],
+        bins=q_bins,
+        retbins=True,
+        labels=False,
+        right=False,
+        include_lowest=True,
+    )
     patient_df.insert(2, "disc_label", disc_labels.values.astype(int))
 
     label_dict = {}
     label_count = 0
-    for label in range(len(bins)-1):
+    for label in range(len(bins) - 1):
         for censorship in [0, 1]:
             label_dict.update({(label, censorship): label_count})
             label_count += 1
@@ -49,7 +56,9 @@ def ppcess_tcga_survival_data(
         key = (disc_label, int(censorship))
         patient_df.at[i, "label"] = label_dict[key]
 
-    slide_df = pd.merge(df, patient_df[["case_id", "disc_label", "label"]], how="left", on="case_id")
+    slide_df = pd.merge(
+        df, patient_df[["case_id", "disc_label", "label"]], how="left", on="case_id"
+    )
 
     return patient_df, slide_df
 
@@ -60,20 +69,27 @@ def ppcess_survival_data(
     nbins: int = 4,
     eps: float = 1e-6,
 ):
-    patient_df = df.drop_duplicates(['case_id'])
-    patient_df = patient_df.drop('slide_id', axis=1)
-    uncensored_df = patient_df[patient_df['censorship'] < 1]
+    patient_df = df.drop_duplicates(["case_id"])
+    patient_df = patient_df.drop("slide_id", axis=1)
+    uncensored_df = patient_df[patient_df["censorship"] < 1]
 
     _, q_bins = pd.qcut(uncensored_df[label_name], q=nbins, retbins=True, labels=False)
     q_bins[-1] = df[label_name].max() + eps
     q_bins[0] = df[label_name].min() - eps
 
-    disc_labels, bins = pd.cut(patient_df[label_name], bins=q_bins, retbins=True, labels=False, right=False, include_lowest=True)
+    disc_labels, bins = pd.cut(
+        patient_df[label_name],
+        bins=q_bins,
+        retbins=True,
+        labels=False,
+        right=False,
+        include_lowest=True,
+    )
     patient_df.insert(2, "disc_label", disc_labels.values.astype(int))
 
     label_dict = {}
     label_count = 0
-    for label in range(len(bins)-1):
+    for label in range(len(bins) - 1):
         for censorship in [0, 1]:
             label_dict.update({(label, censorship): label_count})
             label_count += 1
@@ -85,7 +101,9 @@ def ppcess_survival_data(
         key = (disc_label, int(censorship))
         patient_df.at[i, "label"] = label_dict[key]
 
-    slide_df = pd.merge(df, patient_df[["case_id", "disc_label", "label"]], how="left", on="case_id")
+    slide_df = pd.merge(
+        df, patient_df[["case_id", "disc_label", "label"]], how="left", on="case_id"
+    )
 
     return patient_df, slide_df
 
@@ -120,7 +138,9 @@ class ExtractedFeaturesDataset(torch.utils.data.Dataset):
                 filtered_slide_ids.append(slide_id)
         df_filtered = df[df.slide_id.isin(filtered_slide_ids)].reset_index(drop=True)
         if len(df.slide_id) != len(df_filtered.slide_id):
-            print(f"WARNING: {len(df.slide_id)-len(df_filtered.slide_id)} slides dropped because .pt files missing")
+            print(
+                f"WARNING: {len(df.slide_id)-len(df_filtered.slide_id)} slides dropped because .pt files missing"
+            )
         return df_filtered
 
     def map_class_to_slide_ids(self):
@@ -128,8 +148,8 @@ class ExtractedFeaturesDataset(torch.utils.data.Dataset):
         self.class_2_id = defaultdict(list)
         for i in range(self.num_classes):
             class_idxs = np.asarray(self.df.label == i).nonzero()[0]
-            #TODO: make sure to add a drop_duplicates(['slide_id']) somewhere before
-            self.class_2_id[i] = self.df.loc[class_idxs, 'slide_id'].values.tolist()
+            # TODO: make sure to add a drop_duplicates(['slide_id']) somewhere before
+            self.class_2_id[i] = self.df.loc[class_idxs, "slide_id"].values.tolist()
 
     def get_label(self, idx):
         return self.df.label[idx]
@@ -171,7 +191,9 @@ class ExtractedFeaturesSurvivalDataset(torch.utils.data.Dataset):
             if not Path(self.features_dir, f"{slide_id}.pt").is_file():
                 missing_slide_ids.append(slide_id)
         if len(missing_slide_ids) > 0:
-            print(f"WARNING: {len(missing_slide_ids)} slides dropped because missing on disk")
+            print(
+                f"WARNING: {len(missing_slide_ids)} slides dropped because missing on disk"
+            )
         filtered_df = df[~df.slide_id.isin(missing_slide_ids)].reset_index(drop=True)
         return filtered_df
 
@@ -179,7 +201,9 @@ class ExtractedFeaturesSurvivalDataset(torch.utils.data.Dataset):
 
         row = self.patient_df.loc[idx]
         case_id = row.case_id
-        slide_ids = self.slide_df[self.slide_df.case_id == case_id].slide_id.values.tolist()
+        slide_ids = self.slide_df[
+            self.slide_df.case_id == case_id
+        ].slide_id.values.tolist()
 
         assert len(slide_ids) == len(set(slide_ids))
 
@@ -217,7 +241,9 @@ class ExtractedFeaturesPatientLevelSurvivalDataset(ExtractedFeaturesSurvivalData
 
         row = self.patient_df.loc[idx]
         case_id = row.case_id
-        slide_ids = self.slide_df[self.slide_df.case_id == case_id].slide_id.values.tolist()
+        slide_ids = self.slide_df[
+            self.slide_df.case_id == case_id
+        ].slide_id.values.tolist()
 
         assert len(slide_ids) == len(set(slide_ids))
 
@@ -329,7 +355,7 @@ class RegionFilepathsDataset(torch.utils.data.Dataset):
     def __getitem__(self, idx: int):
         row = self.df.loc[idx]
         slide_id = row.slide_id
-        slide_dir = Path(self.region_dir, slide_id, 'imgs')
+        slide_dir = Path(self.region_dir, slide_id, "imgs")
         regions = [str(fp) for fp in slide_dir.glob(f"*.{self.format}")]
         return idx, regions
 
@@ -343,13 +369,13 @@ class HierarchicalPretrainingDataset(torch.utils.data.Dataset):
         features_dir: str,
         transform: Callable,
     ):
-        self.features_list = [f for f in Path(features_dir).glob('*.pt')]
+        self.features_list = [f for f in Path(features_dir).glob("*.pt")]
         self.transform = transform
 
     def __getitem__(self, idx: int):
         f = torch.load(self.features_list[idx])
         f = self.transform(f)
-        label = torch.zeros(1,1)
+        label = torch.zeros(1, 1)
         return f, label
 
     def __len__(self):

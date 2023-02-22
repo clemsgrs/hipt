@@ -13,7 +13,12 @@ from omegaconf import DictConfig
 
 from source.models import ModelFactory
 from source.components import LossFactory
-from source.dataset import ExtractedFeaturesSurvivalDataset, ExtractedFeaturesPatientLevelSurvivalDataset, ppcess_survival_data, ppcess_tcga_survival_data
+from source.dataset import (
+    ExtractedFeaturesSurvivalDataset,
+    ExtractedFeaturesPatientLevelSurvivalDataset,
+    ppcess_survival_data,
+    ppcess_tcga_survival_data,
+)
 from source.utils import (
     initialize_wandb,
     train_survival,
@@ -29,10 +34,12 @@ from source.utils import (
 )
 
 
-@hydra.main(version_base="1.2.0", config_path="../config/training/survival", config_name="debug")
+@hydra.main(
+    version_base="1.2.0", config_path="../config/training/survival", config_name="debug"
+)
 def main(cfg: DictConfig):
 
-    run_id = datetime.datetime.now().strftime('%Y-%m-%d_%H_%M')
+    run_id = datetime.datetime.now().strftime("%Y-%m-%d_%H_%M")
     # set up wandb
     if cfg.wandb.enable:
         key = os.environ.get("WANDB_API_KEY")
@@ -55,7 +62,9 @@ def main(cfg: DictConfig):
 
     criterion = LossFactory(cfg.task, cfg.loss).get_loss()
 
-    model = ModelFactory(cfg.level, num_classes=cfg.nbins, model_options=cfg.model).get_model()
+    model = ModelFactory(
+        cfg.level, num_classes=cfg.nbins, model_options=cfg.model
+    ).get_model()
     model.relocate()
     print(model)
 
@@ -64,7 +73,7 @@ def main(cfg: DictConfig):
     for p in ["train", "tune", "test"]:
         df_path = Path(cfg.data.fold_dir, f"{p}.csv")
         df = pd.read_csv(df_path)
-        df['partition'] = [p] * len(df)
+        df["partition"] = [p] * len(df)
         dfs[p] = df
 
     if cfg.training.pct:
@@ -79,25 +88,43 @@ def main(cfg: DictConfig):
         patient_dfs[p] = patient_df[patient_df.partition == p].reset_index(drop=True)
         slide_dfs[p] = slide_df[slide_df.partition == p]
 
-    if cfg.model.agg_method == 'concat':
+    if cfg.model.agg_method == "concat":
         train_dataset = ExtractedFeaturesSurvivalDataset(
-            patient_dfs["train"], slide_dfs["train"], features_dir, cfg.label_name,
+            patient_dfs["train"],
+            slide_dfs["train"],
+            features_dir,
+            cfg.label_name,
         )
         tune_dataset = ExtractedFeaturesSurvivalDataset(
-            patient_dfs["tune"], slide_dfs["tune"], features_dir, cfg.label_name,
+            patient_dfs["tune"],
+            slide_dfs["tune"],
+            features_dir,
+            cfg.label_name,
         )
         test_dataset = ExtractedFeaturesSurvivalDataset(
-            patient_dfs["test"], slide_dfs["test"], features_dir, cfg.label_name,
+            patient_dfs["test"],
+            slide_dfs["test"],
+            features_dir,
+            cfg.label_name,
         )
-    elif cfg.model.agg_method == 'self_att':
+    elif cfg.model.agg_method == "self_att":
         train_dataset = ExtractedFeaturesPatientLevelSurvivalDataset(
-            patient_dfs["train"], slide_dfs["train"], features_dir, cfg.label_name,
+            patient_dfs["train"],
+            slide_dfs["train"],
+            features_dir,
+            cfg.label_name,
         )
         tune_dataset = ExtractedFeaturesPatientLevelSurvivalDataset(
-            patient_dfs["tune"], slide_dfs["tune"], features_dir, cfg.label_name,
+            patient_dfs["tune"],
+            slide_dfs["tune"],
+            features_dir,
+            cfg.label_name,
         )
         test_dataset = ExtractedFeaturesPatientLevelSurvivalDataset(
-            patient_dfs["test"], slide_dfs["test"], features_dir, cfg.label_name,
+            patient_dfs["test"],
+            slide_dfs["test"],
+            features_dir,
+            cfg.label_name,
         )
 
     print("Configuring optimmizer & scheduler")
@@ -131,10 +158,10 @@ def main(cfg: DictConfig):
 
             epoch_start_time = time.time()
             if cfg.wandb.enable:
-                log_dict = {"epoch": epoch+1}
+                log_dict = {"epoch": epoch + 1}
 
             train_results = train_survival(
-                epoch+1,
+                epoch + 1,
                 model,
                 train_dataset,
                 optimizer,
@@ -145,13 +172,17 @@ def main(cfg: DictConfig):
             )
 
             if cfg.wandb.enable:
-                update_log_dict("train", train_results, log_dict, to_log=cfg.wandb.to_log)
-            train_dataset.patient_df.to_csv(Path(result_dir, f"train_{epoch}.csv"), index=False)
+                update_log_dict(
+                    "train", train_results, log_dict, to_log=cfg.wandb.to_log
+                )
+            train_dataset.patient_df.to_csv(
+                Path(result_dir, f"train_{epoch}.csv"), index=False
+            )
 
             if epoch % cfg.tuning.tune_every == 0:
 
                 tune_results = tune_survival(
-                    epoch+1,
+                    epoch + 1,
                     model,
                     tune_dataset,
                     criterion,
@@ -159,14 +190,25 @@ def main(cfg: DictConfig):
                     batch_size=cfg.tuning.batch_size,
                 )
 
-                auc, mean_auc, times = get_cumulative_dynamic_auc(patient_dfs["train"], patient_dfs["tune"], tune_results["risks"], cfg.label_name)
+                auc, mean_auc, times = get_cumulative_dynamic_auc(
+                    patient_dfs["train"],
+                    patient_dfs["tune"],
+                    tune_results["risks"],
+                    cfg.label_name,
+                )
                 if cfg.wandb.enable:
-                    update_log_dict("tune", tune_results, log_dict, to_log=cfg.wandb.to_log)
+                    update_log_dict(
+                        "tune", tune_results, log_dict, to_log=cfg.wandb.to_log
+                    )
                     if auc is not None:
                         fig = plot_cumulative_dynamic_auc(auc, mean_auc, times, epoch)
-                        log_dict.update({"tune/cumulative_dynamic_auc": wandb.Image(fig)})
+                        log_dict.update(
+                            {"tune/cumulative_dynamic_auc": wandb.Image(fig)}
+                        )
                         plt.close(fig)
-                tune_dataset.patient_df.to_csv(Path(result_dir, f"tune_{epoch}.csv"), index=False)
+                tune_dataset.patient_df.to_csv(
+                    Path(result_dir, f"tune_{epoch}.csv"), index=False
+                )
 
                 early_stopping(epoch, model, tune_results)
                 if early_stopping.early_stop and cfg.early_stopping.enable:
@@ -181,7 +223,7 @@ def main(cfg: DictConfig):
 
             # logging
             if cfg.wandb.enable:
-                wandb.log(log_dict, step=epoch+1)
+                wandb.log(log_dict, step=epoch + 1)
 
             epoch_end_time = time.time()
             epoch_mins, epoch_secs = compute_time(epoch_start_time, epoch_end_time)
@@ -197,7 +239,9 @@ def main(cfg: DictConfig):
 
     if cfg.testing.run_testing:
         # load best model
-        best_model_fp = Path(checkpoint_dir, f"{cfg.testing.retrieve_checkpoint}_model.pt")
+        best_model_fp = Path(
+            checkpoint_dir, f"{cfg.testing.retrieve_checkpoint}_model.pt"
+        )
         if cfg.wandb.enable:
             wandb.save(str(best_model_fp))
         best_model_sd = torch.load(best_model_fp)

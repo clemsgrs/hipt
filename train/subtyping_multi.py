@@ -27,7 +27,9 @@ from source.utils import (
 
 
 @hydra.main(
-    version_base="1.2.0", config_path="../config/training/subtyping", config_name="multi"
+    version_base="1.2.0",
+    config_path="../config/training/subtyping",
+    config_name="multi",
 )
 def main(cfg: DictConfig):
 
@@ -134,10 +136,10 @@ def main(cfg: DictConfig):
 
                 epoch_start_time = time.time()
                 if cfg.wandb.enable:
-                    log_dict = {f"train/fold_{i}/epoch": epoch+1}
+                    log_dict = {f"train/fold_{i}/epoch": epoch + 1}
 
                 train_results = train(
-                    epoch+1,
+                    epoch + 1,
                     model,
                     train_dataset,
                     optimizer,
@@ -155,7 +157,9 @@ def main(cfg: DictConfig):
                         step=f"train/fold_{i}/epoch",
                         to_log=cfg.wandb.to_log,
                     )
-                train_dataset.df.to_csv(Path(result_dir, f"train_{epoch}.csv"), index=False)
+                train_dataset.df.to_csv(
+                    Path(result_dir, f"train_{epoch}.csv"), index=False
+                )
 
                 if epoch % cfg.tuning.tune_every == 0:
 

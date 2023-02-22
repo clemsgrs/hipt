@@ -21,20 +21,22 @@ class ModelFactory:
     ):
 
         if level == "global":
-            if model_options.agg_method == 'self_att':
+            if model_options.agg_method == "self_att":
                 self.model = GlobalPatientLevelHIPT(
                     num_classes=num_classes,
                     dropout=model_options.dropout,
                     slide_pos_embed=model_options.slide_pos_embed,
                 )
-            elif model_options.agg_method == 'concat':
+            elif model_options.agg_method == "concat":
                 self.model = GlobalHIPT(
                     num_classes=num_classes,
                     dropout=model_options.dropout,
                     slide_pos_embed=model_options.slide_pos_embed,
                 )
             else:
-                raise ValueError(f"cfg.model.agg_method ({model_options.agg_method}) not supported")
+                raise ValueError(
+                    f"cfg.model.agg_method ({model_options.agg_method}) not supported"
+                )
         elif level == "local":
             self.model = LocalGlobalHIPT(
                 num_classes=num_classes,
@@ -86,8 +88,16 @@ class GlobalHIPT(nn.Module):
         )
 
         if self.slide_pos_embed.use:
-            pos_encoding_options = OmegaConf.create({'dim': d_model, 'dropout': dropout, 'max_seq_len': slide_pos_embed.max_seq_len})
-            self.pos_encoder = PositionalEncoderFactory(slide_pos_embed.type, slide_pos_embed.learned, pos_encoding_options).get_pos_encoder()
+            pos_encoding_options = OmegaConf.create(
+                {
+                    "dim": d_model,
+                    "dropout": dropout,
+                    "max_seq_len": slide_pos_embed.max_seq_len,
+                }
+            )
+            self.pos_encoder = PositionalEncoderFactory(
+                slide_pos_embed.type, slide_pos_embed.learned, pos_encoding_options
+            ).get_pos_encoder()
 
         self.global_transformer = nn.TransformerEncoder(
             nn.TransformerEncoderLayer(
@@ -193,7 +203,9 @@ class LocalGlobalHIPT(nn.Module):
             state_dict = {k.replace("module.", ""): v for k, v in state_dict.items()}
             # remove `backbone.` prefix induced by multicrop wrapper
             state_dict = {k.replace("backbone.", ""): v for k, v in state_dict.items()}
-            state_dict, msg = update_state_dict(self.vit_region.state_dict(), state_dict)
+            state_dict, msg = update_state_dict(
+                self.vit_region.state_dict(), state_dict
+            )
             self.vit_region.load_state_dict(state_dict, strict=False)
             print(f"Pretrained weights found at {pretrain_vit_region}")
             print(msg)
@@ -220,8 +232,16 @@ class LocalGlobalHIPT(nn.Module):
         )
 
         if self.slide_pos_embed.use:
-            pos_encoding_options = OmegaConf.create({'dim': d_model, 'dropout': dropout, 'max_seq_len': slide_pos_embed.max_seq_len})
-            self.pos_encoder = PositionalEncoderFactory(slide_pos_embed.type, slide_pos_embed.learned, pos_encoding_options).get_pos_encoder()
+            pos_encoding_options = OmegaConf.create(
+                {
+                    "dim": d_model,
+                    "dropout": dropout,
+                    "max_seq_len": slide_pos_embed.max_seq_len,
+                }
+            )
+            self.pos_encoder = PositionalEncoderFactory(
+                slide_pos_embed.type, slide_pos_embed.learned, pos_encoding_options
+            ).get_pos_encoder()
 
         self.global_transformer = nn.TransformerEncoder(
             nn.TransformerEncoderLayer(
@@ -245,7 +265,9 @@ class LocalGlobalHIPT(nn.Module):
     def forward(self, x):
 
         # x = [M, 256, 384]
-        x = self.vit_region(x.unfold(1, self.npatch, self.npatch).transpose(1, 2))  # [M, 192]
+        x = self.vit_region(
+            x.unfold(1, self.npatch, self.npatch).transpose(1, 2)
+        )  # [M, 192]
         x = self.global_phi(x)  # [M, 192]
 
         if self.slide_pos_embed.use:
@@ -268,9 +290,9 @@ class LocalGlobalHIPT(nn.Module):
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         if torch.cuda.device_count() >= 1:
             device_ids = list(range(torch.cuda.device_count()))
-            self.vit_region = nn.DataParallel(self.vit_region, device_ids=device_ids).to(
-                "cuda:0"
-            )
+            self.vit_region = nn.DataParallel(
+                self.vit_region, device_ids=device_ids
+            ).to("cuda:0")
 
         self.global_phi = self.global_phi.to(device)
         if self.slide_pos_embed.use:
@@ -317,7 +339,7 @@ class HIPT(nn.Module):
         super(HIPT, self).__init__()
         self.num_classes = num_classes
         self.npatch = int(region_size // patch_size)
-        self.num_patches = self.npatch ** 2
+        self.num_patches = self.npatch**2
         self.ps = patch_size
         self.slide_pos_embed = slide_pos_embed
 
@@ -345,7 +367,9 @@ class HIPT(nn.Module):
             print(msg)
 
         else:
-            print(f"{pretrain_vit_patch} doesnt exist ; please provide path to existing file")
+            print(
+                f"{pretrain_vit_patch} doesnt exist ; please provide path to existing file"
+            )
 
         if freeze_vit_patch:
             print("Freezing pretrained patch-level Transformer")
@@ -372,7 +396,9 @@ class HIPT(nn.Module):
             state_dict = {k.replace("module.", ""): v for k, v in state_dict.items()}
             # remove `backbone.` prefix induced by multicrop wrapper
             state_dict = {k.replace("backbone.", ""): v for k, v in state_dict.items()}
-            state_dict, msg = update_state_dict(self.vit_region.state_dict(), state_dict)
+            state_dict, msg = update_state_dict(
+                self.vit_region.state_dict(), state_dict
+            )
             self.vit_region.load_state_dict(state_dict, strict=False)
             print(f"Pretrained weights found at {pretrain_vit_region}")
             print(msg)
@@ -396,8 +422,16 @@ class HIPT(nn.Module):
         )
 
         if self.slide_pos_embed.use:
-            pos_encoding_options = OmegaConf.create({'dim': d_model, 'dropout': dropout, 'max_seq_len': slide_pos_embed.max_seq_len})
-            self.pos_encoder = PositionalEncoderFactory(slide_pos_embed.type, slide_pos_embed.learned, pos_encoding_options).get_pos_encoder()
+            pos_encoding_options = OmegaConf.create(
+                {
+                    "dim": d_model,
+                    "dropout": dropout,
+                    "max_seq_len": slide_pos_embed.max_seq_len,
+                }
+            )
+            self.pos_encoder = PositionalEncoderFactory(
+                slide_pos_embed.type, slide_pos_embed.learned, pos_encoding_options
+            ).get_pos_encoder()
 
         self.global_transformer = nn.TransformerEncoder(
             nn.TransformerEncoderLayer(
@@ -422,8 +456,12 @@ class HIPT(nn.Module):
 
         # x = [M, 3, region_size, region_size]
         # TODO: add prepare_img_tensor method
-        x = x.unfold(2, self.ps, self.ps).unfold(3, self.ps, self.ps)  # [M, 3, npatch, npatch, ps, ps]
-        x = rearrange(x, "b c p1 p2 w h -> (b p1 p2) c w h")  # [M*npatch*npatch, 3, ps, ps]
+        x = x.unfold(2, self.ps, self.ps).unfold(
+            3, self.ps, self.ps
+        )  # [M, 3, npatch, npatch, ps, ps]
+        x = rearrange(
+            x, "b c p1 p2 w h -> (b p1 p2) c w h"
+        )  # [M*npatch*npatch, 3, ps, ps]
         x = x.to(self.device_patch, non_blocking=True)  # [M*num_patches, 3, ps, ps]
 
         patch_features = []
@@ -537,7 +575,9 @@ class GlobalFeatureExtractor(nn.Module):
             print(msg)
 
         else:
-            print(f"{pretrain_vit_patch} doesnt exist ; please provide path to existing file")
+            print(
+                f"{pretrain_vit_patch} doesnt exist ; please provide path to existing file"
+            )
 
         print("Freezing pretrained patch-level Transformer")
         for param in self.vit_patch.parameters():
@@ -563,7 +603,9 @@ class GlobalFeatureExtractor(nn.Module):
             state_dict = {k.replace("module.", ""): v for k, v in state_dict.items()}
             # remove `backbone.` prefix induced by multicrop wrapper
             state_dict = {k.replace("backbone.", ""): v for k, v in state_dict.items()}
-            state_dict, msg = update_state_dict(self.vit_region.state_dict(), state_dict)
+            state_dict, msg = update_state_dict(
+                self.vit_region.state_dict(), state_dict
+            )
             self.vit_region.load_state_dict(state_dict, strict=False)
             print(f"Pretrained weights found at {pretrain_vit_region}")
             print(msg)
@@ -584,8 +626,12 @@ class GlobalFeatureExtractor(nn.Module):
 
         # x = [1, 3, region_size, region_size]
         # TODO: add prepare_img_tensor method
-        x = x.unfold(2, self.ps, self.ps).unfold(3, self.ps, self.ps)  # [1, 3, npatch, npatch, ps, ps]
-        x = rearrange(x, "b c p1 p2 w h -> (b p1 p2) c w h")  # [1*npatch*npatch, 3, ps, ps]
+        x = x.unfold(2, self.ps, self.ps).unfold(
+            3, self.ps, self.ps
+        )  # [1, 3, npatch, npatch, ps, ps]
+        x = rearrange(
+            x, "b c p1 p2 w h -> (b p1 p2) c w h"
+        )  # [1*npatch*npatch, 3, ps, ps]
         x = x.to(self.device_patch, non_blocking=True)  # [num_patches, 3, ps, ps]
 
         patch_features = self.vit_patch(x)  # [num_patches, 384]
@@ -639,7 +685,9 @@ class LocalFeatureExtractor(nn.Module):
             print(msg)
 
         else:
-            print(f"{pretrain_vit_patch} doesnt exist ; please provide path to existing file")
+            print(
+                f"{pretrain_vit_patch} doesnt exist ; please provide path to existing file"
+            )
 
         print("Freezing pretrained patch-level Transformer")
         for param in self.vit_patch.parameters():
@@ -684,8 +732,16 @@ class GlobalPatientLevelHIPT(nn.Module):
         )
 
         if self.slide_pos_embed.use:
-            pos_encoding_options = OmegaConf.create({'dim': embed_dim_slide, 'dropout': dropout, 'max_seq_len': slide_pos_embed.max_seq_len})
-            self.pos_encoder = PositionalEncoderFactory(slide_pos_embed.type, slide_pos_embed.learned, embed_dim_slide, dropout).get_pos_encoder()
+            pos_encoding_options = OmegaConf.create(
+                {
+                    "dim": embed_dim_slide,
+                    "dropout": dropout,
+                    "max_seq_len": slide_pos_embed.max_seq_len,
+                }
+            )
+            self.pos_encoder = PositionalEncoderFactory(
+                slide_pos_embed.type, slide_pos_embed.learned, embed_dim_slide, dropout
+            ).get_pos_encoder()
 
         self.global_transformer_slide = nn.TransformerEncoder(
             nn.TransformerEncoderLayer(
@@ -701,12 +757,18 @@ class GlobalPatientLevelHIPT(nn.Module):
             L=embed_dim_slide, D=embed_dim_slide, dropout=dropout, num_classes=1
         )
         self.global_rho_slide = nn.Sequential(
-            *[nn.Linear(embed_dim_slide, embed_dim_slide), nn.ReLU(), nn.Dropout(dropout)]
+            *[
+                nn.Linear(embed_dim_slide, embed_dim_slide),
+                nn.ReLU(),
+                nn.Dropout(dropout),
+            ]
         )
 
         # from slide to patient aggregation
         self.global_phi_patient = nn.Sequential(
-            nn.Linear(embed_dim_slide, embed_dim_patient), nn.ReLU(), nn.Dropout(dropout)
+            nn.Linear(embed_dim_slide, embed_dim_patient),
+            nn.ReLU(),
+            nn.Dropout(dropout),
         )
         self.global_transformer_patient = nn.TransformerEncoder(
             nn.TransformerEncoderLayer(
@@ -722,9 +784,12 @@ class GlobalPatientLevelHIPT(nn.Module):
             L=embed_dim_patient, D=embed_dim_patient, dropout=dropout, num_classes=1
         )
         self.global_rho_patient = nn.Sequential(
-            *[nn.Linear(embed_dim_patient, embed_dim_patient), nn.ReLU(), nn.Dropout(dropout)]
+            *[
+                nn.Linear(embed_dim_patient, embed_dim_patient),
+                nn.ReLU(),
+                nn.Dropout(dropout),
+            ]
         )
-
 
         self.classifier = nn.Linear(embed_dim_patient, num_classes)
 

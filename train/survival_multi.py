@@ -15,7 +15,12 @@ from omegaconf import DictConfig
 
 from source.models import ModelFactory
 from source.components import LossFactory
-from source.dataset import ExtractedFeaturesSurvivalDataset, ExtractedFeaturesPatientLevelSurvivalDataset, ppcess_survival_data, ppcess_tcga_survival_data
+from source.dataset import (
+    ExtractedFeaturesSurvivalDataset,
+    ExtractedFeaturesPatientLevelSurvivalDataset,
+    ppcess_survival_data,
+    ppcess_tcga_survival_data,
+)
 from source.utils import (
     initialize_wandb,
     train_survival,
@@ -36,7 +41,7 @@ from source.utils import (
 )
 def main(cfg: DictConfig):
 
-    run_id = datetime.datetime.now().strftime('%Y-%m-%d_%H_%M')
+    run_id = datetime.datetime.now().strftime("%Y-%m-%d_%H_%M")
     # set up wandb
     if cfg.wandb.enable:
         key = os.environ.get("WANDB_API_KEY")
@@ -76,40 +81,62 @@ def main(cfg: DictConfig):
         for p in ["train", "tune", "test"]:
             df_path = Path(fold_dir, f"{p}.csv")
             df = pd.read_csv(df_path)
-            df['partition'] = [p] * len(df)
+            df["partition"] = [p] * len(df)
             dfs[p] = df
 
         if cfg.training.pct:
             print(f"Training on {cfg.training.pct*100}% of the data")
-            dfs["train"] = dfs["train"].sample(frac=cfg.training.pct).reset_index(drop=True)
+            dfs["train"] = (
+                dfs["train"].sample(frac=cfg.training.pct).reset_index(drop=True)
+            )
 
         df = pd.concat([df for df in dfs.values()], ignore_index=True)
         patient_df, slide_df = ppcess_survival_data(df, cfg.label_name, nbins=cfg.nbins)
 
         patient_dfs, slide_dfs = {}, {}
         for p in ["train", "tune", "test"]:
-            patient_dfs[p] = patient_df[patient_df.partition == p].reset_index(drop=True)
+            patient_dfs[p] = patient_df[patient_df.partition == p].reset_index(
+                drop=True
+            )
             slide_dfs[p] = slide_df[slide_df.partition == p]
 
-        if cfg.model.agg_method == 'concat':
+        if cfg.model.agg_method == "concat":
             train_dataset = ExtractedFeaturesSurvivalDataset(
-                patient_dfs["train"], slide_dfs["train"], features_dir, cfg.label_name,
+                patient_dfs["train"],
+                slide_dfs["train"],
+                features_dir,
+                cfg.label_name,
             )
             tune_dataset = ExtractedFeaturesSurvivalDataset(
-                patient_dfs["tune"], slide_dfs["tune"], features_dir, cfg.label_name,
+                patient_dfs["tune"],
+                slide_dfs["tune"],
+                features_dir,
+                cfg.label_name,
             )
             test_dataset = ExtractedFeaturesSurvivalDataset(
-                patient_dfs["test"], slide_dfs["test"], features_dir, cfg.label_name,
+                patient_dfs["test"],
+                slide_dfs["test"],
+                features_dir,
+                cfg.label_name,
             )
-        elif cfg.model.agg_method == 'self_att':
+        elif cfg.model.agg_method == "self_att":
             train_dataset = ExtractedFeaturesPatientLevelSurvivalDataset(
-                patient_dfs["train"], slide_dfs["train"], features_dir, cfg.label_name,
+                patient_dfs["train"],
+                slide_dfs["train"],
+                features_dir,
+                cfg.label_name,
             )
             tune_dataset = ExtractedFeaturesPatientLevelSurvivalDataset(
-                patient_dfs["tune"], slide_dfs["tune"], features_dir, cfg.label_name,
+                patient_dfs["tune"],
+                slide_dfs["tune"],
+                features_dir,
+                cfg.label_name,
             )
             test_dataset = ExtractedFeaturesPatientLevelSurvivalDataset(
-                patient_dfs["test"], slide_dfs["test"], features_dir, cfg.label_name,
+                patient_dfs["test"],
+                slide_dfs["test"],
+                features_dir,
+                cfg.label_name,
             )
 
         model = ModelFactory(cfg.level, cfg.nbins, cfg.model).get_model()
@@ -152,10 +179,10 @@ def main(cfg: DictConfig):
 
                 epoch_start_time = time.time()
                 if cfg.wandb.enable:
-                    log_dict = {f"train/fold_{i}/epoch": epoch+1}
+                    log_dict = {f"train/fold_{i}/epoch": epoch + 1}
 
                 train_results = train_survival(
-                    epoch+1,
+                    epoch + 1,
                     model,
                     train_dataset,
                     optimizer,
@@ -166,13 +193,21 @@ def main(cfg: DictConfig):
                 )
 
                 if cfg.wandb.enable:
-                    update_log_dict(f"train/fold_{i}", train_results, log_dict, step=f"train/fold_{i}/epoch", to_log=cfg.wandb.to_log)
-                train_dataset.patient_df.to_csv(Path(result_dir, f"train_{epoch}.csv"), index=False)
+                    update_log_dict(
+                        f"train/fold_{i}",
+                        train_results,
+                        log_dict,
+                        step=f"train/fold_{i}/epoch",
+                        to_log=cfg.wandb.to_log,
+                    )
+                train_dataset.patient_df.to_csv(
+                    Path(result_dir, f"train_{epoch}.csv"), index=False
+                )
 
                 if epoch % cfg.tuning.tune_every == 0:
 
                     tune_results = tune_survival(
-                        epoch+1,
+                        epoch + 1,
                         model,
                         tune_dataset,
                         criterion,
@@ -180,12 +215,31 @@ def main(cfg: DictConfig):
                         batch_size=cfg.tuning.batch_size,
                     )
 
-                    auc, mean_auc, times = get_cumulative_dynamic_auc(patient_dfs["train"], patient_dfs["tune"], tune_results["risks"], cfg.label_name)
+                    auc, mean_auc, times = get_cumulative_dynamic_auc(
+                        patient_dfs["train"],
+                        patient_dfs["tune"],
+                        tune_results["risks"],
+                        cfg.label_name,
+                    )
                     if cfg.wandb.enable:
-                        update_log_dict(f"tune/fold_{i}", tune_results, log_dict, step=f"train/fold_{i}/epoch", to_log=cfg.wandb.to_log)
+                        update_log_dict(
+                            f"tune/fold_{i}",
+                            tune_results,
+                            log_dict,
+                            step=f"train/fold_{i}/epoch",
+                            to_log=cfg.wandb.to_log,
+                        )
                         if auc is not None:
-                            fig = plot_cumulative_dynamic_auc(auc, mean_auc, times, epoch)
-                            log_dict.update({f"tune/fold_{i}/cumulative_dynamic_auc": wandb.Image(fig)})
+                            fig = plot_cumulative_dynamic_auc(
+                                auc, mean_auc, times, epoch
+                            )
+                            log_dict.update(
+                                {
+                                    f"tune/fold_{i}/cumulative_dynamic_auc": wandb.Image(
+                                        fig
+                                    )
+                                }
+                            )
                             plt.close(fig)
                     tune_dataset.patient_df.to_csv(
                         Path(result_dir, f"tune_{epoch}.csv"), index=False
@@ -226,7 +280,9 @@ def main(cfg: DictConfig):
         print(f"Total time taken for fold {i}: {fold_mins}m {fold_secs}s")
 
         # load best model
-        best_model_fp = Path(checkpoint_dir, f"{cfg.testing.retrieve_checkpoint}_model.pt")
+        best_model_fp = Path(
+            checkpoint_dir, f"{cfg.testing.retrieve_checkpoint}_model.pt"
+        )
         if cfg.wandb.enable:
             wandb.save(str(best_model_fp))
         best_model_sd = torch.load(best_model_fp)

@@ -34,11 +34,13 @@ from utils import (
 )
 
 
-@hydra.main(version_base="1.2.0", config_path="../config/pre-training", config_name="patch")
+@hydra.main(
+    version_base="1.2.0", config_path="../config/pre-training", config_name="patch"
+)
 def main(cfg: DictConfig):
 
-    distributed = (torch.cuda.device_count() > 1)
-    print(f'torch.cuda.device_count(): {torch.cuda.device_count()}')
+    distributed = torch.cuda.device_count() > 1
+    print(f"torch.cuda.device_count(): {torch.cuda.device_count()}")
     if distributed:
         torch.distributed.init_process_group(backend="nccl")
         gpu_id = int(os.environ["LOCAL_RANK"])
@@ -73,7 +75,7 @@ def main(cfg: DictConfig):
     dataset = datasets.ImageFolder(cfg.data_dir, transform=transform)
     if cfg.training.pct:
         print(f"Pre-training on {cfg.training.pct*100}% of the data")
-        nsample = int(cfg.training.pct*len(dataset))
+        nsample = int(cfg.training.pct * len(dataset))
         idxs = random.sample(range(len(dataset)), k=nsample)
         dataset = torch.utils.data.Subset(dataset, idxs)
 
@@ -171,8 +173,12 @@ def main(cfg: DictConfig):
     if cfg.speed.use_fp16:
         fp16_scaler = torch.cuda.amp.GradScaler()
 
-    assert cfg.training.nepochs >= cfg.training.warmup_epochs, f"nepochs ({cfg.training.nepochs}) must be greater than or equal to warmup_epochs ({cfg.training.warmup_epochs})"
-    base_lr = cfg.optim.lr * (cfg.training.batch_size_per_gpu * get_world_size()) / 256.0
+    assert (
+        cfg.training.nepochs >= cfg.training.warmup_epochs
+    ), f"nepochs ({cfg.training.nepochs}) must be greater than or equal to warmup_epochs ({cfg.training.warmup_epochs})"
+    base_lr = (
+        cfg.optim.lr * (cfg.training.batch_size_per_gpu * get_world_size()) / 256.0
+    )
     lr_schedule = cosine_scheduler(
         base_lr,
         cfg.optim.lr_scheduler.min_lr,
@@ -193,7 +199,7 @@ def main(cfg: DictConfig):
 
     epochs_run = 0
     if distributed:
-        snapshot_path = Path(output_dir, 'snapshot.pt')
+        snapshot_path = Path(output_dir, "snapshot.pt")
         if snapshot_path.exists():
             print("Loading snapshot")
             loc = f"cuda:{gpu_id}"
@@ -230,7 +236,7 @@ def main(cfg: DictConfig):
 
             epoch_start_time = time.time()
             if cfg.wandb.enable and is_main_process():
-                wandb.log({"epoch": epoch+1})
+                wandb.log({"epoch": epoch + 1})
 
             if distributed:
                 data_loader.sampler.set_epoch(epoch)
@@ -283,20 +289,24 @@ def main(cfg: DictConfig):
                         "OPTIMIZER_STATE": optimizer.state_dict(),
                         "EPOCHS_RUN": epoch,
                     }
-                # else:
-                #     snapshot = {
-                #         "STUDENT_STATE": student.state_dict(),
-                #         "TEACHER_STATE": teacher.state_dict(),
-                #         "OPTIMIZER_STATE": optimizer.state_dict(),
-                #         "EPOCHS_RUN": epoch,
-                #     }
+                    # else:
+                    #     snapshot = {
+                    #         "STUDENT_STATE": student.state_dict(),
+                    #         "TEACHER_STATE": teacher.state_dict(),
+                    #         "OPTIMIZER_STATE": optimizer.state_dict(),
+                    #         "EPOCHS_RUN": epoch,
+                    #     }
                     torch.save(snapshot, snapshot_path)
 
             if is_main_process():
                 save_path = Path(output_dir, "latest.pth")
                 torch.save(save_dict, save_path)
 
-            if cfg.logging.save_ckpt_every and epoch % cfg.logging.save_ckpt_every == 0 and is_main_process():
+            if (
+                cfg.logging.save_ckpt_every
+                and epoch % cfg.logging.save_ckpt_every == 0
+                and is_main_process()
+            ):
                 save_path = Path(output_dir, f"checkpoint_{epoch:03}.pth")
                 torch.save(save_dict, save_path)
 

@@ -17,14 +17,15 @@ from PIL import Image, ImageFilter, ImageOps
 
 from source.utils import update_state_dict
 
+
 def hydra_argv_remapper(argv_map):
-    '''
+    """
     Call this function before main
     argv_map is a dict that remaps specific args to something else that hydra will gracefully not choke on
         ex: {'--foo':'standard.hydra.override.foo', '--bar':'example.bar'}
     workaround hydra behaviour with command line flags
     kindly given at: https://github.com/facebookresearch/hydra/issues/446#issuecomment-881031746
-    '''
+    """
 
     argv = sys.argv
 
@@ -107,7 +108,9 @@ class PatchDataAugmentationDINO(object):
         self.global_transfo1 = transforms.Compose(
             [
                 transforms.RandomResizedCrop(
-                    global_crop_size, scale=global_crops_scale, interpolation=transforms.InterpolationMode.BICUBIC
+                    global_crop_size,
+                    scale=global_crops_scale,
+                    interpolation=transforms.InterpolationMode.BICUBIC,
                 ),
                 flip_and_color_jitter,
                 GaussianBlur(1.0),
@@ -118,7 +121,9 @@ class PatchDataAugmentationDINO(object):
         self.global_transfo2 = transforms.Compose(
             [
                 transforms.RandomResizedCrop(
-                    global_crop_size, scale=global_crops_scale, interpolation=transforms.InterpolationMode.BICUBIC
+                    global_crop_size,
+                    scale=global_crops_scale,
+                    interpolation=transforms.InterpolationMode.BICUBIC,
                 ),
                 flip_and_color_jitter,
                 GaussianBlur(0.1),
@@ -131,7 +136,9 @@ class PatchDataAugmentationDINO(object):
         self.local_transfo = transforms.Compose(
             [
                 transforms.RandomResizedCrop(
-                    local_crop_size, scale=local_crops_scale, interpolation=transforms.InterpolationMode.BICUBIC
+                    local_crop_size,
+                    scale=local_crops_scale,
+                    interpolation=transforms.InterpolationMode.BICUBIC,
                 ),
                 flip_and_color_jitter,
                 GaussianBlur(p=0.5),
@@ -152,34 +159,50 @@ class RegionDataAugmentationDINO(object):
     """
     Modified Data Augmentaton for DINO for [region_size x region_size] resolutions for performing local / global crops on features in image grid
     """
-    def __init__(self, global_crops_scale, local_crops_number, local_crops_scale, region_size: int = 4096, patch_size: int = 256):
+
+    def __init__(
+        self,
+        global_crops_scale,
+        local_crops_number,
+        local_crops_scale,
+        region_size: int = 4096,
+        patch_size: int = 256,
+    ):
 
         self.npatch = int(region_size // patch_size)
         global_crop_size = int(global_crops_scale * self.npatch)
         local_crop_size = int(local_crops_scale * self.npatch)
 
         # first global crop
-        self.global_transfo1 = transforms.Compose([
-            transforms.RandomCrop(global_crop_size),
-            transforms.RandomHorizontalFlip(p=0.5),
-        ])
+        self.global_transfo1 = transforms.Compose(
+            [
+                transforms.RandomCrop(global_crop_size),
+                transforms.RandomHorizontalFlip(p=0.5),
+            ]
+        )
 
         # second global crop
-        self.global_transfo2 = transforms.Compose([
-            transforms.RandomCrop(global_crop_size),
-            transforms.RandomHorizontalFlip(p=0.5),
-        ])
+        self.global_transfo2 = transforms.Compose(
+            [
+                transforms.RandomCrop(global_crop_size),
+                transforms.RandomHorizontalFlip(p=0.5),
+            ]
+        )
 
         # transformation for the local small crops
         self.local_crops_number = local_crops_number
-        self.local_transfo = transforms.Compose([
-            transforms.RandomCrop(local_crop_size),
-            transforms.RandomHorizontalFlip(p=0.5),
-        ])
+        self.local_transfo = transforms.Compose(
+            [
+                transforms.RandomCrop(local_crop_size),
+                transforms.RandomHorizontalFlip(p=0.5),
+            ]
+        )
 
     def __call__(self, x):
         crops = []
-        x = x.unfold(0, self.npatch, self.npatch).transpose(0, 1) # [m, 384] -> [npatch, 384, npatch] -> [384, npatch, npatch]
+        x = x.unfold(0, self.npatch, self.npatch).transpose(
+            0, 1
+        )  # [m, 384] -> [npatch, 384, npatch] -> [384, npatch, npatch]
         crops.append(self.global_transfo1(x))
         crops.append(self.global_transfo2(x))
         for _ in range(self.local_crops_number):
@@ -392,6 +415,7 @@ class MultiCropWrapper(nn.Module):
     concatenate all the output features and run the head forward on these
     concatenated features.
     """
+
     def __init__(self, backbone, head):
         super(MultiCropWrapper, self).__init__()
         # disable layers dedicated to ImageNet labels classification
@@ -403,13 +427,16 @@ class MultiCropWrapper(nn.Module):
         # convert to list
         if not isinstance(x, list):
             x = [x]
-        idx_crops = torch.cumsum(torch.unique_consecutive(
-            torch.tensor([inp.shape[-1] for inp in x]),
-            return_counts=True,
-        )[1], 0)
+        idx_crops = torch.cumsum(
+            torch.unique_consecutive(
+                torch.tensor([inp.shape[-1] for inp in x]),
+                return_counts=True,
+            )[1],
+            0,
+        )
         start_idx, output = 0, torch.empty(0).to(x[0].device)
         for end_idx in idx_crops:
-            _out = self.backbone(torch.cat(x[start_idx: end_idx]))
+            _out = self.backbone(torch.cat(x[start_idx:end_idx]))
             # The output is a tuple with XCiT model. See:
             # https://github.com/facebookresearch/xcit/blob/master/xcit.py#L404-L405
             if isinstance(_out, tuple):
@@ -432,7 +459,7 @@ def get_params_groups(model):
             not_regularized.append(param)
         else:
             regularized.append(param)
-    return [{'params': regularized}, {'params': not_regularized, 'weight_decay': 0.}]
+    return [{"params": regularized}, {"params": not_regularized, "weight_decay": 0.0}]
 
 
 def has_batchnorms(model):
@@ -498,21 +525,27 @@ def resume_from_checkpoint(ckpt_path, **kwargs):
         if key in checkpoint and value is not None:
             try:
                 msg = value.load_state_dict(checkpoint[key], strict=False)
-                print(f"=> loaded '{key}' from checkpoint: '{ckpt_path}' with msg {msg}")
+                print(
+                    f"=> loaded '{key}' from checkpoint: '{ckpt_path}' with msg {msg}"
+                )
             except TypeError:
                 try:
                     msg = value.load_state_dict(checkpoint[key])
                     print(f"=> loaded '{key}' from checkpoint: '{ckpt_path}'")
                 except ValueError:
-                    print(
-                        f"=> failed to load '{key}' from checkpoint: '{ckpt_path}'")
+                    print(f"=> failed to load '{key}' from checkpoint: '{ckpt_path}'")
         else:
             print(f"=> key '{key}' not found in checkpoint: '{ckpt_path}'")
     return epoch
 
 
 def cosine_scheduler(
-    base_value, final_value, nepochs, niter_per_ep, warmup_epochs=0, start_warmup_value=0
+    base_value,
+    final_value,
+    nepochs,
+    niter_per_ep,
+    warmup_epochs=0,
+    start_warmup_value=0,
 ):
     warmup_schedule = np.array([])
     warmup_iters = warmup_epochs * niter_per_ep
@@ -634,7 +667,9 @@ def train_one_epoch(
                 loss = dino_loss(student_output, teacher_output, epoch)
 
             if not math.isfinite(loss.item()):
-                tqdm.tqdm.write("Loss is {}, stopping training".format(loss.item()), force=True)
+                tqdm.tqdm.write(
+                    "Loss is {}, stopping training".format(loss.item()), force=True
+                )
                 sys.exit(1)
 
             # student update
@@ -660,7 +695,7 @@ def train_one_epoch(
             # EMA update for the teacher
             with torch.no_grad():
                 m = momentum_schedule[it]  # momentum parameter
-                if (torch.cuda.device_count() > 1):
+                if torch.cuda.device_count() > 1:
                     student_params = student.module.parameters()
                 else:
                     student_params = student.parameters()

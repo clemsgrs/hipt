@@ -22,7 +22,11 @@ from source.utils import (
 )
 
 
-@hydra.main(version_base="1.2.0", config_path="../config/training/subtyping", config_name="region")
+@hydra.main(
+    version_base="1.2.0",
+    config_path="../config/training/subtyping",
+    config_name="region",
+)
 def main(cfg: DictConfig):
 
     output_dir = Path(cfg.output_dir, cfg.experiment_name)
@@ -174,7 +178,9 @@ def main(cfg: DictConfig):
             break
 
     # load best model
-    best_model_sd = torch.load(Path(checkpoint_dir, f"{cfg.testing.retrieve_checkpoint}_model.pt"))
+    best_model_sd = torch.load(
+        Path(checkpoint_dir, f"{cfg.testing.retrieve_checkpoint}_model.pt")
+    )
     model.load_state_dict(best_model_sd)
 
     test_results = test(model, test_dataset, batch_size=1)
