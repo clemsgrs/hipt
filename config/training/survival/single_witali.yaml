@@ -1,0 +1,23 @@
+defaults:
+  - single
+  - _self_
+
+data:
+  fold_dir: '/home/user/dataset/witali-liver/splits/fold_0'
+
+features_dir: 'output/witali-liver/features/global'
+output_dir: 'output'
+experiment_name: 'debug'
+level: 'global'
+
+nepochs: 50
+label_name: 'OS'
+nbins: 4
+
+testing:
+  run_testing: True
+  retrieve_checkpoint: 'latest'
+
+model:
+  pos_encoding: True
+  agg_method: 'concat'

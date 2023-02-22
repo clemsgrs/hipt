@@ -1,10 +1,10 @@
-region_dir: '/home/user/code/git/cpg/hs2p/output/panda_dino/patches/2048/jpg'
+region_dir: '/data/pathology/projects/ais-cap/dataset/panda_radboud/patches/2048/jpg'
 
-output_dir: 'output'
-experiment_name: 'dino'
+output_dir: '/data/pathology/projects/ais-cap/code/git/clemsgrs/hipt/output/panda_radboud/dino/features'
+experiment_name: '2048_local'
 resume: False
 
-slide_list:
+slide_list: '/data/pathology/projects/ais-cap/dataset/panda_radboud/splits/fold_0/train.txt'
 
 region_size: 2048
 patch_size: 256
@@ -12,7 +12,9 @@ mini_patch_size: 16
 
 format: 'jpg'
 
-pretrain_vit_patch: 'checkpoints/vit_256_small_dino.pth'
+# pretrain_vit_patch: 'checkpoints/vit_256_small_dino.pth'
+# pretrain_vit_patch: '/data/pathology/projects/ais-cap/dataset/panda_radboud/checkpoints/vit_256_small_dino.pth'
+pretrain_vit_patch: 'output/panda_radboud/dino/patch/checkpoint_050.pth'
 freeze_vit_patch: True
 
 wandb:
@@ -22,3 +24,7 @@ wandb:
   exp_name: '${experiment_name}'
   dir: '/home/user/'
   group:
+
+# hydra
+hydra:
+  output_subdir: null

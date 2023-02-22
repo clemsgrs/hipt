@@ -1,0 +1,26 @@
+defaults:
+  - single
+  - _self_
+
+data:
+  fold_dir: '/data/pathology/projects/ais-cap/dataset/witali-liver/splits'
+  tiles_csv: '/data/pathology/projects/ais-cap/dataset/witali-liver/tiles.csv'
+
+features_dir: 'output/witali-liver/features/global'
+output_dir: 'output/witali_liver'
+experiment_name: 'self_att_pos_embedding'
+level: 'global'
+
+nepochs: 50
+label_name: 'OS'
+nbins: 4
+
+testing:
+  retrieve_checkpoint: 'best'
+
+model:
+  pos_encoding: True
+  agg_method: 'self_att'
+
+wandb:
+  enable: True

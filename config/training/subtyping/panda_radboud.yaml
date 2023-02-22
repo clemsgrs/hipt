@@ -1,0 +1,33 @@
+defaults:
+  - single
+  - _self_
+
+data:
+  train_csv: '/data/pathology/projects/ais-cap/dataset/panda_radboud/splits/fold_0/train.csv'
+  tune_csv: '/data/pathology/projects/ais-cap/dataset/panda_radboud/splits/fold_0/tune.csv'
+  test_csv: '/data/pathology/projects/ais-cap/dataset/panda_radboud/splits/fold_0/test.csv'
+
+features_dir: '/data/pathology/projects/ais-cap/code/git/clemsgrs/hipt/output/panda_radboud/features/2048_custom/56uwc3hg/features/global/slide'
+output_dir: 'output/panda_radboud'
+experiment_name: 'subtyping'
+level: 'global'
+
+task: 'subtyping'
+loss: 'ce'
+
+nepochs: 200
+num_classes: 2
+label_name: 'isup_grade'
+label_mapping: {0: 0, 1: 1, 2: 1, 3: 1, 4: 1, 5: 1}
+
+testing:
+  retrieve_checkpoint: 'best'
+
+model:
+  pretrain_vit_patch:
+  freeze_vit_patch_pos_embed:
+  pretrain_vit_region:
+  freeze_vit_region_pos_embed:
+  region_size: 2048
+  agg_method: 'concat'
+  pos_encoding: False

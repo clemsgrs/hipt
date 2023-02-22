@@ -71,3 +71,8 @@ gpu:
 world_size:
 dist_url: "env://" # url used to set up distributed training; see https://pytorch.org/docs/stable/distributed.html
 local_rank: 0
+
+# hydra
+hydra:
+  run:
+    dir: /tmp/hydra_output

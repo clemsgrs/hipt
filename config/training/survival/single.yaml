@@ -66,3 +66,7 @@ wandb:
   dir: '/home/user'
   group:
   to_log: ['loss', 'c-index']
+
+hydra:
+  run:
+    dir: /tmp/hydra_output

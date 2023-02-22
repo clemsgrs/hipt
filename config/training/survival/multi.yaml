@@ -6,8 +6,8 @@ data:
   fold_dir: '/data/pathology/projects/ais-cap/dataset/tcga/brca/survival/5fold-cv_narrowed'
 
 features_dir: '/data/pathology/projects/ais-cap/code/git/cpg/hipt/output/tcga_brca_all_slides/features/global'
-# features_dir: '/home/user/code/git/opensource/HIPT/3-Self-Supervised-Eval/embeddings_slide_lib/embeddings_slide_lib/vit256mean_tcga_slide_embeddings'
-experiment_name: 'tcga_brca_survival_narrowed_multifold_patient_agg'
+output_dir: 'output/tcga_brca'
+experiment_name: 'narrowed_multi_concat_pos_encoding'
 level: 'global'
 
 nepochs: 50
@@ -15,17 +15,6 @@ nepochs: 50
 testing:
   retrieve_checkpoint: 'latest'
 
-optim:
-  name: 'adam'
-  lr: 2e-4
-  wd: 1e-5
-
-early_stopping:
-  enable: False
-  tracking: 'loss'
-  min_max: 'min'
-  patience: 10
-  min_epoch: 30
-
-wandb:
-  exp_name: '${experiment_name}'
+model:
+  pos_encoding: True
+  agg_method: 'concat'

@@ -1,0 +1,32 @@
+region_dir: '/data/pathology/projects/ais-cap/dataset/panda_radboud/patches'
+
+output_dir: 'output/panda_radboud/features'
+experiment_name: '2048_custom'
+resume: False
+
+slide_list:
+
+region_size: 2048
+patch_size: 256
+mini_patch_size: 16
+
+format: 'jpg'
+level: 'global'
+save_region_features: True
+
+# pretrain_vit_patch: '/data/pathology/projects/ais-cap/dataset/panda_radboud/checkpoints/vit_256_small_dino.pth'
+pretrain_vit_patch: 'output/panda_radboud/dino/patch/checkpoint_050.pth'
+# pretrain_vit_region: '/data/pathology/projects/ais-cap/dataset/panda_radboud/checkpoints/vit_4096_xs_dino.pth'
+pretrain_vit_region: 'output/panda_radboud/dino/region/69hfswzt/latest.pth'
+
+wandb:
+  enable: True
+  project: 'hipt'
+  username: 'clemsg'
+  exp_name: '${experiment_name}'
+  dir: '/home/user/'
+  group:
+
+hydra:
+  run:
+    dir: /tmp/hydra_output

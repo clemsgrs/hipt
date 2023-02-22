@@ -1,5 +1,5 @@
-data_dir: 'data/tcga_brca_dino/region_4k_pretraining'
-output_dir: 'output/dino'
+data_dir: '/data/pathology/projects/ais-cap/code/git/clemsgrs/hipt/output/panda_radboud/dino/features/2048_local/1em3x51n/features'
+output_dir: '/data/pathology/projects/ais-cap/code/git/clemsgrs/hipt/output/panda_radboud/dino'
 experiment_name: 'region'
 
 start_from_checkpoint:
@@ -9,7 +9,7 @@ seed: 0
 
 model:
   arch: 'vit4k_xs'
-  region_size: 4096
+  region_size: 2048
   patch_size: 256
   out_dim: 65536 # dimensionality of the DINO head output. For complex and large datasets large values (like 65k) work well
   norm_last_layer: False # whether or not to weight normalize the last layer of the DINO head ; not normalizing leads to better performance but can make the training unstable.
@@ -22,10 +22,10 @@ model:
 
 # training/optimization parameters
 training:
-  nepochs: 100
+  nepochs: 125
   warmup_epochs: 10 # number of epochs for the linear learning-rate warm up.
   freeze_last_layer: 1 # number of epochs during which we keep the output layer fixed ; typically doing so during the first epoch helps training ; try increasing this value if the loss does not decrease
-  batch_size_per_gpu: 64
+  batch_size_per_gpu: 128
   clip_grad: 3.0 # maximal parameter gradient norm if using gradient clipping ; clipping with norm .3 ~ 1.0 can help optimization for larger ViT architectures. 0 for disabling
   pct:
 
@@ -49,7 +49,7 @@ speed:
   num_workers: 4
 
 logging:
-  save_ckpt_every: 20 # save checkpoint every x epochs
+  save_ckpt_every: 10 # save checkpoint every x epochs
 
 wandb:
   enable: True
@@ -66,3 +66,7 @@ gpu:
 world_size:
 dist_url: "env://" # url used to set up distributed training; see https://pytorch.org/docs/stable/distributed.html
 local_rank: 0
+
+# hydra
+hydra:
+  output_subdir: null

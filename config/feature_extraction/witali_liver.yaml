@@ -1,10 +1,10 @@
-region_dir: '/home/user/code/git/clemsgrs/hs2p/output/tcga_brca_survival_debug/patches/'
+region_dir: '/data/pathology/projects/ais-cap/code/git/clemsgrs/hs2p/output/witali-liver_packed/patches'
 
 output_dir: 'output'
-experiment_name: 'tcga_brca_survival_debug'
+experiment_name: 'witali-liver_indiv_debug'
 resume: False
 
-slide_list:
+slide_list: '/data/pathology/projects/ais-cap/dataset/witali-liver/tmp.txt'
 
 region_size: 4096
 patch_size: 256
@@ -12,7 +12,7 @@ mini_patch_size: 16
 
 format: 'jpg'
 level: 'global'
-save_region_features: False
+save_region_features: True
 
 pretrain_vit_patch: 'checkpoints/vit_256_small_dino.pth'
 pretrain_vit_region: 'checkpoints/vit_4096_xs_dino.pth'
