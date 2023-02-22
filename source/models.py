@@ -22,17 +22,39 @@ class ModelFactory:
 
         if level == "global":
             if model_options.agg_method == "self_att":
-                self.model = GlobalPatientLevelHIPT(
-                    num_classes=num_classes,
-                    dropout=model_options.dropout,
-                    slide_pos_embed=model_options.slide_pos_embed,
-                )
+                if model_options.slide_pos_embed.type == '1d':
+                    self.model = GlobalPatientLevelHIPT(
+                        num_classes=num_classes,
+                        dropout=model_options.dropout,
+                        slide_pos_embed=model_options.slide_pos_embed,
+                    )
+                elif model_options.slide_pos_embed.type == '2d':
+                    self.model = GlobalPatientLevelCoordsHIPT(
+                        num_classes=num_classes,
+                        dropout=model_options.dropout,
+                        slide_pos_embed=model_options.slide_pos_embed,
+                    )
+                else:
+                    raise ValueError(
+                        f"cfg.model.slide_pos_embed.type ({model_options.slide_pos_embed.type}) not supported"
+                    )
             elif model_options.agg_method == "concat":
-                self.model = GlobalHIPT(
-                    num_classes=num_classes,
-                    dropout=model_options.dropout,
-                    slide_pos_embed=model_options.slide_pos_embed,
-                )
+                if model_options.slide_pos_embed.type == '1d':
+                    self.model = GlobalHIPT(
+                        num_classes=num_classes,
+                        dropout=model_options.dropout,
+                        slide_pos_embed=model_options.slide_pos_embed,
+                    )
+                elif model_options.slide_pos_embed.type == '2d':
+                    self.model = GlobalCoordsHIPT(
+                        num_classes=num_classes,
+                        dropout=model_options.dropout,
+                        slide_pos_embed=model_options.slide_pos_embed,
+                    )
+                else:
+                    raise ValueError(
+                        f"cfg.model.slide_pos_embed.type ({model_options.slide_pos_embed.type}) not supported"
+                    )
             else:
                 raise ValueError(
                     f"cfg.model.agg_method ({model_options.agg_method}) not supported"
@@ -856,3 +878,92 @@ class GlobalPatientLevelHIPT(nn.Module):
         main_str = f"Total number of parameters: {num_params}\n"
         main_str += f"Total number of trainable parameters: {num_params_train}"
         return main_str
+
+
+class GlobalCoordsHIPT(GlobalHIPT):
+    def __init__(
+        self,
+        num_classes: int = 2,
+        embed_dim_region: int = 192,
+        d_model: int = 192,
+        tile_size: int = 4096,
+        dropout: float = 0.25,
+        slide_pos_embed: Optional[DictConfig] = None,
+    ):
+
+        super().__init__(num_classes, embed_dim_region, d_model, dropout, slide_pos_embed)
+        self.tile_size = tile_size
+
+    def forward(self, x, coords):
+
+        # x = [M, 192]
+        x = self.global_phi(x)
+
+        if self.slide_pos_embed.use:
+            coords = coords.squeeze(0)
+            x = self.pos_encoder(x, coords)
+
+        # in nn.TransformerEncoderLayer, batch_first defaults to False
+        # hence, input is expected to be of shape (seq_length, batch, emb_size)
+        x = self.global_transformer(x.unsqueeze(1)).squeeze(1)
+        att, x = self.global_attn_pool(x)
+        att = torch.transpose(att, 1, 0)
+        att = F.softmax(att, dim=1)
+        x_att = torch.mm(att, x)
+        x_wsi = self.global_rho(x_att)
+
+        logits = self.classifier(x_wsi)
+
+        return logits
+
+
+class GlobalPatientLevelCoordsHIPT(GlobalPatientLevelHIPT):
+    def __init__(
+        self,
+        num_classes: int = 2,
+        embed_dim_region: int = 192,
+        embed_dim_slide: int = 192,
+        embed_dim_patient: int = 192,
+        tile_size: int = 4096,
+        dropout: float = 0.25,
+        slide_pos_embed: Optional[DictConfig] = None,
+    ):
+
+        super().__init__(num_classes, embed_dim_region, embed_dim_slide, embed_dim_patient, dropout, slide_pos_embed)
+        self.tile_size = tile_size
+
+    def forward(self, x, coords):
+
+        # x = [ [M1, 192], [M2, 192], ...]
+        N = len(x)
+        slide_seq = []
+        for n in range(N):
+            y = x[n]
+            coord = coords[n]
+            y = self.global_phi_slide(y)
+            if self.slide_pos_embed.use:
+                y = self.pos_encoder(y, coord)
+            # in nn.TransformerEncoderLayer, batch_first defaults to False
+            # hence, input is expected to be of shape (seq_length, batch, emb_size)
+            y = self.global_transformer_slide(y.unsqueeze(1)).squeeze(1)
+            att_slide, y = self.global_attn_pool_slide(y)
+            att_slide = torch.transpose(att_slide, 1, 0)
+            att_slide = F.softmax(att_slide, dim=1)
+            y_att = torch.mm(att_slide, y)
+            y_slide = self.global_rho_slide(y_att)
+            slide_seq.append(y_slide)
+
+        slide_seq = torch.cat(slide_seq, dim=0)
+        # slide_seq = [N, 192]
+        z = self.global_phi_patient(slide_seq)
+
+        z = self.global_transformer_patient(z.unsqueeze(1)).squeeze(1)
+        att_patient, z = self.global_attn_pool_patient(z)
+        att_patient = torch.transpose(att_patient, 1, 0)
+        att_patient = F.softmax(att_patient, dim=1)
+        z_att = torch.mm(att_patient, z)
+        z_patient = self.global_rho_patient(z_att)
+
+        logits = self.classifier(z_patient)
+
+        return logits

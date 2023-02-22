@@ -181,6 +181,7 @@ class ExtractedFeaturesSurvivalDataset(torch.utils.data.Dataset):
 
         self.features_dir = features_dir
         self.label_name = label_name
+        self.use_coords = False
 
         self.slide_df = self.filter_df(slide_df)
         self.patient_df = patient_df
@@ -258,6 +259,139 @@ class ExtractedFeaturesPatientLevelSurvivalDataset(ExtractedFeaturesSurvivalData
             features.append(f)
 
         return idx, features, label, event_time, c
+
+
+class ExtractedFeaturesCoordsSurvivalDataset(torch.utils.data.Dataset):
+    def __init__(
+        self,
+        patient_df: pd.DataFrame,
+        slide_df: pd.DataFrame,
+        tiles_df: pd.DataFrame,
+        features_dir: Path,
+        label_name: str = "label",
+    ):
+
+        self.features_dir = features_dir
+        self.label_name = label_name
+        self.use_coords = True
+
+        self.slide_df = slide_df
+        self.patient_df = patient_df
+        self.tiles_df = tiles_df
+
+        tmp = pd.merge(slide_df, tiles_df, on="slide_id")
+        # tmp = self.filter_df(tmp)
+        self.tmp = tmp.groupby("slide_id").size().to_frame(name="ntile").reset_index()
+
+    def filter_df(self, df):
+        def infer_tile_path(slide_id, x, y):
+            return 1 - int(Path(self.features_dir, f"{slide_id}_{x}_{y}.pt").exists())
+
+        df["missing"] = df.apply(
+            lambda x: infer_tile_path(x.slide_id, x.x, x.y), axis=1
+        )
+        tmp = df.groubpy("slide_id")
+        missing_slide_ids = []
+        for slide_id, sub_df in tmp:
+            if sub_df.missing.sum() > 0:
+                missing_slide_ids.append(slide_id)
+        if len(missing_slide_ids) > 0:
+            print(
+                f"WARNING: {len(missing_slide_ids)} patients dropped because some features were missing on disk"
+            )
+        filtered_df = df[~df.slide_id.isin(missing_slide_ids)].reset_index(drop=True)
+        return filtered_df
+
+    def get_slide_id_with_max_ntile(self, case_id: str):
+        slide_ids = self.slide_df[
+            self.slide_df.case_id == case_id
+        ].slide_id.values.tolist()
+        tmp = self.tmp[self.tmp.slide_id.isin(slide_ids)]
+        max_id = tmp[tmp.ntile == tmp.ntile.max()]["slide_id"].unique().tolist()
+        # assert len(max_id) == 1, f"{case_id} has {len(max_id)} slides with same max ntile: {max_id}"
+        return max_id[0]
+
+    def __getitem__(self, idx: int):
+
+        row = self.patient_df.loc[idx]
+        case_id = row.case_id
+        # slide_ids = self.slide_df[self.slide_df.case_id == case_id].slide_id.values.tolist()
+
+        slide_id = self.get_slide_id_with_max_ntile(case_id)
+
+        label = row.disc_label
+        event_time = row[self.label_name]
+        c = row.censorship
+
+        features = []
+        # coordinates = []
+        # for slide_id in slide_ids:
+        #     coords = self.tiles_df[self.tiles_df.slide_id == slide_id][['x','y']].values
+        #     for x,y in coords:
+        #         fp = Path(self.features_dir, f"{slide_id}_{x}_{y}.pt")
+        #         f = torch.load(fp)
+        #         features.append(f)
+        #         coordinates.append((x,y))
+        coordinates = self.tiles_df[self.tiles_df.slide_id == slide_id][
+            ["x", "y"]
+        ].values
+        for x, y in coordinates:
+            fp = Path(self.features_dir, f"{slide_id}_{x}_{y}.pt")
+            f = torch.load(fp)
+            features.append(f)
+
+        features = torch.cat(features, dim=0)
+
+        return idx, features, coordinates, label, event_time, c
+
+    def __len__(self):
+        return len(self.patient_df)
+
+
+class ExtractedFeaturesPatientLevelCoordsSurvivalDataset(
+    ExtractedFeaturesCoordsSurvivalDataset
+):
+    def __init__(
+        self,
+        patient_df: pd.DataFrame,
+        slide_df: pd.DataFrame,
+        tiles_df: pd.DataFrame,
+        features_dir: Path,
+        label_name: str = "label",
+    ):
+
+        super().__init__(patient_df, slide_df, tiles_df, features_dir, label_name)
+
+    def __getitem__(self, idx: int):
+
+        row = self.patient_df.loc[idx]
+        case_id = row.case_id
+        slide_ids = self.slide_df[
+            self.slide_df.case_id == case_id
+        ].slide_id.values.tolist()
+
+        assert len(slide_ids) == len(set(slide_ids))
+
+        label = row.disc_label
+        event_time = row[self.label_name]
+        c = row.censorship
+
+        features = []
+        coordinates = []
+        for slide_id in slide_ids:
+            feats = []
+            coords = self.tiles_df[self.tiles_df.slide_id == slide_id][
+                ["x", "y"]
+            ].values
+            for x, y in coords:
+                fp = Path(self.features_dir, f"{slide_id}_{x}_{y}.pt")
+                f = torch.load(fp)
+                feats.append(f)
+            feats = torch.cat(feats, dim=0)
+            features.append(feats)
+            coordinates.append(coords)
+
+        return idx, features, coordinates, label, event_time, c
 
 
 class StackedRegionsDataset(torch.utils.data.Dataset):

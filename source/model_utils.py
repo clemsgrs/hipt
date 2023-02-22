@@ -26,11 +26,9 @@ class PositionalEncoderFactory:
                 self.pos_encoder = PositionalEncoding(options.dim, options.dropout, options.max_seq_len)
         elif type == "2d":
             if learned:
-                # self.pos_encoder = PositionalEmbedding2d(options.dim, options.max_seq_len)
-                raise ValueError(f"(type, learned) ({type}, {learned}) combination not supported yet")
+                self.pos_encoder = PositionalEmbedding2d(options.dim, options.max_seq_len)
             else:
-                # self.pos_encoder = PositionalEncoding2d(options.dim, options.dropout, options.max_seq_len)
-                raise ValueError(f"(type, learned) ({type}, {learned}) combination not supported yet")
+                self.pos_encoder = PositionalEncoding2d(options.dim, options.dropout, options.max_seq_len)
         else:
            raise ValueError(f"cfg.model.slide_pos_embed.type ({type}) not supported")
 

@@ -18,6 +18,8 @@ from source.components import LossFactory
 from source.dataset import (
     ExtractedFeaturesSurvivalDataset,
     ExtractedFeaturesPatientLevelSurvivalDataset,
+    ExtractedFeaturesCoordsSurvivalDataset,
+    ExtractedFeaturesPatientLevelCoordsSurvivalDataset,
     ppcess_survival_data,
     ppcess_tcga_survival_data,
 )
@@ -61,6 +63,9 @@ def main(cfg: DictConfig):
     if cfg.features_dir:
         features_dir = Path(cfg.features_dir)
 
+    if cfg.model.slide_pos_embed.type == "2d":
+        tiles_df = pd.read_csv(cfg.data.tiles_csv)
+
     fold_root_dir = Path(cfg.data.fold_dir)
     nfold = len([_ for _ in fold_root_dir.glob(f"fold_*")])
     print(f"Training on {nfold} folds")
@@ -101,43 +106,89 @@ def main(cfg: DictConfig):
             slide_dfs[p] = slide_df[slide_df.partition == p]
 
         if cfg.model.agg_method == "concat":
-            train_dataset = ExtractedFeaturesSurvivalDataset(
-                patient_dfs["train"],
-                slide_dfs["train"],
-                features_dir,
-                cfg.label_name,
-            )
-            tune_dataset = ExtractedFeaturesSurvivalDataset(
-                patient_dfs["tune"],
-                slide_dfs["tune"],
-                features_dir,
-                cfg.label_name,
-            )
-            test_dataset = ExtractedFeaturesSurvivalDataset(
-                patient_dfs["test"],
-                slide_dfs["test"],
-                features_dir,
-                cfg.label_name,
-            )
+            if cfg.model.slide_pos_embed.type == "1d":
+                train_dataset = ExtractedFeaturesSurvivalDataset(
+                    patient_dfs["train"],
+                    slide_dfs["train"],
+                    features_dir,
+                    cfg.label_name,
+                )
+                tune_dataset = ExtractedFeaturesSurvivalDataset(
+                    patient_dfs["tune"],
+                    slide_dfs["tune"],
+                    features_dir,
+                    cfg.label_name,
+                )
+                test_dataset = ExtractedFeaturesSurvivalDataset(
+                    patient_dfs["test"],
+                    slide_dfs["test"],
+                    features_dir,
+                    cfg.label_name,
+                )
+            elif cfg.model.slide_pos_embed.type == "2d":
+                train_dataset = ExtractedFeaturesCoordsSurvivalDataset(
+                    patient_dfs["train"],
+                    slide_dfs["train"],
+                    tiles_df,
+                    features_dir,
+                    cfg.label_name,
+                    )
+                tune_dataset = ExtractedFeaturesCoordsSurvivalDataset(
+                    patient_dfs["tune"],
+                    slide_dfs["tune"],
+                    tiles_df,
+                    features_dir,
+                    cfg.label_name,
+                )
+                test_dataset = ExtractedFeaturesCoordsSurvivalDataset(
+                    patient_dfs["test"],
+                    slide_dfs["test"],
+                    tiles_df,
+                    features_dir,
+                    cfg.label_name,
+                )
         elif cfg.model.agg_method == "self_att":
-            train_dataset = ExtractedFeaturesPatientLevelSurvivalDataset(
-                patient_dfs["train"],
-                slide_dfs["train"],
-                features_dir,
-                cfg.label_name,
-            )
-            tune_dataset = ExtractedFeaturesPatientLevelSurvivalDataset(
-                patient_dfs["tune"],
-                slide_dfs["tune"],
-                features_dir,
-                cfg.label_name,
-            )
-            test_dataset = ExtractedFeaturesPatientLevelSurvivalDataset(
-                patient_dfs["test"],
-                slide_dfs["test"],
-                features_dir,
-                cfg.label_name,
-            )
+            if cfg.model.slide_pos_embed.type == "1d":
+                train_dataset = ExtractedFeaturesPatientLevelSurvivalDataset(
+                    patient_dfs["train"],
+                    slide_dfs["train"],
+                    features_dir,
+                    cfg.label_name,
+                )
+                tune_dataset = ExtractedFeaturesPatientLevelSurvivalDataset(
+                    patient_dfs["tune"],
+                    slide_dfs["tune"],
+                    features_dir,
+                    cfg.label_name,
+                )
+                test_dataset = ExtractedFeaturesPatientLevelSurvivalDataset(
+                    patient_dfs["test"],
+                    slide_dfs["test"],
+                    features_dir,
+                    cfg.label_name,
+                )
+            elif cfg.model.slide_pos_embed.type == "2d":
+                train_dataset = ExtractedFeaturesPatientLevelCoordsSurvivalDataset(
+                    patient_dfs["train"],
+                    slide_dfs["train"],
+                    tiles_df,
+                    features_dir,
+                    cfg.label_name,
+                )
+                tune_dataset = ExtractedFeaturesPatientLevelCoordsSurvivalDataset(
+                    patient_dfs["tune"],
+                    slide_dfs["tune"],
+                    tiles_df,
+                    features_dir,
+                    cfg.label_name,
+                )
+                test_dataset = ExtractedFeaturesPatientLevelCoordsSurvivalDataset(
+                    patient_dfs["test"],
+                    slide_dfs["test"],
+                    tiles_df,
+                    features_dir,
+                    cfg.label_name,
+                )
 
         model = ModelFactory(cfg.level, cfg.nbins, cfg.model).get_model()
         model.relocate()
