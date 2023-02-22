@@ -67,7 +67,7 @@ def main(cfg: DictConfig):
     else:
         raise ValueError(f"cfg.level ({cfg.level} not supported")
 
-    region_dir = Path(cfg.region_dir, str(cfg.region_size), cfg.format)
+    region_dir = Path(cfg.region_dir)
     slide_ids = sorted([s.name for s in region_dir.iterdir()])
     print(f"{len(slide_ids)} slides with extracted patches found")
 

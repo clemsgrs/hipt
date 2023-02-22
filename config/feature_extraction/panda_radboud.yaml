@@ -1,4 +1,4 @@
-region_dir: '/data/pathology/projects/ais-cap/dataset/panda_radboud/patches'
+region_dir: '/data/pathology/projects/ais-cap/dataset/panda_radboud/patches/2048/jpg'
 
 output_dir: 'output/panda_radboud/features'
 experiment_name: '2048_custom'
