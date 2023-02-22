@@ -491,8 +491,8 @@ def train(
 
     if dataset.num_classes == 2:
         metrics = get_binary_metrics(probs[:, 1], preds, labels)
-        roc_auc_curve = get_roc_auc_curve(probs[:, 1], labels)
-        results.update({"roc_auc_curve": roc_auc_curve})
+        # roc_auc_curve = get_roc_auc_curve(probs[:, 1], labels)
+        # results.update({"roc_auc_curve": roc_auc_curve})
     else:
         metrics = get_metrics(probs, preds, labels)
 
@@ -569,8 +569,8 @@ def tune(
 
     if dataset.num_classes == 2:
         metrics = get_binary_metrics(probs[:, 1], preds, labels)
-        roc_auc_curve = get_roc_auc_curve(probs[:, 1], labels)
-        results.update({"roc_auc_curve": roc_auc_curve})
+        # roc_auc_curve = get_roc_auc_curve(probs[:, 1], labels)
+        # results.update({"roc_auc_curve": roc_auc_curve})
     else:
         metrics = get_metrics(probs, preds, labels)
 
@@ -641,8 +641,8 @@ def test(
 
     if dataset.num_classes == 2:
         metrics = get_binary_metrics(probs[:, 1], preds, labels)
-        roc_auc_curve = get_roc_auc_curve(probs[:, 1], labels)
-        results.update({"roc_auc_curve": roc_auc_curve})
+        # roc_auc_curve = get_roc_auc_curve(probs[:, 1], labels)
+        # results.update({"roc_auc_curve": roc_auc_curve})
     else:
         metrics = get_metrics(probs, preds, labels)
 
