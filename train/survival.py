@@ -4,6 +4,7 @@ import tqdm
 import wandb
 import hydra
 import torch
+import datetime
 import pandas as pd
 import matplotlib.pyplot as plt
 
@@ -31,7 +32,15 @@ from source.utils import (
 @hydra.main(version_base="1.2.0", config_path="../config/training/survival", config_name="debug")
 def main(cfg: DictConfig):
 
-    output_dir = Path(cfg.output_dir, cfg.experiment_name)
+    run_id = datetime.datetime.now().strftime('%Y-%m-%d_%H_%M')
+    # set up wandb
+    if cfg.wandb.enable:
+        key = os.environ.get("WANDB_API_KEY")
+        wandb_run = initialize_wandb(cfg, key=key)
+        wandb_run.define_metric("epoch", summary="max")
+        run_id = wandb_run.id
+
+    output_dir = Path(cfg.output_dir, cfg.experiment_name, run_id)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     checkpoint_dir = Path(output_dir, "checkpoints", cfg.level)
@@ -39,12 +48,6 @@ def main(cfg: DictConfig):
 
     result_dir = Path(output_dir, "results", cfg.level)
     result_dir.mkdir(parents=True, exist_ok=True)
-
-    # set up wandb
-    if cfg.wandb.enable:
-        key = os.environ.get("WANDB_API_KEY")
-        wandb_run = initialize_wandb(cfg, key=key)
-        wandb_run.define_metric("epoch", summary="max")
 
     features_dir = Path(output_dir, "features", cfg.level)
     if cfg.features_dir:

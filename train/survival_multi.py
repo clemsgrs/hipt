@@ -4,6 +4,7 @@ import tqdm
 import wandb
 import torch
 import hydra
+import datetime
 import statistics
 import numpy as np
 import pandas as pd
@@ -35,7 +36,14 @@ from source.utils import (
 )
 def main(cfg: DictConfig):
 
-    output_dir = Path(cfg.output_dir, cfg.experiment_name)
+    run_id = datetime.datetime.now().strftime('%Y-%m-%d_%H_%M')
+    # set up wandb
+    if cfg.wandb.enable:
+        key = os.environ.get("WANDB_API_KEY")
+        wandb_run = initialize_wandb(cfg, key=key)
+        run_id = wandb_run.id
+
+    output_dir = Path(cfg.output_dir, cfg.experiment_name, run_id)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     checkpoint_root_dir = Path(output_dir, "checkpoints", cfg.level)
@@ -43,11 +51,6 @@ def main(cfg: DictConfig):
 
     result_root_dir = Path(output_dir, "results", cfg.level)
     result_root_dir.mkdir(parents=True, exist_ok=True)
-
-    # set up wandb
-    if cfg.wandb.enable:
-        key = os.environ.get("WANDB_API_KEY")
-        _ = initialize_wandb(cfg, key=key)
 
     features_dir = Path(output_dir, "features", cfg.level)
     if cfg.features_dir:
