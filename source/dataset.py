@@ -8,6 +8,7 @@ from pathlib import Path
 from torchvision import transforms
 from typing import Callable, Dict, Optional
 from collections import defaultdict
+from omegaconf import DictConfig
 
 
 def read_image(image_fp: str) -> Image:
@@ -106,6 +107,64 @@ def ppcess_survival_data(
     )
 
     return patient_df, slide_df
+
+
+class DatasetFactory:
+    def __init__(
+        self,
+        task: str,
+        options: DictConfig,
+        agg_method: str = "concat",
+    ):
+
+        if task == "subtyping":
+            self.dataset = ExtractedFeaturesDataset(
+                options.df,
+                options.features_dir,
+                options.label_name,
+                options.label_mapping,
+                options.label_encoding,
+            )
+        elif task == "survival":
+            if options.tiles_df:
+                if agg_method == "concat":
+                    self.dataset = ExtractedFeaturesCoordsSurvivalDataset(
+                        options.patient_df,
+                        options.slide_df,
+                        options.tiles_df,
+                        options.features_dir,
+                        options.label_name,
+                    )
+                else:
+                    self.dataset = ExtractedFeaturesPatientLevelCoordsSurvivalDataset(
+                        options.patient_df,
+                        options.slide_df,
+                        options.tiles_df,
+                        options.features_dir,
+                        options.label_name,
+                    )
+            else:
+                if agg_method == "concat":
+                    self.dataset = ExtractedFeaturesSurvivalDataset(
+                        options.patient_df,
+                        options.slide_df,
+                        options.features_dir,
+                        options.label_name,
+                    )
+                else:
+                    self.dataset = ExtractedFeaturesPatientLevelSurvivalDataset(
+                        options.patient_df,
+                        options.slide_df,
+                        options.features_dir,
+                        options.label_name,
+                    )
+        else:
+            raise ValueError(
+                f"task ({task}) not supported"
+            )
+
+    def get_dataset(self):
+        return self.dataset
 
 
 class ExtractedFeaturesDataset(torch.utils.data.Dataset):

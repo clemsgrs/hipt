@@ -9,13 +9,12 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 from pathlib import Path
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 
 from source.models import ModelFactory
 from source.components import LossFactory
 from source.dataset import (
-    ExtractedFeaturesSurvivalDataset,
-    ExtractedFeaturesPatientLevelSurvivalDataset,
+    DatasetFactory,
     ppcess_survival_data,
     ppcess_tcga_survival_data,
 )
@@ -60,13 +59,9 @@ def main(cfg: DictConfig):
     if cfg.features_dir:
         features_dir = Path(cfg.features_dir)
 
-    criterion = LossFactory(cfg.task, cfg.loss).get_loss()
-
-    model = ModelFactory(
-        cfg.level, num_classes=cfg.nbins, model_options=cfg.model
-    ).get_model()
-    model.relocate()
-    print(model)
+    tiles_df = None
+    if cfg.model.slide_pos_embed.type == "2d":
+        tiles_df = pd.read_csv(cfg.data.tiles_csv)
 
     print("Loading data")
     dfs = {}
@@ -88,44 +83,21 @@ def main(cfg: DictConfig):
         patient_dfs[p] = patient_df[patient_df.partition == p].reset_index(drop=True)
         slide_dfs[p] = slide_df[slide_df.partition == p]
 
-    if cfg.model.agg_method == "concat":
-        train_dataset = ExtractedFeaturesSurvivalDataset(
-            patient_dfs["train"],
-            slide_dfs["train"],
-            features_dir,
-            cfg.label_name,
-        )
-        tune_dataset = ExtractedFeaturesSurvivalDataset(
-            patient_dfs["tune"],
-            slide_dfs["tune"],
-            features_dir,
-            cfg.label_name,
-        )
-        test_dataset = ExtractedFeaturesSurvivalDataset(
-            patient_dfs["test"],
-            slide_dfs["test"],
-            features_dir,
-            cfg.label_name,
-        )
-    elif cfg.model.agg_method == "self_att":
-        train_dataset = ExtractedFeaturesPatientLevelSurvivalDataset(
-            patient_dfs["train"],
-            slide_dfs["train"],
-            features_dir,
-            cfg.label_name,
-        )
-        tune_dataset = ExtractedFeaturesPatientLevelSurvivalDataset(
-            patient_dfs["tune"],
-            slide_dfs["tune"],
-            features_dir,
-            cfg.label_name,
-        )
-        test_dataset = ExtractedFeaturesPatientLevelSurvivalDataset(
-            patient_dfs["test"],
-            slide_dfs["test"],
-            features_dir,
-            cfg.label_name,
-        )
+    train_dataset_options = OmegaConf.create({"patient_df": patient_dfs["train"], "slide_df": slide_dfs["train"], "tiles_df": tiles_df, "features_dir": features_dir, "label_name": cfg.label_name})
+    tune_dataset_options = OmegaConf.create({"patient_df": patient_dfs["tune"], "slide_df": slide_dfs["tune"], "tiles_df": tiles_df, "features_dir": features_dir, "label_name": cfg.label_name})
+    test_dataset_options = OmegaConf.create({"patient_df": patient_dfs["test"], "slide_df": slide_dfs["test"], "tiles_df": tiles_df, "features_dir": features_dir, "label_name": cfg.label_name})
+
+    train_dataset = DatasetFactory("survival", train_dataset_options, cfg.model.agg_method)
+    tune_dataset = DatasetFactory("survival", tune_dataset_options, cfg.model.agg_method)
+    test_dataset = DatasetFactory("survival", test_dataset_options, cfg.model.agg_method)
+
+
+    print("Configuring model")
+    model = ModelFactory(
+        cfg.level, num_classes=cfg.nbins, model_options=cfg.model
+    ).get_model()
+    model.relocate()
+    print(model)
 
     print("Configuring optimmizer & scheduler")
     model_params = filter(lambda p: p.requires_grad, model.parameters())
@@ -133,6 +105,8 @@ def main(cfg: DictConfig):
         cfg.optim.name, model_params, lr=cfg.optim.lr, weight_decay=cfg.optim.wd
     ).get_optimizer()
     scheduler = SchedulerFactory(optimizer, cfg.optim.lr_scheduler).get_scheduler()
+
+    criterion = LossFactory(cfg.task, cfg.loss).get_loss()
 
     early_stopping = EarlyStopping(
         cfg.early_stopping.tracking,
