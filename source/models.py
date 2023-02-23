@@ -112,9 +112,12 @@ class GlobalHIPT(nn.Module):
         if self.slide_pos_embed.use:
             pos_encoding_options = OmegaConf.create(
                 {
+                    "agg_method": "concat",
                     "dim": d_model,
                     "dropout": dropout,
                     "max_seq_len": slide_pos_embed.max_seq_len,
+                    "max_nslide": slide_pos_embed.max_nslide,
+                    "tile_size": slide_pos_embed.tile_size,
                 }
             )
             self.pos_encoder = PositionalEncoderFactory(
@@ -256,9 +259,12 @@ class LocalGlobalHIPT(nn.Module):
         if self.slide_pos_embed.use:
             pos_encoding_options = OmegaConf.create(
                 {
-                    "dim": d_model,
+                    "agg_method": "concat",
+                    "dim": embed_dim_region,
                     "dropout": dropout,
                     "max_seq_len": slide_pos_embed.max_seq_len,
+                    "max_nslide": slide_pos_embed.max_nslide,
+                    "tile_size": slide_pos_embed.tile_size,
                 }
             )
             self.pos_encoder = PositionalEncoderFactory(
@@ -446,9 +452,12 @@ class HIPT(nn.Module):
         if self.slide_pos_embed.use:
             pos_encoding_options = OmegaConf.create(
                 {
-                    "dim": d_model,
+                    "agg_method": "concat",
+                    "dim": embed_dim_region,
                     "dropout": dropout,
                     "max_seq_len": slide_pos_embed.max_seq_len,
+                    "max_nslide": slide_pos_embed.max_nslide,
+                    "tile_size": slide_pos_embed.tile_size,
                 }
             )
             self.pos_encoder = PositionalEncoderFactory(
@@ -756,13 +765,16 @@ class GlobalPatientLevelHIPT(nn.Module):
         if self.slide_pos_embed.use:
             pos_encoding_options = OmegaConf.create(
                 {
+                    "agg_method": "self_att",
                     "dim": embed_dim_slide,
                     "dropout": dropout,
                     "max_seq_len": slide_pos_embed.max_seq_len,
+                    "max_nslide": slide_pos_embed.max_nslide,
+                    "tile_size": slide_pos_embed.tile_size,
                 }
             )
             self.pos_encoder = PositionalEncoderFactory(
-                slide_pos_embed.type, slide_pos_embed.learned, embed_dim_slide, dropout
+                slide_pos_embed.type, slide_pos_embed.learned, pos_encoding_options
             ).get_pos_encoder()
 
         self.global_transformer_slide = nn.TransformerEncoder(

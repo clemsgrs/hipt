@@ -367,37 +367,39 @@ class ExtractedFeaturesCoordsSurvivalDataset(torch.utils.data.Dataset):
         ].slide_id.values.tolist()
         tmp = self.tmp[self.tmp.slide_id.isin(slide_ids)]
         max_id = tmp[tmp.ntile == tmp.ntile.max()]["slide_id"].unique().tolist()
-        # assert len(max_id) == 1, f"{case_id} has {len(max_id)} slides with same max ntile: {max_id}"
+        # if len(max_id) > 1, the given case_id has len(max_id) slides with same max ntile
+        # in that case, we "randomly" pick the first slide
         return max_id[0]
 
     def __getitem__(self, idx: int):
 
         row = self.patient_df.loc[idx]
         case_id = row.case_id
-        # slide_ids = self.slide_df[self.slide_df.case_id == case_id].slide_id.values.tolist()
-
-        slide_id = self.get_slide_id_with_max_ntile(case_id)
+        slide_ids = self.slide_df[self.slide_df.case_id == case_id].slide_id.values.tolist()
 
         label = row.disc_label
         event_time = row[self.label_name]
         c = row.censorship
 
         features = []
-        # coordinates = []
-        # for slide_id in slide_ids:
-        #     coords = self.tiles_df[self.tiles_df.slide_id == slide_id][['x','y']].values
-        #     for x,y in coords:
-        #         fp = Path(self.features_dir, f"{slide_id}_{x}_{y}.pt")
-        #         f = torch.load(fp)
-        #         features.append(f)
-        #         coordinates.append((x,y))
-        coordinates = self.tiles_df[self.tiles_df.slide_id == slide_id][
-            ["x", "y"]
-        ].values
-        for x, y in coordinates:
-            fp = Path(self.features_dir, f"{slide_id}_{x}_{y}.pt")
-            f = torch.load(fp)
-            features.append(f)
+        coordinates = []
+        for i, slide_id in enumerate(slide_ids):
+            coords = self.tiles_df[self.tiles_df.slide_id == slide_id][['x','y']].values
+            for x,y in coords:
+                fp = Path(self.features_dir, f"{slide_id}_{x}_{y}.pt")
+                f = torch.load(fp)
+                features.append(f)
+                coordinates.append((i,x,y))
+        coordinates = np.array(coordinates)
+
+        # slide_id = self.get_slide_id_with_max_ntile(case_id)
+        # coordinates = self.tiles_df[self.tiles_df.slide_id == slide_id][
+        #     ["x", "y"]
+        # ].values
+        # for x, y in coordinates:
+        #     fp = Path(self.features_dir, f"{slide_id}_{x}_{y}.pt")
+        #     f = torch.load(fp)
+        #     features.append(f)
 
         features = torch.cat(features, dim=0)
 
