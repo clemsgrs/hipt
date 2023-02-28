@@ -194,7 +194,7 @@ def collate_survival_features(
 ):
     idx = torch.LongTensor([item[0] for item in batch])
     # feature = torch.vstack([item[1] for item in batch])
-    if agg_method == "concat":
+    if agg_method == "concat" or not agg_method:
         feature = torch.cat([item[1] for item in batch], dim=0)
     elif agg_method == "self_att":
         feature = [item[1] for item in batch]
@@ -287,6 +287,23 @@ def logit_to_ordinal_prediction(logits):
         pred = torch.sigmoid(logits)
     return (pred > 0.5).cumprod(axis=1).sum(axis=1) - 1
 
+
+def aggregated_cindex(df: pd.DataFrame, label_name: str = "label", agg: str = "mean"):
+    censorships = df.groupby("case_id").censorship.first()
+    event_times = df.groupby("case_id")[label_name].first()
+    if agg == "mean":
+        risk_scores = df.groupby("case_id").risk.mean()
+    elif agg == "max":
+        risk_scores = df.groupby("case_id").risk.max()
+    else:
+        raise ValueError(f"agg ({agg}) argument not supported")
+    c_index = concordance_index_censored(
+        [bool(1 - c) for c in censorships],
+        event_times,
+        risk_scores,
+        tied_tol=1e-08,
+    )[0]
+    return c_index
 
 def get_cumulative_dynamic_auc(
     train_df, test_df, risks, label_name, verbose: bool = False
@@ -791,7 +808,7 @@ def train_survival(
             labels.extend(label.clone().tolist())
             idxs.extend(list(idx))
 
-    dataset.patient_df.loc[idxs, "risk"] = risk_scores
+    dataset.df.loc[idxs, "risk"] = risk_scores
 
     c_index = concordance_index_censored(
         [bool(1 - c) for c in censorships],
@@ -899,7 +916,7 @@ def tune_survival(
                 labels.extend(label.clone().tolist())
                 idxs.extend(list(idx))
 
-    dataset.patient_df.loc[idxs, "risk"] = risk_scores
+    dataset.df.loc[idxs, "risk"] = risk_scores
 
     c_index = concordance_index_censored(
         [bool(1 - c) for c in censorships],
@@ -1002,7 +1019,7 @@ def test_survival(
                 labels.extend(label.clone().tolist())
                 idxs.extend(list(idx))
 
-    dataset.patient_df.loc[idxs, "risk"] = risk_scores
+    dataset.df.loc[idxs, "risk"] = risk_scores
 
     c_index = concordance_index_censored(
         [bool(1 - c) for c in censorships],
