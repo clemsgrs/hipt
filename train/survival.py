@@ -14,8 +14,8 @@ from omegaconf import DictConfig
 from source.models import ModelFactory
 from source.components import LossFactory
 from source.dataset import (
-    ExtractedFeaturesSurvivalDataset,
-    ExtractedFeaturesPatientLevelSurvivalDataset,
+    SurvivalDatasetOptions,
+    DatasetFactory,
     ppcess_survival_data,
     ppcess_tcga_survival_data,
 )
@@ -56,17 +56,11 @@ def main(cfg: DictConfig):
     result_dir = Path(output_dir, "results", cfg.level)
     result_dir.mkdir(parents=True, exist_ok=True)
 
-    features_dir = Path(output_dir, "features", cfg.level)
-    if cfg.features_dir:
-        features_dir = Path(cfg.features_dir)
+    features_dir = Path(cfg.features_dir)
 
-    criterion = LossFactory(cfg.task, cfg.loss).get_loss()
-
-    model = ModelFactory(
-        cfg.level, num_classes=cfg.nbins, model_options=cfg.model
-    ).get_model()
-    model.relocate()
-    print(model)
+    tiles_df = None
+    if cfg.model.slide_pos_embed.type == "2d" and cfg.model.slide_pos_embed.use:
+        tiles_df = pd.read_csv(cfg.data.tiles_csv)
 
     print("Loading data")
     dfs = {}
@@ -88,44 +82,38 @@ def main(cfg: DictConfig):
         patient_dfs[p] = patient_df[patient_df.partition == p].reset_index(drop=True)
         slide_dfs[p] = slide_df[slide_df.partition == p]
 
-    if cfg.model.agg_method == "concat":
-        train_dataset = ExtractedFeaturesSurvivalDataset(
-            patient_dfs["train"],
-            slide_dfs["train"],
-            features_dir,
-            cfg.label_name,
-        )
-        tune_dataset = ExtractedFeaturesSurvivalDataset(
-            patient_dfs["tune"],
-            slide_dfs["tune"],
-            features_dir,
-            cfg.label_name,
-        )
-        test_dataset = ExtractedFeaturesSurvivalDataset(
-            patient_dfs["test"],
-            slide_dfs["test"],
-            features_dir,
-            cfg.label_name,
-        )
-    elif cfg.model.agg_method == "self_att":
-        train_dataset = ExtractedFeaturesPatientLevelSurvivalDataset(
-            patient_dfs["train"],
-            slide_dfs["train"],
-            features_dir,
-            cfg.label_name,
-        )
-        tune_dataset = ExtractedFeaturesPatientLevelSurvivalDataset(
-            patient_dfs["tune"],
-            slide_dfs["tune"],
-            features_dir,
-            cfg.label_name,
-        )
-        test_dataset = ExtractedFeaturesPatientLevelSurvivalDataset(
-            patient_dfs["test"],
-            slide_dfs["test"],
-            features_dir,
-            cfg.label_name,
-        )
+    train_dataset_options = SurvivalDatasetOptions(
+        patient_df = patient_dfs["train"],
+        slide_df = slide_dfs["train"],
+        tiles_df = tiles_df,
+        features_dir = features_dir,
+        label_name = cfg.label_name,
+    )
+    tune_dataset_options = SurvivalDatasetOptions(
+        patient_df = patient_dfs["tune"],
+        slide_df = slide_dfs["tune"],
+        tiles_df = tiles_df,
+        features_dir = features_dir,
+        label_name = cfg.label_name,
+    )
+    test_dataset_options = SurvivalDatasetOptions(
+        patient_df = patient_dfs["test"],
+        slide_df = slide_dfs["test"],
+        tiles_df = tiles_df,
+        features_dir = features_dir,
+        label_name = cfg.label_name,
+    )
+
+    train_dataset = DatasetFactory("survival", train_dataset_options, cfg.model.agg_method).get_dataset()
+    tune_dataset = DatasetFactory("survival", tune_dataset_options, cfg.model.agg_method).get_dataset()
+    test_dataset = DatasetFactory("survival", test_dataset_options, cfg.model.agg_method).get_dataset()
+
+    print("Configuring model")
+    model = ModelFactory(
+        cfg.level, num_classes=cfg.nbins, model_options=cfg.model
+    ).get_model()
+    model.relocate()
+    print(model)
 
     print("Configuring optimmizer & scheduler")
     model_params = filter(lambda p: p.requires_grad, model.parameters())
@@ -133,6 +121,8 @@ def main(cfg: DictConfig):
         cfg.optim.name, model_params, lr=cfg.optim.lr, weight_decay=cfg.optim.wd
     ).get_optimizer()
     scheduler = SchedulerFactory(optimizer, cfg.optim.lr_scheduler).get_scheduler()
+
+    criterion = LossFactory(cfg.task, cfg.loss).get_loss()
 
     early_stopping = EarlyStopping(
         cfg.early_stopping.tracking,
@@ -175,7 +165,7 @@ def main(cfg: DictConfig):
                 update_log_dict(
                     "train", train_results, log_dict, to_log=cfg.wandb.to_log
                 )
-            train_dataset.patient_df.to_csv(
+            train_dataset.df.to_csv(
                 Path(result_dir, f"train_{epoch}.csv"), index=False
             )
 
@@ -206,7 +196,7 @@ def main(cfg: DictConfig):
                             {"tune/cumulative_dynamic_auc": wandb.Image(fig)}
                         )
                         plt.close(fig)
-                tune_dataset.patient_df.to_csv(
+                tune_dataset.df.to_csv(
                     Path(result_dir, f"tune_{epoch}.csv"), index=False
                 )
 
@@ -253,7 +243,7 @@ def main(cfg: DictConfig):
             agg_method=cfg.model.agg_method,
             batch_size=1,
         )
-        test_dataset.patient_df.to_csv(Path(result_dir, f"test.csv"), index=False)
+        test_dataset.df.to_csv(Path(result_dir, f"test.csv"), index=False)
 
         for r, v in test_results.items():
             if r == "c-index":

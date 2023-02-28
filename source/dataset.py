@@ -8,6 +8,8 @@ from pathlib import Path
 from torchvision import transforms
 from typing import Callable, Dict, Optional
 from collections import defaultdict
+from omegaconf import DictConfig
+from dataclasses import dataclass, field
 
 
 def read_image(image_fp: str) -> Image:
@@ -108,6 +110,88 @@ def ppcess_survival_data(
     return patient_df, slide_df
 
 
+@dataclass
+class SubtypingDatasetOptions:
+    df: pd.DataFrame
+    features_dir: Path
+    label_name: str
+    label_mapping: Dict[int, int] = field(default_factory=lambda: {})
+    label_encoding: Optional[str] = None
+
+
+@dataclass
+class SurvivalDatasetOptions:
+    patient_df: pd.DataFrame
+    slide_df: pd.DataFrame
+    tiles_df: pd.DataFrame
+    features_dir: Path
+    label_name: str
+
+
+class DatasetFactory:
+    def __init__(
+        self,
+        task: str,
+        options: DictConfig,
+        agg_method: str = "concat",
+    ):
+
+        if task == "subtyping":
+            self.dataset = ExtractedFeaturesDataset(
+                options.df,
+                options.features_dir,
+                options.label_name,
+                options.label_mapping,
+                options.label_encoding,
+            )
+        elif task == "survival":
+            if options.tiles_df is not None:
+                if agg_method == "concat":
+                    self.dataset = ExtractedFeaturesCoordsSurvivalDataset(
+                        options.patient_df,
+                        options.slide_df,
+                        options.tiles_df,
+                        options.features_dir,
+                        options.label_name,
+                    )
+                elif agg_method == "self_att":
+                    self.dataset = ExtractedFeaturesPatientLevelCoordsSurvivalDataset(
+                        options.patient_df,
+                        options.slide_df,
+                        options.tiles_df,
+                        options.features_dir,
+                        options.label_name,
+                    )
+            else:
+                if agg_method == "concat":
+                    self.dataset = ExtractedFeaturesSurvivalDataset(
+                        options.patient_df,
+                        options.slide_df,
+                        options.features_dir,
+                        options.label_name,
+                    )
+                elif agg_method == "self_att":
+                    self.dataset = ExtractedFeaturesPatientLevelSurvivalDataset(
+                        options.patient_df,
+                        options.slide_df,
+                        options.features_dir,
+                        options.label_name,
+                    )
+                elif not agg_method:
+                    self.dataset = ExtractedFeaturesSlideLevelSurvivalDataset(
+                        options.slide_df,
+                        options.features_dir,
+                        options.label_name,
+                    )
+        else:
+            raise ValueError(
+                f"task ({task}) not supported"
+            )
+
+    def get_dataset(self):
+        return self.dataset
+
+
 class ExtractedFeaturesDataset(torch.utils.data.Dataset):
     def __init__(
         self,
@@ -181,9 +265,11 @@ class ExtractedFeaturesSurvivalDataset(torch.utils.data.Dataset):
 
         self.features_dir = features_dir
         self.label_name = label_name
+        self.use_coords = False
+        self.agg_level = "patient"
 
         self.slide_df = self.filter_df(slide_df)
-        self.patient_df = patient_df
+        self.df = patient_df
 
     def filter_df(self, df):
         missing_slide_ids = []
@@ -199,7 +285,7 @@ class ExtractedFeaturesSurvivalDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, idx: int):
 
-        row = self.patient_df.loc[idx]
+        row = self.df.loc[idx]
         case_id = row.case_id
         slide_ids = self.slide_df[
             self.slide_df.case_id == case_id
@@ -223,7 +309,7 @@ class ExtractedFeaturesSurvivalDataset(torch.utils.data.Dataset):
         return idx, features, label, event_time, c
 
     def __len__(self):
-        return len(self.patient_df)
+        return len(self.df)
 
 
 class ExtractedFeaturesPatientLevelSurvivalDataset(ExtractedFeaturesSurvivalDataset):
@@ -239,7 +325,7 @@ class ExtractedFeaturesPatientLevelSurvivalDataset(ExtractedFeaturesSurvivalData
 
     def __getitem__(self, idx: int):
 
-        row = self.patient_df.loc[idx]
+        row = self.df.loc[idx]
         case_id = row.case_id
         slide_ids = self.slide_df[
             self.slide_df.case_id == case_id
@@ -258,6 +344,187 @@ class ExtractedFeaturesPatientLevelSurvivalDataset(ExtractedFeaturesSurvivalData
             features.append(f)
 
         return idx, features, label, event_time, c
+
+
+class ExtractedFeaturesCoordsSurvivalDataset(torch.utils.data.Dataset):
+    def __init__(
+        self,
+        patient_df: pd.DataFrame,
+        slide_df: pd.DataFrame,
+        tiles_df: pd.DataFrame,
+        features_dir: Path,
+        label_name: str = "label",
+    ):
+
+        self.features_dir = features_dir
+        self.label_name = label_name
+        self.use_coords = True
+        self.agg_level = "patient"
+
+        self.slide_df = slide_df
+        self.df = patient_df
+        self.tiles_df = tiles_df
+
+        tmp = pd.merge(slide_df, tiles_df, on="slide_id")
+        # tmp = self.filter_df(tmp)
+        self.tmp = tmp.groupby("slide_id").size().to_frame(name="ntile").reset_index()
+
+    def filter_df(self, df):
+        def infer_tile_path(slide_id, x, y):
+            return 1 - int(Path(self.features_dir, f"{slide_id}_{x}_{y}.pt").exists())
+
+        df["missing"] = df.apply(
+            lambda x: infer_tile_path(x.slide_id, x.x, x.y), axis=1
+        )
+        tmp = df.groubpy("slide_id")
+        missing_slide_ids = []
+        for slide_id, sub_df in tmp:
+            if sub_df.missing.sum() > 0:
+                missing_slide_ids.append(slide_id)
+        if len(missing_slide_ids) > 0:
+            print(
+                f"WARNING: {len(missing_slide_ids)} patients dropped because some tiles features were missing on disk"
+            )
+        filtered_df = df[~df.slide_id.isin(missing_slide_ids)].reset_index(drop=True)
+        return filtered_df
+
+    def get_slide_id_with_max_ntile(self, case_id: str):
+        slide_ids = self.slide_df[
+            self.slide_df.case_id == case_id
+        ].slide_id.values.tolist()
+        tmp = self.tmp[self.tmp.slide_id.isin(slide_ids)]
+        max_id = tmp[tmp.ntile == tmp.ntile.max()]["slide_id"].unique().tolist()
+        # if len(max_id) > 1, the given case_id has len(max_id) slides with same max ntile
+        # in that case, we "randomly" pick the first slide
+        return max_id[0]
+
+    def __getitem__(self, idx: int):
+
+        row = self.df.loc[idx]
+        case_id = row.case_id
+        slide_ids = self.slide_df[self.slide_df.case_id == case_id].slide_id.values.tolist()
+
+        label = row.disc_label
+        event_time = row[self.label_name]
+        c = row.censorship
+
+        features = []
+        coordinates = []
+        for i, slide_id in enumerate(slide_ids):
+            coords = self.tiles_df[self.tiles_df.slide_id == slide_id][['x','y']].values
+            for x,y in coords:
+                fp = Path(self.features_dir, f"{slide_id}_{x}_{y}.pt")
+                f = torch.load(fp)
+                features.append(f)
+                coordinates.append((i,x,y))
+        coordinates = np.array(coordinates)
+
+        # slide_id = self.get_slide_id_with_max_ntile(case_id)
+        # coordinates = self.tiles_df[self.tiles_df.slide_id == slide_id][
+        #     ["x", "y"]
+        # ].values
+        # for x, y in coordinates:
+        #     fp = Path(self.features_dir, f"{slide_id}_{x}_{y}.pt")
+        #     f = torch.load(fp)
+        #     features.append(f)
+
+        features = torch.cat(features, dim=0)
+
+        return idx, features, coordinates, label, event_time, c
+
+    def __len__(self):
+        return len(self.df)
+
+
+class ExtractedFeaturesPatientLevelCoordsSurvivalDataset(
+    ExtractedFeaturesCoordsSurvivalDataset
+):
+    def __init__(
+        self,
+        patient_df: pd.DataFrame,
+        slide_df: pd.DataFrame,
+        tiles_df: pd.DataFrame,
+        features_dir: Path,
+        label_name: str = "label",
+    ):
+
+        super().__init__(patient_df, slide_df, tiles_df, features_dir, label_name)
+
+    def __getitem__(self, idx: int):
+
+        row = self.df.loc[idx]
+        case_id = row.case_id
+        slide_ids = self.slide_df[
+            self.slide_df.case_id == case_id
+        ].slide_id.values.tolist()
+
+        assert len(slide_ids) == len(set(slide_ids))
+
+        label = row.disc_label
+        event_time = row[self.label_name]
+        c = row.censorship
+
+        features = []
+        coordinates = []
+        for slide_id in slide_ids:
+            feats = []
+            coords = self.tiles_df[self.tiles_df.slide_id == slide_id][
+                ["x", "y"]
+            ].values
+            for x, y in coords:
+                fp = Path(self.features_dir, f"{slide_id}_{x}_{y}.pt")
+                f = torch.load(fp)
+                feats.append(f)
+            feats = torch.cat(feats, dim=0)
+            features.append(feats)
+            coordinates.append(coords)
+
+        return idx, features, coordinates, label, event_time, c
+
+
+class ExtractedFeaturesSlideLevelSurvivalDataset(torch.utils.data.Dataset):
+    def __init__(
+        self,
+        slide_df: pd.DataFrame,
+        features_dir: Path,
+        label_name: str = "label",
+    ):
+
+        self.features_dir = features_dir
+        self.label_name = label_name
+        self.use_coords = False
+        self.agg_level = "slide"
+
+        self.df = self.filter_df(slide_df)
+
+    def filter_df(self, df):
+        missing_slide_ids = []
+        for slide_id in df.slide_id:
+            if not Path(self.features_dir, f"{slide_id}.pt").is_file():
+                missing_slide_ids.append(slide_id)
+        if len(missing_slide_ids) > 0:
+            print(
+                f"WARNING: {len(missing_slide_ids)} slides dropped because missing on disk"
+            )
+        filtered_df = df[~df.slide_id.isin(missing_slide_ids)].reset_index(drop=True)
+        return filtered_df
+
+    def __getitem__(self, idx: int):
+
+        row = self.df.loc[idx]
+        slide_id = row.slide_id
+
+        label = row.disc_label
+        event_time = row[self.label_name]
+        c = row.censorship
+
+        fp = Path(self.features_dir, f"{slide_id}.pt")
+        feature = torch.load(fp)
+
+        return idx, feature, label, event_time, c
+
+    def __len__(self):
+        return len(self.df)
 
 
 class StackedRegionsDataset(torch.utils.data.Dataset):

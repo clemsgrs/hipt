@@ -46,6 +46,8 @@ model:
     learned: False
     type: '1d'
     max_seq_len: 512
+    max_nslide: 21
+    tile_size: ${model.region_size}
 
 optim:
   name: 'adam'

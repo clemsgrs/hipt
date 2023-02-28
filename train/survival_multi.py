@@ -16,8 +16,8 @@ from omegaconf import DictConfig
 from source.models import ModelFactory
 from source.components import LossFactory
 from source.dataset import (
-    ExtractedFeaturesSurvivalDataset,
-    ExtractedFeaturesPatientLevelSurvivalDataset,
+    SurvivalDatasetOptions,
+    DatasetFactory,
     ppcess_survival_data,
     ppcess_tcga_survival_data,
 )
@@ -28,6 +28,7 @@ from source.utils import (
     test_survival,
     compute_time,
     update_log_dict,
+    aggregated_cindex,
     get_cumulative_dynamic_auc,
     plot_cumulative_dynamic_auc,
     EarlyStopping,
@@ -57,9 +58,11 @@ def main(cfg: DictConfig):
     result_root_dir = Path(output_dir, "results", cfg.level)
     result_root_dir.mkdir(parents=True, exist_ok=True)
 
-    features_dir = Path(output_dir, "features", cfg.level)
-    if cfg.features_dir:
-        features_dir = Path(cfg.features_dir)
+    features_dir = Path(cfg.features_dir)
+
+    tiles_df = None
+    if cfg.model.slide_pos_embed.type == "2d" and cfg.model.slide_pos_embed.use:
+        tiles_df = pd.read_csv(cfg.data.tiles_csv)
 
     fold_root_dir = Path(cfg.data.fold_dir)
     nfold = len([_ for _ in fold_root_dir.glob(f"fold_*")])
@@ -100,44 +103,31 @@ def main(cfg: DictConfig):
             )
             slide_dfs[p] = slide_df[slide_df.partition == p]
 
-        if cfg.model.agg_method == "concat":
-            train_dataset = ExtractedFeaturesSurvivalDataset(
-                patient_dfs["train"],
-                slide_dfs["train"],
-                features_dir,
-                cfg.label_name,
-            )
-            tune_dataset = ExtractedFeaturesSurvivalDataset(
-                patient_dfs["tune"],
-                slide_dfs["tune"],
-                features_dir,
-                cfg.label_name,
-            )
-            test_dataset = ExtractedFeaturesSurvivalDataset(
-                patient_dfs["test"],
-                slide_dfs["test"],
-                features_dir,
-                cfg.label_name,
-            )
-        elif cfg.model.agg_method == "self_att":
-            train_dataset = ExtractedFeaturesPatientLevelSurvivalDataset(
-                patient_dfs["train"],
-                slide_dfs["train"],
-                features_dir,
-                cfg.label_name,
-            )
-            tune_dataset = ExtractedFeaturesPatientLevelSurvivalDataset(
-                patient_dfs["tune"],
-                slide_dfs["tune"],
-                features_dir,
-                cfg.label_name,
-            )
-            test_dataset = ExtractedFeaturesPatientLevelSurvivalDataset(
-                patient_dfs["test"],
-                slide_dfs["test"],
-                features_dir,
-                cfg.label_name,
-            )
+        train_dataset_options = SurvivalDatasetOptions(
+            patient_df = patient_dfs["train"],
+            slide_df = slide_dfs["train"],
+            tiles_df = tiles_df,
+            features_dir = features_dir,
+            label_name = cfg.label_name,
+        )
+        tune_dataset_options = SurvivalDatasetOptions(
+            patient_df = patient_dfs["tune"],
+            slide_df = slide_dfs["tune"],
+            tiles_df = tiles_df,
+            features_dir = features_dir,
+            label_name = cfg.label_name,
+        )
+        test_dataset_options = SurvivalDatasetOptions(
+            patient_df = patient_dfs["test"],
+            slide_df = slide_dfs["test"],
+            tiles_df = tiles_df,
+            features_dir = features_dir,
+            label_name = cfg.label_name,
+        )
+
+        train_dataset = DatasetFactory("survival", train_dataset_options, cfg.model.agg_method).get_dataset()
+        tune_dataset = DatasetFactory("survival", tune_dataset_options, cfg.model.agg_method).get_dataset()
+        test_dataset = DatasetFactory("survival", test_dataset_options, cfg.model.agg_method).get_dataset()
 
         model = ModelFactory(cfg.level, cfg.nbins, cfg.model).get_model()
         model.relocate()
@@ -200,7 +190,8 @@ def main(cfg: DictConfig):
                         step=f"train/fold_{i}/epoch",
                         to_log=cfg.wandb.to_log,
                     )
-                train_dataset.patient_df.to_csv(
+
+                train_dataset.df.to_csv(
                     Path(result_dir, f"train_{epoch}.csv"), index=False
                 )
 
@@ -215,12 +206,13 @@ def main(cfg: DictConfig):
                         batch_size=cfg.tuning.batch_size,
                     )
 
-                    auc, mean_auc, times = get_cumulative_dynamic_auc(
-                        patient_dfs["train"],
-                        patient_dfs["tune"],
-                        tune_results["risks"],
-                        cfg.label_name,
-                    )
+                    auc, mean_auc, times = None, None, None
+                    # auc, mean_auc, times = get_cumulative_dynamic_auc(
+                    #     patient_dfs["train"],
+                    #     patient_dfs["tune"],
+                    #     tune_results["risks"],
+                    #     cfg.label_name,
+                    # )
                     if cfg.wandb.enable:
                         update_log_dict(
                             f"tune/fold_{i}",
@@ -241,7 +233,8 @@ def main(cfg: DictConfig):
                                 }
                             )
                             plt.close(fig)
-                    tune_dataset.patient_df.to_csv(
+
+                    tune_dataset.df.to_csv(
                         Path(result_dir, f"tune_{epoch}.csv"), index=False
                     )
 
@@ -294,18 +287,25 @@ def main(cfg: DictConfig):
             agg_method=cfg.model.agg_method,
             batch_size=1,
         )
-        test_dataset.patient_df.to_csv(Path(result_dir, f"test.csv"), index=False)
+        test_dataset.df.to_csv(
+            Path(result_dir, f"test.csv"), index=False
+        )
 
         for r, v in test_results.items():
             if r == "c-index":
-                test_metrics.append(v)
-                v = round(v, 3)
+                if test_dataset.agg_level == "slide":
+                    v = aggregated_cindex(test_dataset.df, label_name=cfg.label_name)
+                    test_metrics.append(v)
+                    v = round(v, 3)
+                else:
+                    test_metrics.append(v)
+                    v = round(v, 3)
             if r in cfg.wandb.to_log and cfg.wandb.enable:
                 wandb.log({f"test/fold_{i}/{r}": v})
 
     mean_test_metric = round(np.mean(test_metrics), 3)
     std_test_metric = round(statistics.stdev(test_metrics), 3)
-    if cfg.wandb.enable:
+    if cfg.wandb.enable and "c-index" in cfg.wandb.to_log:
         wandb.log({f"test/c-index_mean": mean_test_metric})
         wandb.log({f"test/c-index_std": std_test_metric})
 

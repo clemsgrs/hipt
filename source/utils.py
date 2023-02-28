@@ -194,7 +194,7 @@ def collate_survival_features(
 ):
     idx = torch.LongTensor([item[0] for item in batch])
     # feature = torch.vstack([item[1] for item in batch])
-    if agg_method == "concat":
+    if agg_method == "concat" or not agg_method:
         feature = torch.cat([item[1] for item in batch], dim=0)
     elif agg_method == "self_att":
         feature = [item[1] for item in batch]
@@ -205,6 +205,26 @@ def collate_survival_features(
     event_time = torch.FloatTensor([item[3] for item in batch])
     censorship = torch.FloatTensor([item[4] for item in batch])
     return [idx, feature, label, event_time, censorship]
+
+
+def collate_survival_features_coords(batch, label_type: str = "int", agg_method: str = "concat"):
+    idx = torch.LongTensor([item[0] for item in batch])
+    if agg_method == "concat":
+        feature = torch.cat([item[1] for item in batch], dim=0)
+        coords = torch.LongTensor(np.array([item[2] for item in batch]))
+    elif agg_method == "self_att":
+        feature = [item[1] for item in batch]
+        coords = [
+            [torch.LongTensor(item[2][i]) for i in range(len(item[2]))]
+            for item in batch
+        ]
+    if label_type == "float":
+        label = torch.FloatTensor([item[3] for item in batch])
+    elif label_type == "int":
+        label = torch.LongTensor([item[3] for item in batch])
+    event_time = torch.FloatTensor([item[4] for item in batch])
+    censorship = torch.FloatTensor([item[5] for item in batch])
+    return [idx, feature, coords, label, event_time, censorship]
 
 
 def collate_region_filepaths(batch):
@@ -267,6 +287,23 @@ def logit_to_ordinal_prediction(logits):
         pred = torch.sigmoid(logits)
     return (pred > 0.5).cumprod(axis=1).sum(axis=1) - 1
 
+
+def aggregated_cindex(df: pd.DataFrame, label_name: str = "label", agg: str = "mean"):
+    censorships = df.groupby("case_id").censorship.first()
+    event_times = df.groupby("case_id")[label_name].first()
+    if agg == "mean":
+        risk_scores = df.groupby("case_id").risk.mean()
+    elif agg == "max":
+        risk_scores = df.groupby("case_id").risk.max()
+    else:
+        raise ValueError(f"agg ({agg}) argument not supported")
+    c_index = concordance_index_censored(
+        [bool(1 - c) for c in censorships],
+        event_times,
+        risk_scores,
+        tied_tol=1e-08,
+    )[0]
+    return c_index
 
 def get_cumulative_dynamic_auc(
     train_df, test_df, risks, label_name, verbose: bool = False
@@ -689,9 +726,14 @@ def train_survival(
     idxs = []
 
     sampler = torch.utils.data.RandomSampler(dataset)
-    collate_fn = partial(
-        collate_survival_features, label_type="int", agg_method=agg_method
-    )
+    if dataset.use_coords:
+        collate_fn = partial(
+            collate_survival_features_coords, label_type="int", agg_method=agg_method
+        )
+    else:
+        collate_fn = partial(
+            collate_survival_features, label_type="int", agg_method=agg_method
+        )
 
     loader = torch.utils.data.DataLoader(
         dataset,
@@ -713,20 +755,34 @@ def train_survival(
 
         for i, batch in enumerate(t):
 
-            idx, x, label, event_time, c = batch
+            if dataset.use_coords:
+                idx, x, coords, label, event_time, c = batch
+                if agg_method == "concat":
+                    x, coords = x.to(device, non_blocking=True), coords.to(
+                        device, non_blocking=True
+                    )
+                elif agg_method == "self_att":
+                    x = [f.to(device, non_blocking=True) for f in x[0]]
+                    coords = [c.to(device, non_blocking=True) for c in coords[0]]
+            else:
+                idx, x, label, event_time, c = batch
+                if agg_method == "self_att":
+                    x = [
+                        xx[j].to(device, non_blocking=True)
+                        for xx in x
+                        for j in range(len(xx))
+                    ]
+                else:
+                    x = x.to(device, non_blocking=True)
             label, c = label.to(device, non_blocking=True), c.to(
                 device, non_blocking=True
             )
-            if agg_method == "self_att":
-                x = [
-                    xx[j].to(device, non_blocking=True)
-                    for xx in x
-                    for j in range(len(xx))
-                ]
-            else:
-                x = x.to(device, non_blocking=True)
 
-            logits = model(x)  # [1, nbins]
+            if dataset.use_coords:
+                logits = model(x, coords)   # [1, nbins]
+            else:
+                logits = model(x)  # [1, nbins]
+
             hazards = torch.sigmoid(logits)  # [1, nbins]
             surv = torch.cumprod(1 - hazards, dim=1)  # [1, nbins]
 
@@ -752,7 +808,7 @@ def train_survival(
             labels.extend(label.clone().tolist())
             idxs.extend(list(idx))
 
-    dataset.patient_df.loc[idxs, "risk"] = risk_scores
+    dataset.df.loc[idxs, "risk"] = risk_scores
 
     c_index = concordance_index_censored(
         [bool(1 - c) for c in censorships],
@@ -787,9 +843,14 @@ def tune_survival(
     idxs = []
 
     sampler = torch.utils.data.SequentialSampler(dataset)
-    collate_fn = partial(
-        collate_survival_features, label_type="int", agg_method=agg_method
-    )
+    if dataset.use_coords:
+        collate_fn = partial(
+            collate_survival_features_coords, label_type="int", agg_method=agg_method
+        )
+    else:
+        collate_fn = partial(
+            collate_survival_features, label_type="int", agg_method=agg_method
+        )
 
     loader = torch.utils.data.DataLoader(
         dataset,
@@ -813,20 +874,34 @@ def tune_survival(
 
             for i, batch in enumerate(t):
 
-                idx, x, label, event_time, c = batch
+                if dataset.use_coords:
+                    idx, x, coords, label, event_time, c = batch
+                    if agg_method == "concat":
+                        x, coords = x.to(device, non_blocking=True), coords.to(
+                            device, non_blocking=True
+                        )
+                    elif agg_method == "self_att":
+                        x = [f.to(device, non_blocking=True) for f in x[0]]
+                        coords = [c.to(device, non_blocking=True) for c in coords[0]]
+                else:
+                    idx, x, label, event_time, c = batch
+                    if agg_method == "self_att":
+                        x = [
+                            xx[j].to(device, non_blocking=True)
+                            for xx in x
+                            for j in range(len(xx))
+                        ]
+                    else:
+                        x = x.to(device, non_blocking=True)
                 label, c = label.to(device, non_blocking=True), c.to(
                     device, non_blocking=True
                 )
-                if agg_method == "self_att":
-                    x = [
-                        xx[j].to(device, non_blocking=True)
-                        for xx in x
-                        for j in range(len(xx))
-                    ]
-                else:
-                    x = x.to(device, non_blocking=True)
 
-                logits = model(x)
+                if dataset.use_coords:
+                    logits = model(x, coords)
+                else:
+                    logits = model(x)
+
                 hazards = torch.sigmoid(logits)
                 surv = torch.cumprod(1 - hazards, dim=1)
 
@@ -841,7 +916,7 @@ def tune_survival(
                 labels.extend(label.clone().tolist())
                 idxs.extend(list(idx))
 
-    dataset.patient_df.loc[idxs, "risk"] = risk_scores
+    dataset.df.loc[idxs, "risk"] = risk_scores
 
     c_index = concordance_index_censored(
         [bool(1 - c) for c in censorships],
@@ -874,9 +949,14 @@ def test_survival(
     idxs = []
 
     sampler = torch.utils.data.SequentialSampler(dataset)
-    collate_fn = partial(
-        collate_survival_features, label_type="int", agg_method=agg_method
-    )
+    if dataset.use_coords:
+        collate_fn = partial(
+            collate_survival_features_coords, label_type="int", agg_method=agg_method
+        )
+    else:
+        collate_fn = partial(
+            collate_survival_features, label_type="int", agg_method=agg_method
+        )
 
     loader = torch.utils.data.DataLoader(
         dataset,
@@ -900,20 +980,34 @@ def test_survival(
 
             for i, batch in enumerate(t):
 
-                idx, x, label, event_time, c = batch
+                if dataset.use_coords:
+                    idx, x, coords, label, event_time, c = batch
+                    if agg_method == "concat":
+                        x, coords = x.to(device, non_blocking=True), coords.to(
+                            device, non_blocking=True
+                        )
+                    elif agg_method == "self_att":
+                        x = [f.to(device, non_blocking=True) for f in x[0]]
+                        coords = [c.to(device, non_blocking=True) for c in coords[0]]
+                else:
+                    idx, x, label, event_time, c = batch
+                    if agg_method == "self_att":
+                        x = [
+                            xx[j].to(device, non_blocking=True)
+                            for xx in x
+                            for j in range(len(xx))
+                        ]
+                    else:
+                        x = x.to(device, non_blocking=True)
                 label, c = label.to(device, non_blocking=True), c.to(
                     device, non_blocking=True
                 )
-                if agg_method == "self_att":
-                    x = [
-                        xx[j].to(device, non_blocking=True)
-                        for xx in x
-                        for j in range(len(xx))
-                    ]
-                else:
-                    x = x.to(device, non_blocking=True)
 
-                logits = model(x)
+                if dataset.use_coords:
+                    logits = model(x, coords)
+                else:
+                    logits = model(x)
+
                 hazards = torch.sigmoid(logits)
                 surv = torch.cumprod(1 - hazards, dim=1)
 
@@ -925,7 +1019,7 @@ def test_survival(
                 labels.extend(label.clone().tolist())
                 idxs.extend(list(idx))
 
-    dataset.patient_df.loc[idxs, "risk"] = risk_scores
+    dataset.df.loc[idxs, "risk"] = risk_scores
 
     c_index = concordance_index_censored(
         [bool(1 - c) for c in censorships],

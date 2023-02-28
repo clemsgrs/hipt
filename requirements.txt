@@ -10,8 +10,8 @@ matplotlib
 torch
 torchvision
 lifelines
-scikit-survival
 scikit-learn
+scikit-survival
 tqdm
 seaborn==0.12.0
 hydra-core==1.2.0
