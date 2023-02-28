@@ -58,7 +58,7 @@ class PositionalEncoding(nn.Module):
     def forward(self, x):
         """
         Args:
-            x: Tensor, shape [seq_len, batch_size, embedding_dim]
+            x: Tensor, shape [seq_len, embedding_dim]
         """
         x = x.unsqueeze(1)
         x = x + self.pe[:x.size(0)]
@@ -109,12 +109,12 @@ class ConcatPositionalEncoding2d(nn.Module):
                 pe[x, y, 1::2] = torch.cos(position * div_term)
         self.register_buffer('pe', pe)
 
-        slide_pos = torch.arange(max_nslide)
+        slide_pos = torch.arange(max_nslide).unsqueeze(1)
         slide_div_term = torch.exp(torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model))
-        slide_pe = torch.zeros(max_nslide, d_model)
-        slide_pe[:, 0::2] = torch.sin(slide_pos * slide_div_term)
-        slide_pe[:, 1::2] = torch.cos(slide_pos * slide_div_term)
-        self.register_buffer('slide_pe', slide_pe)
+        slide_pe = torch.zeros(max_nslide, 1, d_model)
+        slide_pe[:, 0, 0::2] = torch.sin(slide_pos * slide_div_term)
+        slide_pe[:, 0, 1::2] = torch.cos(slide_pos * slide_div_term)
+        self.register_buffer('slide_pe', slide_pe.squeeze(1))
 
     def forward(self, x, coords):
         """
@@ -123,9 +123,7 @@ class ConcatPositionalEncoding2d(nn.Module):
             coords: Tensor, shape [seq_len, 3]
         """
         slide_idx, coord = coords[:, 0], coords[:, 1:]
-        assert len(torch.unique(slide_idx)) == 1
-        i = torch.unique(slide_idx).item()
-        x = x + self.pe[coord[:,0], coord[:,1]] + self.slide_pe[i]
+        x = x + self.pe[coord[:,0], coord[:,1]] + self.slide_pe[slide_idx]
         return self.dropout(x)
 
 
@@ -198,14 +196,12 @@ class ConcatPositionalEmbedding2d(nn.Module):
             coords: Tensor, shape [seq_len, 3]
         """
         slide_idx, coord = coords[:, 0], coords[:, 1:]
-        assert len(torch.unique(slide_idx)) == 1
-        i = torch.unique(slide_idx).item()
         coord_x = self.get_grid_values(coord[:,0])
         coord_y = self.get_grid_values(coord[:,1])
         embedding_x = self.embedder_x(coord_x)
         embedding_y = self.embedder_y(coord_y)
         position_embedding = torch.cat([embedding_x, embedding_y], dim=1)
-        slide_pos_embedding = self.embedder_slide_pos(i)
+        slide_pos_embedding = self.embedder_slide_pos(slide_idx)
         x = x + position_embedding + slide_pos_embedding
         return x
 
