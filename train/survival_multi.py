@@ -38,7 +38,7 @@ from source.utils import (
 
 
 @hydra.main(
-    version_base="1.2.0", config_path="../config/training/survival", config_name="multi_witali"
+    version_base="1.2.0", config_path="../config/training/survival", config_name="multi"
 )
 def main(cfg: DictConfig):
 
