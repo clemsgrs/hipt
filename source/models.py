@@ -22,38 +22,30 @@ class ModelFactory:
 
         if level == "global":
             if model_options.agg_method == "self_att":
-                if model_options.slide_pos_embed.type == '1d':
-                    self.model = GlobalPatientLevelHIPT(
-                        num_classes=num_classes,
-                        dropout=model_options.dropout,
-                        slide_pos_embed=model_options.slide_pos_embed,
-                    )
-                elif model_options.slide_pos_embed.type == '2d':
+                if model_options.slide_pos_embed.type == '2d' and model_options.slide_pos_embed.use:
                     self.model = GlobalPatientLevelCoordsHIPT(
                         num_classes=num_classes,
                         dropout=model_options.dropout,
                         slide_pos_embed=model_options.slide_pos_embed,
                     )
                 else:
-                    raise ValueError(
-                        f"cfg.model.slide_pos_embed.type ({model_options.slide_pos_embed.type}) not supported"
-                    )
-            elif model_options.agg_method == "concat":
-                if model_options.slide_pos_embed.type == '1d':
-                    self.model = GlobalHIPT(
+                    self.model = GlobalPatientLevelHIPT(
                         num_classes=num_classes,
                         dropout=model_options.dropout,
                         slide_pos_embed=model_options.slide_pos_embed,
                     )
-                elif model_options.slide_pos_embed.type == '2d':
+            elif model_options.agg_method == "concat" or not model_options.agg_method:
+                if model_options.slide_pos_embed.type == '2d' and model_options.slide_pos_embed.use:
                     self.model = GlobalCoordsHIPT(
                         num_classes=num_classes,
                         dropout=model_options.dropout,
                         slide_pos_embed=model_options.slide_pos_embed,
                     )
                 else:
-                    raise ValueError(
-                        f"cfg.model.slide_pos_embed.type ({model_options.slide_pos_embed.type}) not supported"
+                    self.model = GlobalHIPT(
+                        num_classes=num_classes,
+                        dropout=model_options.dropout,
+                        slide_pos_embed=model_options.slide_pos_embed,
                     )
             else:
                 raise ValueError(
