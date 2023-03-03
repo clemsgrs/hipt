@@ -35,17 +35,26 @@ from utils import (
 
 
 @hydra.main(
-    version_base="1.2.0", config_path="../config/pre-training", config_name="patch"
+    version_base="1.2.0", config_path="../config/pretraining", config_name="patch"
 )
 def main(cfg: DictConfig):
 
+    # set up wandb
+    if cfg.wandb.enable and is_main_process():
+        key = os.environ.get("WANDB_API_KEY")
+        wandb_run = initialize_wandb(cfg, key=key)
+        wandb_run.define_metric("epoch", summary="max")
+
     distributed = torch.cuda.device_count() > 1
-    print(f"torch.cuda.device_count(): {torch.cuda.device_count()}")
     if distributed:
         torch.distributed.init_process_group(backend="nccl")
         gpu_id = int(os.environ["LOCAL_RANK"])
         if gpu_id == 0:
             print(f"Distributed session successfully initialized")
+    else:
+        gpu_id = -1
+    if is_main_process():
+        print(f"torch.cuda.device_count(): {torch.cuda.device_count()}")
 
     fix_random_seeds(cfg.seed)
 
@@ -54,16 +63,12 @@ def main(cfg: DictConfig):
     output_dir = Path(cfg.output_dir, cfg.experiment_name)
     if not cfg.resume:
         if output_dir.exists():
+            if is_main_process():
+                print(f"WARNING: {output_dir} already exists! Deleting its content...")
             shutil.rmtree(output_dir)
-            output_dir.mkdir(parents=True)
+            output_dir.mkdir(parents=True, exist_ok=True)
         else:
             output_dir.mkdir(parents=True, exist_ok=True)
-
-    # set up wandb
-    if cfg.wandb.enable and is_main_process():
-        key = os.environ.get("WANDB_API_KEY")
-        wandb_run = initialize_wandb(cfg, key=key)
-        wandb_run.define_metric("epoch", summary="max")
 
     # preparing data
     transform = PatchDataAugmentationDINO(
@@ -132,14 +137,14 @@ def main(cfg: DictConfig):
         # we need DDP wrapper to have synchro batch norms working...
         student = nn.SyncBatchNorm.convert_sync_batchnorm(student)
         teacher = nn.SyncBatchNorm.convert_sync_batchnorm(teacher)
-        teacher = nn.parallel.DistributedDataParallel(teacher, device_ids=[gpu_id])
+        teacher = nn.parallel.DistributedDataParallel(teacher, device_ids=[gpu_id], output_device=gpu_id)
         teacher_without_ddp = teacher.module
     else:
         # teacher_without_ddp and teacher are the same thing
         teacher_without_ddp = teacher
 
     if distributed:
-        student = nn.parallel.DistributedDataParallel(student, device_ids=[gpu_id])
+        student = nn.parallel.DistributedDataParallel(student, device_ids=[gpu_id], output_device=gpu_id)
 
     # teacher and student start with the same weights
     student_sd = student.state_dict()
@@ -198,15 +203,21 @@ def main(cfg: DictConfig):
     )
 
     epochs_run = 0
+
+    # leverage torch native fault tolerance
+    snapshot_path = Path(output_dir, "latest.pt")
     if distributed:
-        snapshot_path = Path(output_dir, "snapshot.pt")
         if snapshot_path.exists():
             print("Loading snapshot")
             loc = f"cuda:{gpu_id}"
             snapshot = torch.load(snapshot_path, map_location=loc)
-            student.load_state_dict(snapshot["STUDENT_STATE"])
-            teacher.load_state_dict(snapshot["TEACHER_STATE"])
-            epochs_run = snapshot["EPOCHS_RUN"]
+            epochs_run = snapshot["epoch"]
+            student.load_state_dict(snapshot["student"])
+            teacher.load_state_dict(snapshot["teacher"])
+            optimizer.load_state_dict(snapshot["optimizer"])
+            dino_loss.load_state_dict(snapshot["dino_loss"])
+            if fp16_scaler is not None:
+                fp16_scaler.load_state_dict(snapshot["fp16_scaler"])
             print(f"Resuming training from snapshot at Epoch {epochs_run}")
     elif cfg.resume:
         ckpt_path = Path(output_dir, cfg.resume_from_checkpoint)
@@ -218,6 +229,7 @@ def main(cfg: DictConfig):
             fp16_scaler=fp16_scaler,
             dino_loss=dino_loss,
         )
+        print(f"Resuming training from checkpoint at Epoch {epochs_run}")
 
     start_time = time.time()
 
@@ -257,6 +269,7 @@ def main(cfg: DictConfig):
                 fp16_scaler,
                 cfg.training.clip_grad,
                 cfg.training.freeze_last_layer,
+                gpu_id,
             )
 
             lr = train_stats["lr"]
@@ -267,48 +280,30 @@ def main(cfg: DictConfig):
                 wandb.log({"lr": lr})
                 wandb.log({"loss": loss})
 
-            # writing logs
-            save_dict = {
-                "student": student.state_dict(),
-                "teacher": teacher.state_dict(),
-                "optimizer": optimizer.state_dict(),
-                "epoch": epoch,
-                "cfg": cfg,
-                "dino_loss": dino_loss.state_dict(),
-            }
-
-            if fp16_scaler is not None:
-                save_dict["fp16_scaler"] = fp16_scaler.state_dict()
 
             # save snapshot
             if is_main_process():
+                snapshot = {
+                    "epoch": epoch,
+                    "optimizer": optimizer.state_dict(),
+                    "dino_loss": dino_loss.state_dict(),
+                }
                 if distributed:
-                    snapshot = {
-                        "STUDENT_STATE": student.module.state_dict(),
-                        "TEACHER_STATE": teacher.module.state_dict(),
-                        "OPTIMIZER_STATE": optimizer.state_dict(),
-                        "EPOCHS_RUN": epoch,
-                    }
-                    # else:
-                    #     snapshot = {
-                    #         "STUDENT_STATE": student.state_dict(),
-                    #         "TEACHER_STATE": teacher.state_dict(),
-                    #         "OPTIMIZER_STATE": optimizer.state_dict(),
-                    #         "EPOCHS_RUN": epoch,
-                    #     }
-                    torch.save(snapshot, snapshot_path)
-
-            if is_main_process():
-                save_path = Path(output_dir, "latest.pth")
-                torch.save(save_dict, save_path)
-
-            if (
-                cfg.logging.save_ckpt_every
-                and epoch % cfg.logging.save_ckpt_every == 0
-                and is_main_process()
-            ):
-                save_path = Path(output_dir, f"checkpoint_{epoch:03}.pth")
-                torch.save(save_dict, save_path)
+                    snapshot["student"] = student.module.state_dict()
+                    snapshot["teacher"] = teacher.module.state_dict()
+                else:
+                    snapshot["student"] = student.state_dict()
+                    snapshot["teacher"] = teacher.state_dict()
+                if fp16_scaler is not None:
+                    snapshot["fp16_scaler"] = fp16_scaler.state_dict()
+                torch.save(snapshot, snapshot_path)
+                if (
+                    cfg.logging.save_snapshot_every
+                    and epoch % cfg.logging.save_snapshot_every == 0
+                    and is_main_process()
+                ):
+                    save_path = Path(output_dir, f"snapshot_epoch_{epoch:03}.pth")
+                    torch.save(snapshot, save_path)
 
             log_stats = {
                 **{f"train_{k}": v for k, v in train_stats.items()},
@@ -334,8 +329,11 @@ def main(cfg: DictConfig):
 
 if __name__ == "__main__":
 
-    # python3 pre-train/dino_patch.py --config-name 'patch'
-    # python3 -m torch.distributed.run pre-train/dino_patch.py --config-name 'patch'
-    # python3 -m torch.distributed.run --standalone --nproc_per_node=gpu pre-train/dino_patch.py --config-name 'patch'
+    # python3 pretrain/dino_patch.py --config-name 'patch'
+    # python3 -m torch.distributed.run pretrain/dino_patch.py --config-name 'patch'
+    # python3 -m torch.distributed.run --standalone --nproc_per_node=gpu pretrain/dino_patch.py --config-name 'debug'
+
+    # ISSUE WITH TORCHRUN ON SOL2: USES PYTHON3.8 INSTEAD OF PYTHON3.9 FOR SOME REASON
+    # torchrun --standalone pretrain/dino_patch.py --nproc_per_node=gpu --config-name 'debug'
 
     main()

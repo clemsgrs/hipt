@@ -636,6 +636,7 @@ def train_one_epoch(
     fp16_scaler,
     clip_grad,
     freeze_last_layer,
+    gpu_id,
 ):
     metric_logger = MetricLogger(delimiter="  ")
     with tqdm.tqdm(
@@ -656,8 +657,10 @@ def train_one_epoch(
                     param_group["weight_decay"] = wd_schedule[it]
 
             # move images to gpu
-            # images = [im.to(gpu_id, non_blocking=True) for im in images]
-            images = [im.cuda(non_blocking=True) for im in images]
+            if gpu_id == -1:
+                images = [im.cuda(non_blocking=True) for im in images]
+            else:
+                images = [im.to(gpu_id, non_blocking=True) for im in images]
             # teacher and student forward passes + compute dino loss
             with torch.cuda.amp.autocast(fp16_scaler is not None):
                 teacher_output = teacher(
