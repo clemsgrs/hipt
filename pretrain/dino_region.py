@@ -37,16 +37,9 @@ from utils import (
 
 
 @hydra.main(
-    version_base="1.2.0", config_path="../config/pre-training", config_name="region"
+    version_base="1.2.0", config_path="../config/pretraining", config_name="region"
 )
 def main(cfg: DictConfig):
-
-    distributed = torch.cuda.device_count() > 1
-    if distributed:
-        init_distributed_mode(cfg)
-
-    fix_random_seeds(cfg.seed)
-    cudnn.benchmark = True
 
     run_id = datetime.datetime.now().strftime("%Y-%m-%d_%H_%M")
     # set up wandb
@@ -58,6 +51,13 @@ def main(cfg: DictConfig):
 
     output_dir = Path(cfg.output_dir, cfg.experiment_name, run_id)
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    distributed = torch.cuda.device_count() > 1
+    if distributed:
+        init_distributed_mode(cfg)
+
+    fix_random_seeds(cfg.seed)
+    cudnn.benchmark = True
 
     # preparing data
     transform = RegionDataAugmentationDINO(

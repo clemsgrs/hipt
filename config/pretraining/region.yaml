@@ -1,15 +1,16 @@
-data_dir: '/data/pathology/projects/ais-cap/code/git/clemsgrs/hipt/data/panda_radboud/dino/patch_256_pretraining'
+data_dir: '/data/pathology/projects/ais-cap/code/git/clemsgrs/hipt/output/panda_radboud/dino/features/2048_local/1em3x51n/features'
 output_dir: '/data/pathology/projects/ais-cap/code/git/clemsgrs/hipt/output/panda_radboud/dino'
-experiment_name: 'patch'
+experiment_name: 'region'
 
 start_from_checkpoint:
-resume: True
-resume_from_checkpoint: 'latest.pth'
+resume: False
+resume_from_checkpoint:
 seed: 0
 
 model:
-  arch: 'vit_small'
-  patch_size: 16
+  arch: 'vit4k_xs'
+  region_size: 2048
+  patch_size: 256
   out_dim: 65536 # dimensionality of the DINO head output. For complex and large datasets large values (like 65k) work well
   norm_last_layer: False # whether or not to weight normalize the last layer of the DINO head ; not normalizing leads to better performance but can make the training unstable.
   momentum_teacher: 0.996 # base EMA parameter for teacher update. The value is increased to 1 during training with cosine schedule ; we recommend setting a higher value with small batches: for example use 0.9995 with batch size of 256
@@ -21,7 +22,7 @@ model:
 
 # training/optimization parameters
 training:
-  nepochs: 100
+  nepochs: 125
   warmup_epochs: 10 # number of epochs for the linear learning-rate warm up.
   freeze_last_layer: 1 # number of epochs during which we keep the output layer fixed ; typically doing so during the first epoch helps training ; try increasing this value if the loss does not decrease
   batch_size_per_gpu: 128
@@ -39,22 +40,16 @@ optim:
     weight_decay_end: 0.4 # final value of the weight decay ; we use a cosine schedule for WD and using a larger decay by the end of training improves performance for ViTs
 
 aug:
-  # scale range of the cropped image before resizing, relatively to the origin image ; used for large global view cropping ; when disabling multi-crop (local_crops_number: 0), we recommand using a wider range of scale (global_crops_scale: (0.14, 1))
-  global_crops_scale:
-    - 0.4
-    - 1.
+  global_crops_scale: 0.875
   local_crops_number: 8 # number of small local views to generate. Set this parameter to 0 to disable multi-crop training ; when disabling multi-crop we recommend to use global_crops_scale = (0.14, 1)
-  # scale range of the cropped image before resizing, relatively to the origin image ; used for small local view cropping of multi-crop
-  local_crops_scale:
-    - 0.05
-    - 0.4
+  local_crops_scale: 0.375
 
 speed:
   use_fp16: True # whether or not to use half precision for training ; improves training time and memory requirements, but can provoke instability and slight decay of performance ; we recommend disabling mixed precision if the loss is unstable, if reducing the patch size or if training with bigger ViTs
   num_workers: 4
 
 logging:
-  save_ckpt_every: 10 # save checkpoint every x epochs
+  save_snapshot_every: 10 # save checkpoint every x epochs
 
 wandb:
   enable: True
@@ -74,5 +69,4 @@ local_rank: 0
 
 # hydra
 hydra:
-  run:
-    dir: /tmp/hydra_output
+  output_subdir: null
