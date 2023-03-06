@@ -24,7 +24,7 @@ Download HIPT pre-trained weights via the following commands:
 <summary>
 Download commands
 </summary>
-  
+
 ```
 mkdir checkpoints
 cd checkpoints
@@ -40,7 +40,7 @@ gdown 1A2eHTT0dedHgdCvy6t3d9HwluF8p5yjz
 If you want to benefit from wandb logging, you need to follow these simple steps:
  - grab your wandb API key under your profile and export
  - run the following command in your terminal: `export WANDB_API_KEY=<your_personal_key>`
- - change wandb parameters in the config file under `config/feature_extraction/` (mainly `project` and `username`)
+ - update wandb parameters in the relevant config files (mainly `project` and `username`)
 
 **2. Extract features**
 
@@ -53,15 +53,15 @@ Folder structure
 
 ```bash
 region_dir/
-└── region_size/format/
-│     ├── slide_1/
-│     │    ├── slide_1.h5
-│     │    └── imgs/
-│     │         ├── region_1.fmt
-│     │         ├── region_2.fmt
-│     │         └── ...
-│     ├── slide_2/
-│     └── ...
+├── slide_1/
+│     ├── slide_1.h5
+│     └── imgs/
+│          ├── region_1.fmt
+│          ├── region_2.fmt
+│          └── ...
+├── slide_2/
+├── slide_3/
+└── ...
 ```
 </details>
 
@@ -73,17 +73,20 @@ A good starting point is to use the default configuration file `config/default.y
 
 Then run the following command to kick off feature extraction:
 
-`python3 extract_features.py --config-name <feature_extraction_config_filename>`
+```bash
+python3 extract_features.py --config-name <feature_extraction_config_filename>
+```
 
 This will produce one .pt file per slide and save it under `output/<experiment_name>/<level>/`:
 
 ```
 hipt/
-├── output/<experiment_name>/
-│     └── level/
-│          ├── slide_1.pt
-│          ├── slide_2.pt
-│          └── ...
+├── output/<experiment_name>/<experiment_id>/features
+│     ├── level/
+│     │    ├── slide_1.pt
+│     │    ├── slide_2.pt
+│     │    └── ...
+│     └── process_list_<level>.csv
 ```
 
 ## HIPT Training
@@ -100,7 +103,7 @@ TRAIN_2,0
 ...
 ```
 
-If you want to run testing at the end, you can provide a `test.csv` file.
+If you want to run testing at the end, you can provide a `test.csv` file.<br>
 
 **2. Train a *single-fold* model on extracted features**
 
@@ -176,19 +179,26 @@ PRETRAINING_DIR/
 </details>
 
 Where:
-- `.../path/to/patch_256_pretraining/imgs/`: directory of raw `[256 × 256]` patches (as `*.png` format) extracted using HS2P, used to pretrain the first Transformer block (ViT_256-16).
-- `.../path/to/region_4096_pretraining/`: directory of pre-extracted region-level **local** features for each `[4096 × 4096]` region across all WSIs using `python3 pre-train/extract_features.py`. Each `*.pt` file is a `[256 × 384]`-sized Tensor, which is a 256-length sequence of pre-extracted ViT_256-16 features for each `[256 × 256]` patch. This folder is used to pretain the intermediate Transformer block (ViT_4096-256).
+- `.../path/to/patch_256_pretraining/imgs/`: directory of raw `[256 × 256]` patches (as `*.png` format) extracted using [HS2P](https://github.com/clemsgrs/hs2p), used to pretrain the first Transformer block (ViT_patch).
+- `.../path/to/region_4096_pretraining/`: directory of pre-extracted region-level **local** features for each `[4096 × 4096]` region across all WSIs using `python3 pre-train/extract_features.py`. Each `*.pt` file is a `[256 × 384]`-sized Tensor, which is a 256-length sequence of pre-extracted ViT_patch features for each `[256 × 256]` patch. This folder is used to pretain the intermediate Transformer block (ViT_region).
 
 NB: you should be able to user differently sized regions (e.g. `[1024 × 1024]`) seamlessly.
 
 Create two configuration files under `config/pre-training/` (one for each pre-training stage).<br>
 You can take inspiration from existing files.<br>
 
-The following commands are used for pretraining:
+The following commands are used for **single-gpu** pretraining:
 
 ```bash
-python3 pre-train/dino_patch.py --config-name <name_of_your_dino_config>
-python3 pre-train/dino_region.py --config-name <name_of_your_dino_4k_config>
+python3 pretrain/dino_patch.py --config-name <dino_patch_config>
+python3 pretrain/dino_region.py --config-name <dino_region__config>
+```
+
+**Distributed** pretraining across multiple is supported via:
+
+```bash
+python3 -m torch.distributed.run --nproc_per_node=gpu pretrain/dino_patch.py --config-name <dino_patch_config>
+python3 -m torch.distributed.run --nproc_per_node=gpu pretrain/dino_patch.py --config-name <dino_region__config>
 ```
 
 ## Resuming experiment after crash / bug
@@ -197,6 +207,6 @@ If, for some reason, feature extraction crashes, you should be able to resume fr
 
 ## TODO List
 
-- [ ] improve documentation
-- [ ] when switching `img_size` argument from `[224]` to `[256]`, make sure the positional enmedding is trainable!
 - [ ] switch back optimizer.zero_grad( ) before .step( )
+- [ ] implement heatmap visualization
+- [ ] add early stopping mechanism to DINO pretraining
