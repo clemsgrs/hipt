@@ -39,12 +39,6 @@ from utils import (
 )
 def main(cfg: DictConfig):
 
-    # set up wandb
-    if cfg.wandb.enable and is_main_process():
-        key = os.environ.get("WANDB_API_KEY")
-        wandb_run = initialize_wandb(cfg, key=key)
-        wandb_run.define_metric("epoch", summary="max")
-
     distributed = torch.cuda.device_count() > 1
     if distributed:
         torch.distributed.init_process_group(backend="nccl")
@@ -55,22 +49,29 @@ def main(cfg: DictConfig):
         gpu_id = -1
     if is_main_process():
         print(f"torch.cuda.device_count(): {torch.cuda.device_count()}")
+        # set up wandb
+        if cfg.wandb.enable:
+            key = os.environ.get("WANDB_API_KEY")
+            wandb_run = initialize_wandb(cfg, key=key)
+            wandb_run.define_metric("epoch", summary="max")
 
     fix_random_seeds(cfg.seed)
 
     cudnn.benchmark = True
 
     output_dir = Path(cfg.output_dir, cfg.experiment_name)
-    if not cfg.resume:
+    if not cfg.resume and is_main_process():
         if output_dir.exists():
-            if is_main_process():
                 print(f"WARNING: {output_dir} already exists! Deleting its content...")
-            shutil.rmtree(output_dir)
-            output_dir.mkdir(parents=True, exist_ok=True)
+                shutil.rmtree(output_dir)
+                output_dir.mkdir(parents=True)
         else:
             output_dir.mkdir(parents=True, exist_ok=True)
 
     # preparing data
+    if is_main_process():
+        print(f"Loading data...")
+
     transform = PatchDataAugmentationDINO(
         cfg.aug.global_crops_scale,
         cfg.aug.local_crops_scale,
@@ -100,6 +101,8 @@ def main(cfg: DictConfig):
         print(f"Data loaded: there are {len(dataset)} patches.")
 
     # building student and teacher networks
+    if is_main_process():
+        print(f"Building student and teacher networks...")
     student = vits.__dict__[cfg.model.arch](
         patch_size=cfg.model.patch_size,
         drop_path_rate=cfg.model.drop_path_rate,
@@ -201,6 +204,8 @@ def main(cfg: DictConfig):
     momentum_schedule = cosine_scheduler(
         cfg.model.momentum_teacher, 1, cfg.training.nepochs, len(data_loader)
     )
+    if is_main_process():
+        print(f"Models built, kicking off training")
 
     epochs_run = 0
 
@@ -329,11 +334,16 @@ def main(cfg: DictConfig):
 
 if __name__ == "__main__":
 
-    # python3 pretrain/dino_patch.py --config-name 'patch'
     # python3 -m torch.distributed.run pretrain/dino_patch.py --config-name 'patch'
     # python3 -m torch.distributed.run --standalone --nproc_per_node=gpu pretrain/dino_patch.py --config-name 'debug'
 
     # ISSUE WITH TORCHRUN ON SOL2: USES PYTHON3.8 INSTEAD OF PYTHON3.9 FOR SOME REASON
     # torchrun --standalone pretrain/dino_patch.py --nproc_per_node=gpu --config-name 'debug'
+
+    # m = {}
+    # for i in range(torch.cuda.device_count()):
+    #     m_i = {f"--local_rank={i}": "local_rank"}
+    #     m.update(m_i)
+    # hydra_argv_remapper(m)
 
     main()
