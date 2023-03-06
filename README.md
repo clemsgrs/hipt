@@ -198,7 +198,7 @@ python3 pretrain/dino_region.py --config-name <dino_region__config>
 
 ```bash
 python3 -m torch.distributed.run --nproc_per_node=gpu pretrain/dino_patch.py --config-name <dino_patch_config>
-python3 -m torch.distributed.run --nproc_per_node=gpu pretrain/dino_patch.py --config-name <dino_region__config>
+python3 -m torch.distributed.run --nproc_per_node=gpu pretrain/dino_patch.py --config-name <dino_region_config>
 ```
 
 ## Resuming experiment after crash / bug
