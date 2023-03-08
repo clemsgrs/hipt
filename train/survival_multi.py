@@ -302,6 +302,8 @@ def main(cfg: DictConfig):
                     v = round(v, 3)
             if r in cfg.wandb.to_log and cfg.wandb.enable:
                 wandb.log({f"test/fold_{i}/{r}": v})
+            else:
+                print(f"Test {r}: {v}")
 
     mean_test_metric = round(np.mean(test_metrics), 3)
     std_test_metric = round(statistics.stdev(test_metrics), 3)

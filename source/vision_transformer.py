@@ -202,9 +202,10 @@ class VisionTransformer(nn.Module):
 
     def __init__(
         self,
-        img_size: int = 224,
+        img_size: int = 256,
         patch_size: int = 16,
         in_chans: int = 3,
+        dino_max_crop_scale: float = 0.875,
         num_classes: int = 0,
         embed_dim: int = 768,
         depth: int = 12,
@@ -221,7 +222,7 @@ class VisionTransformer(nn.Module):
         super().__init__()
         self.embed_dim = embed_dim
 
-        num_patches = int(img_size // patch_size) ** 2
+        num_patches = int(img_size * dino_max_crop_scale // patch_size) ** 2
 
         self.patch_embed = PatchEmbed(
             patch_size=patch_size,
@@ -347,7 +348,7 @@ class VisionTransformer(nn.Module):
 
 
 def vit_tiny(
-    img_size: int = 224,
+    img_size: int = 256,
     patch_size: int = 16,
     embed_dim: int = 192,
     **kwargs,
@@ -367,7 +368,7 @@ def vit_tiny(
 
 
 def vit_small(
-    img_size: int = 224,
+    img_size: int = 256,
     patch_size: int = 16,
     embed_dim: int = 384,
     **kwargs,
@@ -387,7 +388,7 @@ def vit_small(
 
 
 def vit_base(
-    img_size: int = 224,
+    img_size: int = 256,
     patch_size: int = 16,
     embed_dim: int = 768,
     **kwargs,

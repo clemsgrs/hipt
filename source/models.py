@@ -344,7 +344,6 @@ class HIPT(nn.Module):
         freeze_vit_patch: bool = True,
         pretrain_vit_region: str = "path/to/pretrained/vit_region/weights.pth",
         freeze_vit_region: bool = True,
-        dino_img_size: int = 224,
         mini_patch_size: int = 16,
         embed_dim_patch: int = 384,
         region_size: int = 4096,
@@ -366,7 +365,7 @@ class HIPT(nn.Module):
         checkpoint_key = "teacher"
 
         self.vit_patch = vit_small(
-            img_size=dino_img_size,
+            img_size=patch_size,
             patch_size=mini_patch_size,
             embed_dim=embed_dim_patch,
         )
@@ -559,7 +558,6 @@ class GlobalFeatureExtractor(nn.Module):
         self,
         region_size: int = 4096,
         patch_size: int = 256,
-        dino_img_size: int = 224,
         mini_patch_size: int = 16,
         pretrain_vit_patch: str = "path/to/pretrained/vit_patch/weights.pth",
         pretrain_vit_region: str = "path/to/pretrained/vit_region/weights.pth",
@@ -577,7 +575,7 @@ class GlobalFeatureExtractor(nn.Module):
         self.device_region = torch.device("cuda:1")
 
         self.vit_patch = vit_small(
-            img_size=dino_img_size,
+            img_size=patch_size,
             patch_size=mini_patch_size,
             embed_dim=embed_dim_patch,
         )
@@ -673,7 +671,6 @@ class LocalFeatureExtractor(nn.Module):
     def __init__(
         self,
         patch_size: int = 256,
-        dino_img_size: int = 224,
         mini_patch_size: int = 16,
         pretrain_vit_patch: str = "path/to/pretrained/vit_patch/weights.pth",
         embed_dim_patch: int = 384,
@@ -687,7 +684,7 @@ class LocalFeatureExtractor(nn.Module):
         self.device_patch = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         self.vit_patch = vit_small(
-            img_size=dino_img_size,
+            img_size=patch_size,
             patch_size=mini_patch_size,
             embed_dim=embed_dim_patch,
         )

@@ -250,6 +250,8 @@ def main(cfg: DictConfig):
                 v = round(v, 3)
             if r in cfg.wandb.to_log and cfg.wandb.enable:
                 wandb.log({f"test/{r}": v})
+            else:
+                print(f"Test {r}: {v}")
 
     end_time = time.time()
     mins, secs = compute_time(start_time, end_time)
