@@ -1,0 +1,35 @@
+test_csv:
+
+features_dir:
+output_dir: 'output/debug'
+experiment_name: 'inference'
+level: 'global'
+
+num_classes: 2
+label_name: 'label'
+label_mapping:
+
+model:
+  checkpoint:
+  dropout: 0.25
+  agg_method: 'concat'
+  slide_pos_embed:
+    use: False
+    learned:
+    type:
+    max_seq_len:
+    max_nslide:
+    tile_size:
+
+wandb:
+  enable: False
+  project: 'hipt'
+  username: 'clemsg'
+  exp_name: '${experiment_name}'
+  dir: '/home/user'
+  to_log: ['loss', 'auc', 'kappa', 'roc_auc_curve']
+  group:
+
+hydra:
+  run:
+    dir: /tmp/hydra_output

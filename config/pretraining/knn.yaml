@@ -1,0 +1,19 @@
+data_dir: 'data/panda/knn_debug'
+features_dir: 'output/debug/knn'
+
+load_features: False
+save_features: False
+
+batch_size_per_gpu: 2
+nb_knn: [3, 5, 10]
+temperature: 0.07
+
+model:
+  arch: 'vit_small'
+  patch_size: 16
+  pretrained_weights: '/data/pathology/projects/ais-cap/dataset/panda_radboud/hipt/checkpoints/vit_256_small_dino.pth'
+  checkpoint_key: 'teacher'
+
+speed:
+  use_cuda: True
+  num_workers: 4
