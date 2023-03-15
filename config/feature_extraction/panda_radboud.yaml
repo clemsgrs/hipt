@@ -14,9 +14,9 @@ format: 'jpg'
 level: 'global'
 save_region_features: True
 
-# pretrain_vit_patch: '/data/pathology/projects/ais-cap/dataset/panda_radboud/checkpoints/vit_256_small_dino.pth'
+# pretrain_vit_patch: '/data/pathology/projects/ais-cap/dataset/panda_radboud/hipt/checkpoints/vit_256_small_dino.pth'
 pretrain_vit_patch: 'output/panda_radboud/dino/patch/checkpoint_050.pth'
-# pretrain_vit_region: '/data/pathology/projects/ais-cap/dataset/panda_radboud/checkpoints/vit_4096_xs_dino.pth'
+# pretrain_vit_region: '/data/pathology/projects/ais-cap/dataset/panda_radboud/hipt/checkpoints/vit_4096_xs_dino.pth'
 pretrain_vit_region: 'output/panda_radboud/dino/region/69hfswzt/latest.pth'
 
 wandb:

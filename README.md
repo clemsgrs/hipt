@@ -10,6 +10,7 @@ Re-implementation of original [HIPT](https://github.com/mahmoodlab/HIPT) code.
 
 ## Requirements
 
+- python 3.9+
 - install requirements via `pip3 install -r requirements.txt`
 - install module via `pip3 install -e .`
 
