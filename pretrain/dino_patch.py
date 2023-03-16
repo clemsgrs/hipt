@@ -44,7 +44,7 @@ def main(cfg: DictConfig):
 
     distributed = torch.cuda.device_count() > 1
     if distributed:
-        torch.distributed.init_process_group(backend="nccl")
+        torch.distributed.init_process_group(backend="gloo")
         gpu_id = int(os.environ["LOCAL_RANK"])
         if gpu_id == 0:
             print(f"Distributed session successfully initialized")
@@ -63,6 +63,8 @@ def main(cfg: DictConfig):
     cudnn.benchmark = True
 
     output_dir = Path(cfg.output_dir, cfg.experiment_name)
+    snapshot_dir = Path(output_dir, "snapshots")
+    features_dir = Path(output_dir, "features")
     if not cfg.resume and is_main_process():
         if output_dir.exists():
                 print(f"WARNING: {output_dir} already exists! Deleting its content...")
@@ -70,6 +72,9 @@ def main(cfg: DictConfig):
                 output_dir.mkdir(parents=True)
         else:
             output_dir.mkdir(parents=True, exist_ok=True)
+        snapshot_dir.mkdir(exist_ok=True, parents=True)
+        if cfg.early_stopping.tune_every and cfg.early_stopping.knn.save_features:
+            features_dir.mkdir(exist_ok=True, parents=True)
 
     # preparing data
     if is_main_process():
@@ -108,10 +113,10 @@ def main(cfg: DictConfig):
     if is_main_process() and cfg.early_stopping.tune_every:
         # only do it from master rank as tuning is not being run distributed for now
         downstream_train_loader, downstream_test_loader = prepare_data(
-            cfg.knn.data_dir,
-            cfg.knn.batch_size_per_gpu,
+            cfg.early_stopping.downstream.data_dir,
+            cfg.early_stopping.downstream.batch_size_per_gpu,
             False,
-            cfg.knn.num_workers,
+            cfg.early_stopping.downstream.num_workers,
         )
         print(f"Tuning data loaded with {len(downstream_train_loader.dataset)} train and {len(downstream_test_loader.dataset)} test downstream_test_loader.")
 
@@ -225,7 +230,6 @@ def main(cfg: DictConfig):
     epochs_run = 0
 
     # leverage torch native fault tolerance
-    snapshot_dir = Path(output_dir, "snapshots")
     snapshot_path = Path(snapshot_dir, "latest.pt")
     if distributed:
         if snapshot_path.exists():
@@ -266,13 +270,14 @@ def main(cfg: DictConfig):
 
     with tqdm.tqdm(
         range(epochs_run, cfg.training.nepochs),
-        desc=(f"DINO Pre-Training"),
+        desc=(f"DINO Pretraining"),
         unit=" epoch",
         ncols=100,
         leave=True,
         initial=epochs_run,
         total=cfg.training.nepochs,
         file=sys.stdout,
+        disable=not is_main_process()
     ) as t:
 
         for epoch in t:
@@ -331,7 +336,7 @@ def main(cfg: DictConfig):
                     teacher,
                     downstream_train_loader,
                     downstream_test_loader,
-                    Path(output_dir, 'features'),
+                    features_dir,
                     cfg.model.arch,
                     cfg.model.patch_size,
                     cfg.early_stopping.knn.k,
@@ -378,16 +383,17 @@ def main(cfg: DictConfig):
 
             epoch_end_time = time.time()
             epoch_mins, epoch_secs = compute_time(epoch_start_time, epoch_end_time)
-            tqdm.tqdm.write(
-                f"End of epoch {epoch+1}/{cfg.training.nepochs} \t Time Taken:  {epoch_mins}m {epoch_secs}s"
-            )
+            if is_main_process():
+                tqdm.tqdm.write(
+                    f"End of epoch {epoch+1}/{cfg.training.nepochs} \t Time Taken:  {epoch_mins}m {epoch_secs}s"
+                )
 
             # ensure other gpus wait until gpu_0 is finished with tuning before starting next training iteration
-            torch.distributed.barrier()
+            # torch.distributed.barrier()
 
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
-    print("Training time {}".format(total_time_str))
+    print("Pretraining time {}".format(total_time_str))
 
     if distributed:
         torch.distributed.destroy_process_group()

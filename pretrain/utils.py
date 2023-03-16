@@ -716,6 +716,7 @@ def train_one_epoch(
         unit_scale=data_loader.batch_size,
         leave=False,
         file=sys.stdout,
+        disable=not (gpu_id==0),
     ) as t:
         for it, (images, _) in enumerate(t):
             # update weight decay and learning rate according to their schedule
@@ -729,7 +730,8 @@ def train_one_epoch(
             if gpu_id == -1:
                 images = [im.cuda(non_blocking=True) for im in images]
             else:
-                images = [im.to(gpu_id, non_blocking=True) for im in images]
+                device = torch.device(f"cuda:{gpu_id}")
+                images = [im.to(device, non_blocking=True) for im in images]
             # teacher and student forward passes + compute dino loss
             with torch.cuda.amp.autocast(fp16_scaler is not None):
                 teacher_output = teacher(
