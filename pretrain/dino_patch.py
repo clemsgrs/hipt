@@ -20,10 +20,13 @@ import source.vision_transformer as vits
 
 from source.utils import initialize_wandb, compute_time
 from source.components import DINOLoss
+from eval_knn import prepare_data
 from utils import (
     PatchDataAugmentationDINO,
     MultiCropWrapper,
+    EarlyStoppingDINO,
     train_one_epoch,
+    tune_one_epoch,
     fix_random_seeds,
     has_batchnorms,
     get_params_groups,
@@ -78,6 +81,7 @@ def main(cfg: DictConfig):
         cfg.aug.local_crops_number,
     )
 
+    # ============ preparing training data ============
     dataset = datasets.ImageFolder(cfg.data_dir, transform=transform)
     if cfg.training.pct:
         print(f"Pre-training on {cfg.training.pct*100}% of the data")
@@ -98,7 +102,18 @@ def main(cfg: DictConfig):
         drop_last=True,
     )
     if is_main_process():
-        print(f"Data loaded: there are {len(dataset)} patches.")
+        print(f"Training data loaded: there are {len(dataset)} patches.")
+
+    # ============ preparing tuning data ============
+    if is_main_process() and cfg.early_stopping.tune_every:
+        # only do it from master rank as tuning is not being run distributed for now
+        downstream_train_loader, downstream_test_loader = prepare_data(
+            cfg.knn.data_dir,
+            cfg.knn.batch_size_per_gpu,
+            False,
+            cfg.knn.num_workers,
+        )
+        print(f"Tuning data loaded with {len(downstream_train_loader.dataset)} train and {len(downstream_test_loader.dataset)} test downstream_test_loader.")
 
     # building student and teacher networks
     if is_main_process():
@@ -210,7 +225,8 @@ def main(cfg: DictConfig):
     epochs_run = 0
 
     # leverage torch native fault tolerance
-    snapshot_path = Path(output_dir, "latest.pt")
+    snapshot_dir = Path(output_dir, "snapshots")
+    snapshot_path = Path(snapshot_dir, "latest.pt")
     if distributed:
         if snapshot_path.exists():
             print("Loading snapshot")
@@ -225,7 +241,7 @@ def main(cfg: DictConfig):
                 fp16_scaler.load_state_dict(snapshot["fp16_scaler"])
             print(f"Resuming training from snapshot at Epoch {epochs_run}")
     elif cfg.resume:
-        ckpt_path = Path(output_dir, cfg.resume_from_checkpoint)
+        ckpt_path = Path(cfg.resume_from_checkpoint)
         epochs_run = resume_from_checkpoint(
             ckpt_path,
             student=student,
@@ -236,6 +252,16 @@ def main(cfg: DictConfig):
         )
         print(f"Resuming training from checkpoint at Epoch {epochs_run}")
 
+    early_stopping = EarlyStoppingDINO(
+        cfg.early_stopping.tracking,
+        cfg.early_stopping.min_max,
+        cfg.early_stopping.patience,
+        cfg.early_stopping.min_epoch,
+        checkpoint_dir=snapshot_dir,
+        verbose=True,
+    )
+
+    stop = False
     start_time = time.time()
 
     with tqdm.tqdm(
@@ -280,34 +306,66 @@ def main(cfg: DictConfig):
             lr = train_stats["lr"]
             loss = train_stats["loss"]
             if cfg.wandb.enable and is_main_process():
-                wandb.define_metric("lr", step_metric="epoch")
-                wandb.define_metric("loss", step_metric="epoch")
-                wandb.log({"lr": lr})
-                wandb.log({"loss": loss})
+                wandb.define_metric("train/lr", step_metric="epoch")
+                wandb.define_metric("train/loss", step_metric="epoch")
+                wandb.log({"train/lr": lr})
+                wandb.log({"train/loss": loss})
 
-
-            # save snapshot
             if is_main_process():
                 snapshot = {
                     "epoch": epoch,
+                    "student": student.state_dict(),
+                    "teacher": teacher.state_dict(),
                     "optimizer": optimizer.state_dict(),
                     "dino_loss": dino_loss.state_dict(),
                 }
-                if distributed:
-                    snapshot["student"] = student.module.state_dict()
-                    snapshot["teacher"] = teacher.module.state_dict()
-                else:
-                    snapshot["student"] = student.state_dict()
-                    snapshot["teacher"] = teacher.state_dict()
                 if fp16_scaler is not None:
                     snapshot["fp16_scaler"] = fp16_scaler.state_dict()
-                torch.save(snapshot, snapshot_path)
+
+            # only run tuning on rank 0, otherwise one has to take care of gathering knn metrics from multiple gpus
+            if cfg.early_stopping.tune_every and epoch % cfg.early_stopping.tune_every == 0 and is_main_process():
+
+                tune_results = tune_one_epoch(
+                    epoch+1,
+                    student,
+                    teacher,
+                    downstream_train_loader,
+                    downstream_test_loader,
+                    Path(output_dir, 'features'),
+                    cfg.model.arch,
+                    cfg.model.patch_size,
+                    cfg.early_stopping.knn.k,
+                    cfg.early_stopping.knn.temperature,
+                    False,
+                    cfg.early_stopping.knn.save_features,
+                    cfg.early_stopping.knn.use_cuda,
+                )
+
+                if cfg.wandb.enable:
+                    for k, v in tune_results.items():
+                        wandb.define_metric(f"tune/{k}", step_metric="epoch")
+                        wandb.log({f"tune/{k}": v})
+
+                if is_main_process():
+                    early_stopping(epoch, tune_results, snapshot)
+                    if early_stopping.early_stop and cfg.early_stopping.enable:
+                        stop = True
+
+            if stop:
+                tqdm.tqdm.write(
+                    f"Stopping early because best {cfg.early_stopping.tracking} was reached {cfg.early_stopping.patience} epochs ago"
+                )
+                break
+
+            # save snapshot
+            if is_main_process():
+                save_path = Path(snapshot_dir, f"epoch_{epoch:03}.pt")
                 if (
-                    cfg.logging.save_snapshot_every
-                    and epoch % cfg.logging.save_snapshot_every == 0
+                    cfg.early_stopping.save_every
+                    and epoch % cfg.early_stopping.save_every == 0
                     and is_main_process()
+                    and not save_path.is_file()
                 ):
-                    save_path = Path(output_dir, f"snapshot_epoch_{epoch:03}.pth")
                     torch.save(snapshot, save_path)
 
             log_stats = {
@@ -323,6 +381,9 @@ def main(cfg: DictConfig):
             tqdm.tqdm.write(
                 f"End of epoch {epoch+1}/{cfg.training.nepochs} \t Time Taken:  {epoch_mins}m {epoch_secs}s"
             )
+
+            # ensure other gpus wait until gpu_0 is finished with tuning before starting next training iteration
+            torch.distributed.barrier()
 
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
