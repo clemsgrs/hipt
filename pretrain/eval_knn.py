@@ -14,6 +14,7 @@ from sklearn import metrics
 from omegaconf import DictConfig
 from torchvision import datasets
 from torchvision import transforms
+from typing import List, Dict, Union, Optional
 
 import source.vision_transformer as vits
 from utils import is_main_process
@@ -21,8 +22,8 @@ from utils import is_main_process
 
 class ReturnIndexDataset(datasets.ImageFolder):
     def __getitem__(self, idx):
-        img, lab = super(ReturnIndexDataset, self).__getitem__(idx)
-        return img, idx
+        img, label = super(ReturnIndexDataset, self).__getitem__(idx)
+        return idx, img, label
 
 
 def load_pretrained_weights(model, pretrained_weights, checkpoint_key):
@@ -59,18 +60,61 @@ def multi_scale(samples, model):
 
 
 def extract_feature_pipeline(
-        data_dir: str,
-        features_dir: str,
-        arch: str,
-        patch_size: int,
-        pretrained_weights: str,
-        checkpoint_key: str,
-        batch_size_per_gpu: int,
-        distributed: bool,
-        save_features: bool = False,
-        use_cuda: bool = True,
-        num_workers: int = 10,
-    ):
+    data_dir: str,
+    features_dir: str,
+    arch: str,
+    patch_size: int,
+    pretrained_weights: str,
+    checkpoint_key: str,
+    batch_size_per_gpu: int,
+    distributed: bool,
+    save_features: bool = False,
+    use_cuda: bool = True,
+    num_workers: int = 10,
+):
+
+    # ============ preparing data ... ============
+    data_loader_train, data_loader_test = prepare_data(
+        data_dir,
+        batch_size_per_gpu,
+        distributed,
+        num_workers,
+    )
+    print(f"Data loaded with {len(data_loader_train.dataset)} train and {len(data_loader_test.dataset)} eval imgs.")
+
+    # ============ building network ... ============
+    model = vits.__dict__[arch](patch_size=patch_size, num_classes=0)
+    print(f"Model {arch} {patch_size}x{patch_size} built.")
+    model.cuda()
+    print(f"Loading pretrained weights...")
+    load_pretrained_weights(model, pretrained_weights, checkpoint_key)
+    model.eval()
+
+    # ============ extract features ... ============
+    print("Extracting features for train set...")
+    train_features, train_labels = extract_features(model, data_loader_train, distributed, use_cuda)
+    print("Extracting features for test set...")
+    test_features, test_labels = extract_features(model, data_loader_test, distributed, use_cuda)
+
+    if is_main_process():
+        train_features = nn.functional.normalize(train_features, dim=1, p=2)
+        test_features = nn.functional.normalize(test_features, dim=1, p=2)
+
+    # save features and labels
+    if save_features and is_main_process():
+        torch.save(train_features.cpu(), Path(features_dir, "train_feat.pt"))
+        torch.save(test_features.cpu(), Path(features_dir, "test_feat.pt"))
+        torch.save(train_labels.cpu(), Path(features_dir, "train_labels.pt"))
+        torch.save(test_labels.cpu(), Path(features_dir, "test_labels.pt"))
+    return train_features, test_features, train_labels, test_labels
+
+
+def prepare_data(
+    data_dir: str,
+    batch_size_per_gpu,
+    distributed,
+    num_workers,
+):
 
     # ============ preparing data ... ============
     transform = transforms.Compose([
@@ -100,41 +144,23 @@ def extract_feature_pipeline(
         pin_memory=True,
         drop_last=False,
     )
-    print(f"Data loaded with {len(dataset_train)} train and {len(dataset_test)} eval imgs.")
-
-    # ============ building network ... ============
-    model = vits.__dict__[arch](patch_size=patch_size, num_classes=0)
-    print(f"Model {arch} {patch_size}x{patch_size} built.")
-    model.cuda()
-    print(f"Loading pretrained weights...")
-    load_pretrained_weights(model, pretrained_weights, checkpoint_key)
-    model.eval()
-
-    # ============ extract features ... ============
-    print("Extracting features for train set...")
-    train_features = extract_features(model, data_loader_train, distributed, use_cuda)
-    print("Extracting features for test set...")
-    test_features = extract_features(model, data_loader_test, distributed, use_cuda)
-
-    if is_main_process():
-        train_features = nn.functional.normalize(train_features, dim=1, p=2)
-        test_features = nn.functional.normalize(test_features, dim=1, p=2)
-
-    train_labels = torch.tensor([s[-1] for s in dataset_train.samples]).long()
-    test_labels = torch.tensor([s[-1] for s in dataset_test.samples]).long()
-    # save features and labels
-    if save_features and is_main_process():
-        torch.save(train_features.cpu(), Path(features_dir, "train_feat.pth"))
-        torch.save(test_features.cpu(), Path(features_dir, "test_feat.pth"))
-        torch.save(train_labels.cpu(), Path(features_dir, "train_labels.pth"))
-        torch.save(test_labels.cpu(), Path(features_dir, "test_labels.pth"))
-    return train_features, test_features, train_labels, test_labels
+    return data_loader_train, data_loader_test
 
 
 @torch.no_grad()
-def extract_features(model, loader, distributed, use_cuda=True, multiscale=False):
+def extract_multiple_features(
+    student,
+    teacher,
+    loader,
+    distributed,
+    use_cuda=True,
+    multiscale=False,
+):
 
-    features = None
+    student_features = None
+    teacher_features = None
+
+    labels = []
 
     with tqdm.tqdm(
         loader,
@@ -147,13 +173,103 @@ def extract_features(model, loader, distributed, use_cuda=True, multiscale=False
 
         for i, batch in enumerate(t):
 
-            samples, index = batch
-            samples = samples.cuda(non_blocking=True)
+            index, img, label = batch
             index = index.cuda(non_blocking=True)
+            img = img.cuda(non_blocking=True)
+            labels.extend(label.clone().tolist())
             if multiscale:
-                feats = multi_scale(samples, model)
+                student_feats = multi_scale(img, student)
+                teacher_feats = multi_scale(img, teacher)
             else:
-                feats = model(samples).clone()
+                student_feats = student(img).clone()
+                teacher_feats = teacher_feats(img).clone()
+
+            # init storage feature matrix
+            if is_main_process() and student_features is None and teacher_features is None:
+                student_features = torch.zeros(len(loader.dataset), student_feats.shape[-1])
+                teacher_features = torch.zeros(len(loader.dataset), teacher_feats.shape[-1])
+                if use_cuda:
+                    student_features = student_features.cuda(non_blocking=True)
+                    teacher_features = teacher_features.cuda(non_blocking=True)
+                t.display(f"Storing features into tensor of shape {student_features.shape}", pos=1)
+                print()
+
+            if distributed:
+                ngpu = dist.get_world_size()
+                y_all = torch.empty(ngpu, index.size(0), dtype=index.dtype, device=index.device)
+                y_l = list(y_all.unbind(0))
+                y_all_reduce = torch.distributed.all_gather(y_l, index, async_op=True)
+                y_all_reduce.wait()
+                index_all = torch.cat(y_l)
+
+                # share features between processes
+                student_feats_all = torch.empty(
+                    ngpu,
+                    student_feats.size(0),
+                    student_feats.size(1),
+                    dtype=student_feats.dtype,
+                    device=student_feats.device,
+                )
+                teacher_feats_all = torch.empty(
+                    ngpu,
+                    teacher_feats.size(0),
+                    teacher_feats.size(1),
+                    dtype=teacher_feats.dtype,
+                    device=teacher_feats.device,
+                )
+
+                student_output_l = list(student_feats_all.unbind(0))
+                student_output_all_reduce = torch.distributed.all_gather(student_output_l, student_feats, async_op=True)
+                teacher_output_l = list(teacher_feats_all.unbind(0))
+                teacher_output_all_reduce = torch.distributed.all_gather(teacher_output_l, teacher_feats, async_op=True)
+
+                student_output_all_reduce.wait()
+                teacher_output_all_reduce.wait()
+
+                # update storage feature matrix
+                if is_main_process():
+                    if use_cuda:
+                        student_features.index_copy_(0, index_all, torch.cat(student_output_l))
+                        teacher_features.index_copy_(0, index_all, torch.cat(teacher_output_l))
+                    else:
+                        student_features.index_copy_(0, index_all.cpu(), torch.cat(student_output_l).cpu())
+                        teacher_features.index_copy_(0, index_all.cpu(), torch.cat(teacher_output_l).cpu())
+
+    if is_main_process():
+        student_features = nn.functional.normalize(student_features, dim=1, p=2)
+        teacher_features = nn.functional.normalize(teacher_features, dim=1, p=2)
+
+    features = {"student": student_features, "teacher": teacher_features}
+    labels = torch.tensor(labels).long()
+
+    return features, labels
+
+
+@torch.no_grad()
+def extract_features(model, loader, distributed, use_cuda=True, multiscale=False):
+
+    features = None
+    labels = []
+
+    with tqdm.tqdm(
+        loader,
+        desc=(f"Feature extraction"),
+        unit=" slide",
+        ncols=80,
+        unit_scale=loader.batch_size,
+        leave=True,
+    ) as t:
+
+        for i, batch in enumerate(t):
+
+            index, img, label = batch
+            img = img.cuda(non_blocking=True)
+            index = index.cuda(non_blocking=True)
+            labels.extend(label.clone().tolist())
+            if multiscale:
+                feats = multi_scale(img, model)
+            else:
+                feats = model(img).clone()
 
             # init storage feature matrix
             if is_main_process() and features is None:
@@ -190,7 +306,9 @@ def extract_features(model, loader, distributed, use_cuda=True, multiscale=False
                     else:
                         features.index_copy_(0, index_all.cpu(), torch.cat(output_l).cpu())
 
-    return features
+    labels = torch.tensor(labels).long()
+
+    return features, labels
 
 
 @torch.no_grad()
@@ -265,10 +383,10 @@ def main(cfg: DictConfig):
     cudnn.benchmark = True
 
     if cfg.load_features:
-        train_features = torch.load(Path(cfg.features_dir, "train_feat.pth"))
-        test_features = torch.load(Path(cfg.features_dir, "test_feat.pth"))
-        train_labels = torch.load(Path(cfg.features_dir, "train_labels.pth"))
-        test_labels = torch.load(Path(cfg.features_dir, "test_labels.pth"))
+        train_features = torch.load(Path(cfg.features_dir, "train_feat.pt"))
+        test_features = torch.load(Path(cfg.features_dir, "test_feat.pt"))
+        train_labels = torch.load(Path(cfg.features_dir, "train_labels.pt"))
+        test_labels = torch.load(Path(cfg.features_dir, "test_labels.pt"))
     else:
         # need to extract features !
         train_features, test_features, train_labels, test_labels = extract_feature_pipeline(
