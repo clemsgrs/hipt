@@ -14,10 +14,26 @@ from sklearn import metrics
 from omegaconf import DictConfig
 from torchvision import datasets
 from torchvision import transforms
-from typing import List, Dict, Union, Optional
 
 import source.vision_transformer as vits
-from utils import is_main_process
+
+
+def is_dist_avail_and_initialized():
+    if not dist.is_available():
+        return False
+    if not dist.is_initialized():
+        return False
+    return True
+
+
+def get_rank():
+    if not is_dist_avail_and_initialized():
+        return 0
+    return dist.get_rank()
+
+
+def is_main_process():
+    return get_rank() == 0
 
 
 class ReturnIndexDataset(datasets.ImageFolder):

@@ -29,7 +29,7 @@ training:
   pct:
 
 early_stopping:
-  tune_every: # leave blank if you don't want to use early stopping mechanism
+  tune_every: 10 # leave blank if you don't want to use early stopping mechanism
   tracking: 'auc'
   min_max: 'min'
   patience: 10
@@ -75,13 +75,6 @@ wandb:
   dir: '/home/user'
   group:
   to_log: ['loss']
-
-# ignore these argument
-rank:
-gpu:
-world_size:
-dist_url: "env://" # url used to set up distributed training; see https://pytorch.org/docs/stable/distributed.html
-local_rank: 0
 
 # hydra
 hydra:
