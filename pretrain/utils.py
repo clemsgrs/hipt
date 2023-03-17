@@ -800,13 +800,16 @@ def train_one_epoch(
 
 
 def load_weights(model, state_dict):
-    # remove `module.` prefix
-    state_dict = {k.replace("module.", ""): v for k, v in state_dict.items()}
+    # remove `module.` prefix induced by DDP
+    nn.modules.utils.consume_prefix_in_state_dict_if_present(state_dict, "module.")
     # remove `backbone.` prefix induced by multicrop wrapper
-    state_dict = {k.replace("backbone.", ""): v for k, v in state_dict.items()}
-    state_dict, msg = update_state_dict(model.state_dict(), state_dict)
-    msg2 = model.load_state_dict(state_dict, strict=False)
-    tqdm.tqdm.write(msg)
+    nn.modules.utils.consume_prefix_in_state_dict_if_present(state_dict, "backbone.")
+    # state_dict, msg = update_state_dict(model.state_dict(), state_dict)
+    msg = model.load_state_dict(state_dict, strict=False)
+    if len(msg.missing_keys) > 0:
+        tqdm.tqdm.write(str(msg))
+    else:
+        tqdm.tqdm.write("All keys matched successfully")
 
 
 def tune_one_epoch(
@@ -834,8 +837,6 @@ def tune_one_epoch(
     tqdm.tqdm.write(f"Loading epoch {epoch} weights...")
     student_weights = student.state_dict()
     teacher_weights = teacher.state_dict()
-    nn.modules.utils.consume_prefix_in_state_dict_if_present(student_weights, "module.")
-    nn.modules.utils.consume_prefix_in_state_dict_if_present(teacher_weights, "module.")
     load_weights(student_model, student_weights)
     load_weights(teacher_model, teacher_weights)
     student_model.eval()
@@ -868,7 +869,7 @@ def tune_one_epoch(
             student_train_features, student_test_features = student_train_features.cuda(), student_test_features.cuda()
             train_labels, test_labels = train_labels.cuda(), test_labels.cuda()
 
-        print("Features are ready!\nStarting kNN classification.")
+        tqdm.tqdm.write("Features are ready!\nStarting kNN classification.")
         teacher_acc, teacher_auc = knn_classifier(teacher_train_features, train_labels, teacher_test_features, test_labels, k, temperature, num_classes)
         student_acc, student_auc = knn_classifier(student_train_features, train_labels, student_test_features, test_labels, k, temperature, num_classes)
         results["teacher"].update({'acc': teacher_acc, 'auc': teacher_auc})

@@ -135,7 +135,7 @@ def prepare_data(
 
     # ============ preparing data ... ============
     transform = transforms.Compose([
-        transforms.Resize(256, interpolation=3),
+        transforms.Resize(256, interpolation=transforms.InterpolationMode.BICUBIC),
         transforms.CenterCrop(224),
         transforms.ToTensor(),
         transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
@@ -209,8 +209,7 @@ def extract_multiple_features(
                 if use_cuda:
                     student_features = student_features.cuda(non_blocking=True)
                     teacher_features = teacher_features.cuda(non_blocking=True)
-                t.display(f"Storing features into tensor of shape {student_features.shape}", pos=1)
-                print()
+                tqdm.tqdm.write(f"Storing features into tensor of shape {student_features.shape}", pos=1)
 
             if distributed:
                 ngpu = dist.get_world_size()
