@@ -209,7 +209,7 @@ def extract_multiple_features(
                 if use_cuda:
                     student_features = student_features.cuda(non_blocking=True)
                     teacher_features = teacher_features.cuda(non_blocking=True)
-                tqdm.tqdm.write(f"Storing features into tensor of shape {student_features.shape}", pos=1)
+                tqdm.tqdm.write(f"Storing features into tensor of shape {student_features.shape}")
 
             if distributed:
                 ngpu = dist.get_world_size()
