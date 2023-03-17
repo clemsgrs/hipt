@@ -44,7 +44,7 @@ def main(cfg: DictConfig):
 
     distributed = torch.cuda.device_count() > 1
     if distributed:
-        torch.distributed.init_process_group(backend="gloo")
+        torch.distributed.init_process_group(backend="nccl")
         gpu_id = int(os.environ["LOCAL_RANK"])
         if gpu_id == 0:
             print(f"Distributed session successfully initialized")
