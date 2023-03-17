@@ -262,6 +262,7 @@ def main(cfg: DictConfig):
         cfg.early_stopping.patience,
         cfg.early_stopping.min_epoch,
         checkpoint_dir=snapshot_dir,
+        save_every=cfg.early_stopping.save_every,
         verbose=True,
     )
 
@@ -277,6 +278,7 @@ def main(cfg: DictConfig):
         initial=epochs_run,
         total=cfg.training.nepochs,
         file=sys.stdout,
+        position=0,
         disable=not is_main_process()
     ) as t:
 
@@ -328,17 +330,19 @@ def main(cfg: DictConfig):
                     snapshot["fp16_scaler"] = fp16_scaler.state_dict()
 
             # only run tuning on rank 0, otherwise one has to take care of gathering knn metrics from multiple gpus
+            tune_results = None
             if cfg.early_stopping.tune_every and epoch % cfg.early_stopping.tune_every == 0 and is_main_process():
 
                 tune_results = tune_one_epoch(
                     epoch+1,
                     student,
-                    teacher,
+                    teacher_without_ddp,
                     downstream_train_loader,
                     downstream_test_loader,
                     features_dir,
                     cfg.model.arch,
                     cfg.model.patch_size,
+                    cfg.model.drop_path_rate,
                     cfg.early_stopping.knn.k,
                     cfg.early_stopping.knn.temperature,
                     False,
@@ -351,10 +355,10 @@ def main(cfg: DictConfig):
                         wandb.define_metric(f"tune/{k}", step_metric="epoch")
                         wandb.log({f"tune/{k}": v})
 
-                if is_main_process():
-                    early_stopping(epoch, tune_results, snapshot)
-                    if early_stopping.early_stop and cfg.early_stopping.enable:
-                        stop = True
+            if is_main_process():
+                early_stopping(epoch, tune_results, snapshot)
+                if early_stopping.early_stop and cfg.early_stopping.enable:
+                    stop = True
 
             if stop:
                 tqdm.tqdm.write(
@@ -389,7 +393,7 @@ def main(cfg: DictConfig):
                 )
 
             # ensure other gpus wait until gpu_0 is finished with tuning before starting next training iteration
-            # torch.distributed.barrier()
+            torch.distributed.barrier()
 
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))

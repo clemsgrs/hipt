@@ -466,6 +466,7 @@ class EarlyStoppingDINO:
         patience: int = 20,
         min_epoch: int = 50,
         checkpoint_dir: Optional[Path] = None,
+        save_every: bool = False,
         verbose: bool = False,
     ):
         """
@@ -479,6 +480,7 @@ class EarlyStoppingDINO:
         self.patience = patience
         self.min_epoch = min_epoch
         self.checkpoint_dir = checkpoint_dir
+        self.save_every = save_every
         self.verbose = verbose
 
         self.best_score = None
@@ -486,30 +488,32 @@ class EarlyStoppingDINO:
 
     def __call__(self, epoch, results, snapshot):
 
-        teacher_score = results["teacher"][self.tracking]
-        student_score = results["student"][self.tracking]
+        if results is not None:
 
-        if self.min_max == "min":
-            teacher_score = -1 * teacher_score
-            student_score = -1 * student_score
+            teacher_score = results["teacher"][self.tracking]
+            student_score = results["student"][self.tracking]
 
-        if self.best_score is None or (teacher_score >= self.best_score and teacher_score > student_score):
-            self.best_score = teacher_score
-            torch.save(snapshot, Path(self.checkpoint_dir, "best.pt"))
-            self.counter = 0
+            if self.min_max == "min":
+                teacher_score = -1 * teacher_score
+                student_score = -1 * student_score
 
-        elif teacher_score < self.best_score or teacher_score <= student_score:
-            self.counter += 1
-            if epoch <= self.min_epoch + 1 and self.verbose:
-                print(
-                    f"EarlyStopping counter: {min(self.counter,self.patience)}/{self.patience}"
-                )
-            elif self.verbose:
-                print(f"EarlyStopping counter: {self.counter}/{self.patience}")
-            if self.counter >= self.patience and epoch > self.min_epoch:
-                self.early_stop = True
+            if self.best_score is None or (teacher_score >= self.best_score and teacher_score > student_score):
+                self.best_score = teacher_score
+                torch.save(snapshot, Path(self.checkpoint_dir, "best.pt"))
+                self.counter = 0
 
-        if self.save_every and self.save_every % epoch == 0:
+            elif teacher_score < self.best_score or teacher_score <= student_score:
+                self.counter += 1
+                if epoch <= self.min_epoch + 1 and self.verbose:
+                    print(
+                        f"EarlyStopping counter: {min(self.counter,self.patience)}/{self.patience}"
+                    )
+                elif self.verbose:
+                    print(f"EarlyStopping counter: {self.counter}/{self.patience}")
+                if self.counter >= self.patience and epoch > self.min_epoch:
+                    self.early_stop = True
+
+        if self.save_every and epoch % self.save_every == 0:
             fname = f"snapshot_epoch_{epoch:03}.pt"
             torch.save(snapshot, Path(self.checkpoint_dir, fname))
 
@@ -801,8 +805,8 @@ def load_weights(model, state_dict):
     # remove `backbone.` prefix induced by multicrop wrapper
     state_dict = {k.replace("backbone.", ""): v for k, v in state_dict.items()}
     state_dict, msg = update_state_dict(model.state_dict(), state_dict)
-    msg = model.load_state_dict(state_dict, strict=False)
-    print(msg)
+    msg2 = model.load_state_dict(state_dict, strict=False)
+    tqdm.tqdm.write(msg)
 
 
 def tune_one_epoch(
@@ -824,21 +828,23 @@ def tune_one_epoch(
 
     student_model = vits.__dict__[arch](patch_size=patch_size, drop_path_rate=drop_path_rate, num_classes=0)
     teacher_model = vits.__dict__[arch](patch_size=patch_size, num_classes=0)
-    print(f"Teacher & student models {arch} {patch_size}x{patch_size} built.")
+    tqdm.tqdm.write(f"Teacher & student models {arch} {patch_size}x{patch_size} built.")
     student_model.cuda()
     teacher_model.cuda()
-    print(f"Loading epoch {epoch} weights...")
-    student_weights = student.stade_dict()
-    teacher_weights = teacher.stade_dict()
+    tqdm.tqdm.write(f"Loading epoch {epoch} weights...")
+    student_weights = student.state_dict()
+    teacher_weights = teacher.state_dict()
+    nn.modules.utils.consume_prefix_in_state_dict_if_present(student_weights, "module.")
+    nn.modules.utils.consume_prefix_in_state_dict_if_present(teacher_weights, "module.")
     load_weights(student_model, student_weights)
     load_weights(teacher_model, teacher_weights)
     student_model.eval()
     teacher_model.eval()
 
     # ============ extract student features ============
-    print("Extracting features for train set...")
+    tqdm.tqdm.write("Extracting features for train set...")
     train_features, train_labels = extract_multiple_features(student_model, teacher_model, train_dataloader, distributed, use_cuda)
-    print("Extracting features for test set...")
+    tqdm.tqdm.write("Extracting features for test set...")
     test_features, test_labels = extract_multiple_features(student_model, teacher_model, test_dataloader, distributed, use_cuda)
 
     teacher_train_features, teacher_test_features = train_features["teacher"], test_features["teacher"]
@@ -846,21 +852,25 @@ def tune_one_epoch(
 
     # save features and labels
     if save_features and is_main_process():
-        torch.save(train_features.cpu(), Path(features_dir, "train_feat.pth"))
-        torch.save(test_features.cpu(), Path(features_dir, "test_feat.pth"))
+        for name, feats in train_features.items():
+            torch.save(feats.cpu(), Path(features_dir, f"{name}_train_feat.pth"))
+        for name, feats in train_features.items():
+            torch.save(feats.cpu(), Path(features_dir, f"{name}_test_feat.pth"))
         torch.save(train_labels.cpu(), Path(features_dir, "train_labels.pth"))
         torch.save(test_labels.cpu(), Path(features_dir, "test_labels.pth"))
 
     results = defaultdict(dict)
     if is_main_process():
+        assert len(torch.unique(train_labels)) == len(torch.unique(test_labels)), "train & test dataset have different number of classes!"
+        num_classes = len(torch.unique(train_labels))
         if use_cuda:
             teacher_train_features, teacher_test_features = teacher_train_features.cuda(), teacher_test_features.cuda()
             student_train_features, student_test_features = student_train_features.cuda(), student_test_features.cuda()
             train_labels, test_labels = train_labels.cuda(), test_labels.cuda()
 
         print("Features are ready!\nStarting kNN classification.")
-        teacher_acc, teacher_auc = knn_classifier(teacher_train_features, train_labels, teacher_test_features, test_labels, k, temperature)
-        student_acc, student_auc = knn_classifier(student_train_features, train_labels, student_test_features, test_labels, k, temperature)
+        teacher_acc, teacher_auc = knn_classifier(teacher_train_features, train_labels, teacher_test_features, test_labels, k, temperature, num_classes)
+        student_acc, student_auc = knn_classifier(student_train_features, train_labels, student_test_features, test_labels, k, temperature, num_classes)
         results["teacher"].update({'acc': teacher_acc, 'auc': teacher_auc})
         results["student"].update({'acc': student_acc, 'auc': student_auc})
 

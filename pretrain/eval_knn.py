@@ -1,4 +1,5 @@
 import os
+import sys
 import tqdm
 import hydra
 import numpy as np
@@ -185,6 +186,7 @@ def extract_multiple_features(
         ncols=80,
         unit_scale=loader.batch_size,
         leave=True,
+        file=sys.stdout,
     ) as t:
 
         for i, batch in enumerate(t):
@@ -198,7 +200,7 @@ def extract_multiple_features(
                 teacher_feats = multi_scale(img, teacher)
             else:
                 student_feats = student(img).clone()
-                teacher_feats = teacher_feats(img).clone()
+                teacher_feats = teacher(img).clone()
 
             # init storage feature matrix
             if is_main_process() and student_features is None and teacher_features is None:
@@ -328,7 +330,7 @@ def extract_features(model, loader, distributed, use_cuda=True, multiscale=False
 
 
 @torch.no_grad()
-def knn_classifier(train_features, train_labels, test_features, test_labels, k, T, num_classes=2):
+def knn_classifier(train_features, train_labels, test_features, test_labels, k, T, num_classes):
     acc, total = 0.0, 0
     test_probs = np.empty((0, num_classes))
     train_features = train_features.t()
@@ -372,8 +374,7 @@ def knn_classifier(train_features, train_labels, test_features, test_labels, k, 
     if num_classes == 2:
         auc = metrics.roc_auc_score(test_labels.cpu(), test_probs[:, 1])
     else:
-        print("WARNING: multi-class AUC not implemented")
-        auc = -1
+        auc = metrics.roc_auc_score(test_labels.cpu(), test_probs, multi_class='ovr')
 
     return acc, auc
 
@@ -420,13 +421,15 @@ def main(cfg: DictConfig):
         )
 
     if is_main_process():
+        assert len(torch.unique(train_labels)) == len(torch.unique(test_labels)), "train & test dataset have different number of classes!"
+        num_classes = len(torch.unique(train_labels))
         if cfg.speed.use_cuda:
             train_features, train_labels = train_features.cuda(), train_labels.cuda()
             test_features, test_labels = test_features.cuda(), test_labels.cuda()
 
         print("Features are ready!\nStarting kNN classification.")
         for k in cfg.nb_knn:
-            acc, auc = knn_classifier(train_features, train_labels, test_features, test_labels, k, cfg.temperature)
+            acc, auc = knn_classifier(train_features, train_labels, test_features, test_labels, k, cfg.temperature, num_classes)
             print(f"{k}-NN classifier result:")
             print(f"- auc: {auc}")
             print(f"- accuracy: {acc:.2f}%")
