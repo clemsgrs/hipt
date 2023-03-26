@@ -11,6 +11,7 @@ import datetime
 import torch
 import torch.nn as nn
 import torch.backends.cudnn as cudnn
+import pandas as pd
 
 from pathlib import Path
 from omegaconf import DictConfig
@@ -80,6 +81,21 @@ def main(cfg: DictConfig):
     if is_main_process():
         print(f"Loading data...")
 
+    # ============ preparing tuning data ============
+    if is_main_process() and cfg.early_stopping.tune_every:
+        # only do it from master rank as tuning is not being run distributed for now
+        train_df = pd.read_csv(cfg.early_stopping.downstream.train_csv)
+        test_df = pd.read_csv(cfg.early_stopping.downstream.test_csv)
+        downstream_train_loader, downstream_test_loader = prepare_data(
+            train_df,
+            test_df,
+            cfg.early_stopping.downstream.batch_size_per_gpu,
+            False,
+            cfg.early_stopping.downstream.num_workers,
+            cfg.early_stopping.downstream.label_name,
+        )
+        print(f"Tuning data loaded with {len(downstream_train_loader.dataset)} train patches and {len(downstream_test_loader.dataset)} test patches.")
+
     transform = PatchDataAugmentationDINO(
         cfg.aug.global_crops_scale,
         cfg.aug.local_crops_scale,
@@ -108,17 +124,6 @@ def main(cfg: DictConfig):
     )
     if is_main_process():
         print(f"Training data loaded: there are {len(dataset)} patches.")
-
-    # ============ preparing tuning data ============
-    if is_main_process() and cfg.early_stopping.tune_every:
-        # only do it from master rank as tuning is not being run distributed for now
-        downstream_train_loader, downstream_test_loader = prepare_data(
-            cfg.early_stopping.downstream.data_dir,
-            cfg.early_stopping.downstream.batch_size_per_gpu,
-            False,
-            cfg.early_stopping.downstream.num_workers,
-        )
-        print(f"Tuning data loaded with {len(downstream_train_loader.dataset)} train and {len(downstream_test_loader.dataset)} test downstream_test_loader.")
 
     # building student and teacher networks
     if is_main_process():
