@@ -505,11 +505,11 @@ class EarlyStoppingDINO:
             elif teacher_score < self.best_score or teacher_score <= student_score:
                 self.counter += 1
                 if epoch <= self.min_epoch + 1 and self.verbose:
-                    print(
+                    tqdm.tqdm.write(
                         f"EarlyStopping counter: {min(self.counter,self.patience)}/{self.patience}"
                     )
                 elif self.verbose:
-                    print(f"EarlyStopping counter: {self.counter}/{self.patience}")
+                    tqdm.tqdm.write(f"EarlyStopping counter: {self.counter}/{self.patience}")
                 if self.counter >= self.patience and epoch > self.min_epoch:
                     self.early_stop = True
 

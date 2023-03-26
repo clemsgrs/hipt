@@ -11,12 +11,14 @@ import torch.distributed as dist
 import torch.backends.cudnn as cudnn
 
 from pathlib import Path
+from typing import Optional
 from sklearn import metrics
 from omegaconf import DictConfig
 from torchvision import datasets
 from torchvision import transforms
 
 import source.vision_transformer as vits
+from source.dataset import ImagePretrainingDataset
 
 
 def is_dist_avail_and_initialized():
@@ -37,10 +39,50 @@ def is_main_process():
     return get_rank() == 0
 
 
-class ReturnIndexDataset(datasets.ImageFolder):
+class ReturnIndexDataset(ImagePretrainingDataset):
     def __getitem__(self, idx):
         img, label = super(ReturnIndexDataset, self).__getitem__(idx)
         return idx, img, label
+
+
+def prepare_data(
+    train_df: pd.DataFrame,
+    test_df: pd.DataFrame,
+    batch_size_per_gpu,
+    distributed,
+    num_workers,
+    label_name: Optional[str] = None,
+):
+
+    # ============ preparing data ... ============
+    transform = transforms.Compose([
+        transforms.Resize(256, interpolation=transforms.InterpolationMode.BICUBIC),
+        transforms.CenterCrop(224),
+        transforms.ToTensor(),
+        transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
+    ])
+    dataset_train = ReturnIndexDataset(train_df, transform=transform, label_name=label_name)
+    dataset_test = ReturnIndexDataset(test_df, transform=transform, label_name=label_name)
+    if distributed:
+        sampler = torch.utils.data.DistributedSampler(dataset_train, shuffle=False)
+    else:
+        sampler = torch.utils.data.RandomSampler(dataset_train)
+    data_loader_train = torch.utils.data.DataLoader(
+        dataset_train,
+        sampler=sampler,
+        batch_size=batch_size_per_gpu,
+        num_workers=num_workers,
+        pin_memory=True,
+        drop_last=False,
+    )
+    data_loader_test = torch.utils.data.DataLoader(
+        dataset_test,
+        batch_size=batch_size_per_gpu,
+        num_workers=num_workers,
+        pin_memory=True,
+        drop_last=False,
+    )
+    return data_loader_train, data_loader_test
 
 
 def load_pretrained_weights(model, pretrained_weights, checkpoint_key):
@@ -124,44 +166,6 @@ def extract_feature_pipeline(
         torch.save(train_labels.cpu(), Path(features_dir, "train_labels.pt"))
         torch.save(test_labels.cpu(), Path(features_dir, "test_labels.pt"))
     return train_features, test_features, train_labels, test_labels
-
-
-def prepare_data(
-    data_dir: str,
-    batch_size_per_gpu,
-    distributed,
-    num_workers,
-):
-
-    # ============ preparing data ... ============
-    transform = transforms.Compose([
-        transforms.Resize(256, interpolation=transforms.InterpolationMode.BICUBIC),
-        transforms.CenterCrop(224),
-        transforms.ToTensor(),
-        transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
-    ])
-    dataset_train = ReturnIndexDataset(Path(data_dir, "train"), transform=transform)
-    dataset_test = ReturnIndexDataset(Path(data_dir, "test"), transform=transform)
-    if distributed:
-        sampler = torch.utils.data.DistributedSampler(dataset_train, shuffle=False)
-    else:
-        sampler = torch.utils.data.RandomSampler(dataset_train)
-    data_loader_train = torch.utils.data.DataLoader(
-        dataset_train,
-        sampler=sampler,
-        batch_size=batch_size_per_gpu,
-        num_workers=num_workers,
-        pin_memory=True,
-        drop_last=False,
-    )
-    data_loader_test = torch.utils.data.DataLoader(
-        dataset_test,
-        batch_size=batch_size_per_gpu,
-        num_workers=num_workers,
-        pin_memory=True,
-        drop_last=False,
-    )
-    return data_loader_train, data_loader_test
 
 
 @torch.no_grad()
