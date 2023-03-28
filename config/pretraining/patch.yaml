@@ -1,9 +1,10 @@
-data_dir: '/data/pathology/projects/ais-cap/code/git/clemsgrs/hipt/data/panda_radboud/dino/patch_256_pretraining'
-output_dir: '/data/pathology/projects/ais-cap/code/git/clemsgrs/hipt/output/panda_radboud/dino'
+data_dir: '/data/pathology/projects/ais-cap/dataset/witali-liver/hipt/dino/patch_256_pretraining'
+
+output_dir: '/data/pathology/projects/ais-cap/code/git/clemsgrs/hipt/output/witali_liver/dino'
 experiment_name: 'patch'
 
 start_from_checkpoint:
-resume: True
+resume: False
 resume_from_checkpoint: 'latest.pth'
 seed: 0
 
@@ -29,13 +30,18 @@ training:
   pct:
 
 early_stopping:
-  tune_every: 10 # leave blank if you don't want to use early stopping mechanism
+  tune_every: 5 # leave blank if you don't want to use early stopping mechanism
   tracking: 'auc'
-  min_max: 'min'
+  min_max: 'max'
   patience: 10
   min_epoch: 30
-  save_all: False
   save_every: 10 # save checkpoint every x epochs
+  downstream:
+    train_csv: '/data/pathology/projects/ais-cap/dataset/witali-liver/hipt/dino/downstream_task/2-class/train.csv'
+    test_csv: '/data/pathology/projects/ais-cap/dataset/witali-liver/hipt/dino/downstream_task/2-class/test.csv'
+    label_name: 'label'
+    batch_size_per_gpu: 128
+    num_workers: 4
   knn:
     k: 20
     temperature: 0.07

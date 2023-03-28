@@ -104,6 +104,9 @@ def main(cfg: DictConfig):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     print()
+    slide_ids, region_slide_ids = [], []
+    slide_feature_paths, region_feature_paths = [], []
+    x_coords, y_coords = [], [], []
 
     with tqdm.tqdm(
         loader,
@@ -122,6 +125,7 @@ def main(cfg: DictConfig):
 
                 idx, region_fps = batch
                 slide_id = process_stack.loc[idx.item(), "slide_id"]
+                slide_ids.append(slide_id)
                 features = []
 
                 with tqdm.tqdm(
@@ -136,6 +140,9 @@ def main(cfg: DictConfig):
                     for fp in t2:
 
                         x_y = Path(fp).stem
+                        x, y = int(x_y.split('_')[0]), int(x_y.split('_')[1])
+                        x_coords.append(x)
+                        y_coords.append(y)
                         img = Image.open(fp)
                         img = transforms.functional.to_tensor(img)  # [3, 4096, 4096]
                         img = img.unsqueeze(0)  # [1, 3, 4096, 4096]
@@ -144,6 +151,8 @@ def main(cfg: DictConfig):
                         if cfg.save_region_features:
                             save_path = Path(region_features_dir, f"{slide_id}_{x_y}.pt")
                             torch.save(feature, save_path)
+                            region_feature_paths.append(save_path)
+                            region_slide_ids.append(slide_id)
                         features.append(feature)
 
                 stacked_features = torch.stack(features, dim=0).squeeze(1)
@@ -159,6 +168,23 @@ def main(cfg: DictConfig):
 
                 if cfg.wandb.enable:
                     wandb.log({"processed": already_processed + i + 1})
+
+    slide_features_df = pd.DataFrame.from_dict({
+        'feature_path': slide_feature_paths,
+        'slide_id': slide_ids,
+        'level': [f'{cfg.level}']*len(slide_ids),
+        'tile_size': [cfg.patch_size]*len(slide_ids),
+    })
+    region_features_df = pd.DataFrame.from_dict({
+        'feature_path': region_feature_paths,
+        'slide_id': region_slide_ids,
+        'level': [f'{cfg.level}']*len(region_slide_ids),
+        'tile_size': [cfg.patch_size]*len(region_slide_ids),
+        'x': x_coords,
+        'y': y_coords,
+    })
+    slide_features_df.to_csv(Path(features_dir, 'slide_features.csv'))
+    region_features_df.to_csv(Path(features_dir, 'region_features.csv'))
 
 
 if __name__ == "__main__":

@@ -103,7 +103,13 @@ def main(cfg: DictConfig):
     )
 
     # ============ preparing training data ============
+    dataset_loading_start_time = time.time()
     dataset = datasets.ImageFolder(cfg.data_dir, transform=transform)
+    dataset_loading_end_time = time.time() - dataset_loading_start_time
+    total_time_str = str(datetime.timedelta(seconds=int(dataset_loading_end_time)))
+    if is_main_process():
+        print(f"Pretraining data loaded in {total_time_str} ({len(dataset)} patches)")
+
     if cfg.training.pct:
         print(f"Pre-training on {cfg.training.pct*100}% of the data")
         nsample = int(cfg.training.pct * len(dataset))
@@ -122,8 +128,6 @@ def main(cfg: DictConfig):
         pin_memory=True,
         drop_last=True,
     )
-    if is_main_process():
-        print(f"Training data loaded: there are {len(dataset)} patches.")
 
     # building student and teacher networks
     if is_main_process():
