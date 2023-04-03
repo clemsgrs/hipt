@@ -1,6 +1,6 @@
 data_dir: '/data/pathology/projects/ais-cap/dataset/witali-liver/hipt/dino/patch_256_pretraining'
 
-output_dir: '/data/pathology/projects/ais-cap/code/git/clemsgrs/hipt/output/witali_liver/dino'
+output_dir: '/data/pathology/projects/ais-cap/code/git/clemsgrs/hipt/output/witali-liver/dino'
 experiment_name: 'patch'
 
 start_from_checkpoint:

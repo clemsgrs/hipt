@@ -67,7 +67,7 @@ def prepare_data(
     if distributed:
         sampler = torch.utils.data.DistributedSampler(dataset_train, shuffle=False)
     else:
-        sampler = torch.utils.data.RandomSampler(dataset_train)
+        sampler = torch.utils.data.SequentialSampler(dataset_train)
     data_loader_train = torch.utils.data.DataLoader(
         dataset_train,
         sampler=sampler,
@@ -120,7 +120,8 @@ def multi_scale(samples, model):
 
 
 def extract_feature_pipeline(
-    data_dir: str,
+    train_df: pd.DataFrame,
+    test_df: pd.DataFrame,
     features_dir: str,
     arch: str,
     patch_size: int,
@@ -131,14 +132,17 @@ def extract_feature_pipeline(
     save_features: bool = False,
     use_cuda: bool = True,
     num_workers: int = 10,
+    label_name: Optional[str] = None,
 ):
 
     # ============ preparing data ... ============
     data_loader_train, data_loader_test = prepare_data(
-        data_dir,
+        train_df,
+        test_df,
         batch_size_per_gpu,
         distributed,
         num_workers,
+        label_name,
     )
     print(f"Data loaded with {len(data_loader_train.dataset)} train and {len(data_loader_test.dataset)} eval imgs.")
 
@@ -327,6 +331,8 @@ def extract_features(model, loader, distributed, use_cuda=True, multiscale=False
                         features.index_copy_(0, index_all, torch.cat(output_l))
                     else:
                         features.index_copy_(0, index_all.cpu(), torch.cat(output_l).cpu())
+            else:
+                features[list(index),:] = feats
 
     labels = torch.tensor(labels).long()
 
@@ -410,8 +416,11 @@ def main(cfg: DictConfig):
         test_labels = torch.load(Path(cfg.features_dir, "test_labels.pt"))
     else:
         # need to extract features !
+        train_df = pd.read_csv(cfg.train_csv)
+        test_df = pd.read_csv(cfg.test_csv)
         train_features, test_features, train_labels, test_labels = extract_feature_pipeline(
-            cfg.data_dir,
+            train_df,
+            test_df,
             cfg.features_dir,
             cfg.model.arch,
             cfg.model.patch_size,
@@ -422,6 +431,7 @@ def main(cfg: DictConfig):
             save_features=cfg.save_features,
             use_cuda=cfg.speed.use_cuda,
             num_workers=cfg.speed.num_workers,
+            label_name=cfg.label_name,
         )
 
     if is_main_process():
