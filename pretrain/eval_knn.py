@@ -260,6 +260,9 @@ def extract_multiple_features(
                     else:
                         student_features.index_copy_(0, index_all.cpu(), torch.cat(student_output_l).cpu())
                         teacher_features.index_copy_(0, index_all.cpu(), torch.cat(teacher_output_l).cpu())
+            else:
+                student_features[list(index),:] = student_feats
+                teacher_features[list(index),:] = teacher_feats
 
     if is_main_process():
         student_features = nn.functional.normalize(student_features, dim=1, p=2)

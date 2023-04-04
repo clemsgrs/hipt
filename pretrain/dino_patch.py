@@ -19,7 +19,7 @@ from torchvision import datasets
 
 import source.vision_transformer as vits
 
-from source.utils import initialize_wandb, compute_time
+from source.utils import initialize_wandb, compute_time, update_log_dict
 from source.components import DINOLoss
 from eval_knn import prepare_data
 from utils import (
@@ -295,7 +295,7 @@ def main(cfg: DictConfig):
 
             epoch_start_time = time.time()
             if cfg.wandb.enable and is_main_process():
-                wandb.log({"epoch": epoch + 1})
+                log_dict = {"epoch": epoch+1}
 
             if distributed:
                 data_loader.sampler.set_epoch(epoch)
@@ -319,13 +319,10 @@ def main(cfg: DictConfig):
                 gpu_id,
             )
 
-            lr = train_stats["lr"]
-            loss = train_stats["loss"]
             if cfg.wandb.enable and is_main_process():
-                wandb.define_metric("train/lr", step_metric="epoch")
-                wandb.define_metric("train/loss", step_metric="epoch")
-                wandb.log({"train/lr": lr})
-                wandb.log({"train/loss": loss})
+                update_log_dict(
+                    "train", train_stats, log_dict, step="epoch"
+                )
 
             if is_main_process():
                 snapshot = {
@@ -359,10 +356,10 @@ def main(cfg: DictConfig):
                     cfg.early_stopping.knn.use_cuda,
                 )
 
-                if cfg.wandb.enable:
-                    for k, v in tune_results.items():
-                        wandb.define_metric(f"tune/{k}", step_metric="epoch")
-                        wandb.log({f"tune/{k}": v})
+                if cfg.wandb.enable and is_main_process():
+                    update_log_dict(
+                        "tune", tune_results, log_dict, step="epoch"
+                    )
 
             if is_main_process():
                 early_stopping(epoch, tune_results, snapshot)
@@ -385,6 +382,9 @@ def main(cfg: DictConfig):
                     and not save_path.is_file()
                 ):
                     torch.save(snapshot, save_path)
+
+                if cfg.wandb.enable:
+                    wandb.log(log_dict, step=epoch+1)
 
             log_stats = {
                 **{f"train_{k}": v for k, v in train_stats.items()},
