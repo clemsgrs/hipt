@@ -849,7 +849,7 @@ def tune_one_epoch(
     test_features, test_labels = extract_multiple_features(student_model, teacher_model, test_dataloader, distributed, use_cuda)
 
     teacher_train_features, teacher_test_features = train_features["teacher"], test_features["teacher"]
-    student_train_features, student_test_features = train_features["teacher"], test_features["teacher"]
+    student_train_features, student_test_features = train_features["student"], test_features["student"]
 
     # save features and labels
     if save_features and is_main_process():
