@@ -8,6 +8,34 @@ from typing import Optional
 from omegaconf import DictConfig
 
 
+class LossFactory:
+    def __init__(
+        self,
+        task: str,
+        loss: Optional[str] = None,
+        label_encoding: Optional[str] = None,
+        loss_options: Optional[DictConfig] = None,
+    ):
+
+        if task == "subtyping":
+            if loss == "ce":
+                if label_encoding == "ordinal":
+                    self.criterion = nn.BCEWithLogitsLoss()
+                else:
+                    self.criterion = nn.CrossEntropyLoss()
+            elif loss == "mse":
+                self.criterion = nn.MSELoss()
+            elif loss == "ordinal":
+                self.criterion = nn.MSELoss()
+
+        elif task == "survival":
+            self.criterion = NLLSurvLoss()
+            # self.criterion = NLLSurvLoss(alpha=loss_options.alpha)
+
+    def get_loss(self):
+        return self.criterion
+
+
 def nll_loss(hazards, survival, Y, c, alpha=0.4, eps=1e-7):
     """
     Continuous time scale divided into k discrete bins: T_cont \in {[0, a_1), [a_1, a_2), ...., [a_(k-1), inf)}
@@ -134,27 +162,3 @@ class DINOLoss(nn.Module):
         self.center = self.center * self.center_momentum + batch_center * (
             1 - self.center_momentum
         )
-
-
-class LossFactory:
-    def __init__(
-        self,
-        task: str,
-        loss: Optional[str] = None,
-        loss_options: Optional[DictConfig] = None,
-    ):
-
-        if task == "subtyping":
-            if loss == "ce":
-                self.criterion = nn.CrossEntropyLoss()
-            elif loss == "mse":
-                self.criterion = nn.MSELoss()
-            elif loss == "ordinal":
-                self.criterion = nn.MSELoss()
-
-        elif task == "survival":
-            self.criterion = NLLSurvLoss()
-            # self.criterion = NLLSurvLoss(alpha=loss_options.alpha)
-
-    def get_loss(self):
-        return self.criterion
