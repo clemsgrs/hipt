@@ -137,13 +137,20 @@ class DatasetFactory:
     ):
 
         if task == "subtyping":
-            self.dataset = ExtractedFeaturesDataset(
-                options.df,
-                options.features_dir,
-                options.label_name,
-                options.label_mapping,
-                options.label_encoding,
-            )
+            if options.label_encoding == "ordinal":
+                self.dataset = ExtractedFeaturesOrdinalDataset(
+                    options.df,
+                    options.features_dir,
+                    options.label_name,
+                    options.label_mapping,
+                )
+            else:
+                self.dataset = ExtractedFeaturesDataset(
+                    options.df,
+                    options.features_dir,
+                    options.label_name,
+                    options.label_mapping,
+                )
         elif task == "survival":
             if options.tiles_df is not None:
                 if agg_method == "concat":
@@ -199,12 +206,10 @@ class ExtractedFeaturesDataset(torch.utils.data.Dataset):
         features_dir: Path,
         label_name: str = "label",
         label_mapping: Dict[int, int] = {},
-        label_encoding: Optional[str] = None,
     ):
         self.features_dir = features_dir
         self.label_name = label_name
         self.label_mapping = label_mapping
-        self.label_encoding = label_encoding
 
         self.df = self.prepare_data(df)
 
@@ -243,15 +248,31 @@ class ExtractedFeaturesDataset(torch.utils.data.Dataset):
         slide_id = row.slide_id
         fp = Path(self.features_dir, f"{slide_id}.pt")
         features = torch.load(fp)
-
         label = row.label
-        if self.label_encoding == "ordinal":
-            label = [1] * (label + 1) + [0] * (self.num_classes - label - 1)
-
         return idx, features, label
 
     def __len__(self):
         return len(self.df)
+
+
+class ExtractedFeaturesOrdinalDataset(ExtractedFeaturesDataset):
+    def __init__(
+        self,
+        df: pd.DataFrame,
+        features_dir: Path,
+        label_name: str = "label",
+        label_mapping: Dict[int, int] = {},
+    ):
+        super().__init__(df, features_dir, label_name, label_mapping)
+
+    def __getitem__(self, idx: int):
+        row = self.df.loc[idx]
+        slide_id = row.slide_id
+        fp = Path(self.features_dir, f"{slide_id}.pt")
+        features = torch.load(fp)
+        label = np.zeros(self.num_classes).astype(np.float32)
+        label[:row.label] = 1.
+        return idx, features, label
 
 
 class ExtractedFeaturesSurvivalDataset(torch.utils.data.Dataset):
