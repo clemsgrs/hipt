@@ -375,7 +375,7 @@ def knn_classifier(train_features, train_labels, test_features, test_labels, k, 
             1,
         )
         _, predictions = probs.sort(1, True)
-        p = F.softmax(probs, dim=1).cpu().detach().numpy()
+        p = (probs / probs.sum(dim=-1).unsqueeze(-1)).cpu().detach().numpy()
         test_probs = np.append(test_probs, p, axis=0)
 
         # find the predictions that match the target
