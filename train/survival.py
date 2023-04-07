@@ -110,7 +110,7 @@ def main(cfg: DictConfig):
 
     print("Configuring model")
     model = ModelFactory(
-        cfg.level, num_classes=cfg.nbins, model_options=cfg.model
+        cfg.level, num_classes=cfg.nbins, task="survival", model_options=cfg.model
     ).get_model()
     model.relocate()
     print(model)
@@ -158,6 +158,7 @@ def main(cfg: DictConfig):
                 criterion,
                 agg_method=cfg.model.agg_method,
                 batch_size=cfg.training.batch_size,
+                weighted_sampling=cfg.training.weighted_sampling,
                 gradient_accumulation=cfg.training.gradient_accumulation,
             )
 

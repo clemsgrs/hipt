@@ -129,7 +129,7 @@ def main(cfg: DictConfig):
         tune_dataset = DatasetFactory("survival", tune_dataset_options, cfg.model.agg_method).get_dataset()
         test_dataset = DatasetFactory("survival", test_dataset_options, cfg.model.agg_method).get_dataset()
 
-        model = ModelFactory(cfg.level, cfg.nbins, cfg.model).get_model()
+        model = ModelFactory(cfg.level, cfg.nbins, "survival", cfg.model).get_model()
         model.relocate()
         print(model)
 
@@ -179,6 +179,7 @@ def main(cfg: DictConfig):
                     criterion,
                     agg_method=cfg.model.agg_method,
                     batch_size=cfg.training.batch_size,
+                    weighted_sampling=cfg.training.weighted_sampling,
                     gradient_accumulation=cfg.training.gradient_accumulation,
                 )
 
