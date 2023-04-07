@@ -17,66 +17,79 @@ class ModelFactory:
         self,
         level: str,
         num_classes: int = 2,
+        task: str = "classification",
         model_options: Optional[DictConfig] = None,
     ):
 
-        if level == "global":
-            if model_options.agg_method == "self_att":
-                if model_options.slide_pos_embed.type == '2d' and model_options.slide_pos_embed.use:
-                    self.model = GlobalPatientLevelCoordsHIPT(
-                        num_classes=num_classes,
-                        dropout=model_options.dropout,
-                        slide_pos_embed=model_options.slide_pos_embed,
-                    )
+        if task in ["classification", "survival"]:
+            if level == "global":
+                if model_options.agg_method == "self_att":
+                    if model_options.slide_pos_embed.type == '2d' and model_options.slide_pos_embed.use:
+                        self.model = GlobalPatientLevelCoordsHIPT(
+                            num_classes=num_classes,
+                            dropout=model_options.dropout,
+                            slide_pos_embed=model_options.slide_pos_embed,
+                        )
+                    else:
+                        self.model = GlobalPatientLevelHIPT(
+                            num_classes=num_classes,
+                            dropout=model_options.dropout,
+                            slide_pos_embed=model_options.slide_pos_embed,
+                        )
+                elif model_options.agg_method == "concat" or not model_options.agg_method:
+                    if model_options.slide_pos_embed.type == '2d' and model_options.slide_pos_embed.use:
+                        self.model = GlobalCoordsHIPT(
+                            num_classes=num_classes,
+                            dropout=model_options.dropout,
+                            slide_pos_embed=model_options.slide_pos_embed,
+                        )
+                    else:
+                        self.model = GlobalHIPT(
+                            num_classes=num_classes,
+                            dropout=model_options.dropout,
+                            slide_pos_embed=model_options.slide_pos_embed,
+                        )
                 else:
-                    self.model = GlobalPatientLevelHIPT(
-                        num_classes=num_classes,
-                        dropout=model_options.dropout,
-                        slide_pos_embed=model_options.slide_pos_embed,
+                    raise ValueError(
+                        f"cfg.model.agg_method ({model_options.agg_method}) not supported"
                     )
-            elif model_options.agg_method == "concat" or not model_options.agg_method:
-                if model_options.slide_pos_embed.type == '2d' and model_options.slide_pos_embed.use:
-                    self.model = GlobalCoordsHIPT(
-                        num_classes=num_classes,
-                        dropout=model_options.dropout,
-                        slide_pos_embed=model_options.slide_pos_embed,
-                    )
-                else:
-                    self.model = GlobalHIPT(
-                        num_classes=num_classes,
-                        dropout=model_options.dropout,
-                        slide_pos_embed=model_options.slide_pos_embed,
-                    )
-            else:
-                raise ValueError(
-                    f"cfg.model.agg_method ({model_options.agg_method}) not supported"
+            elif level == "local":
+                self.model = LocalGlobalHIPT(
+                    num_classes=num_classes,
+                    region_size=model_options.region_size,
+                    patch_size=model_options.patch_size,
+                    pretrain_vit_region=model_options.pretrain_vit_region,
+                    freeze_vit_region=model_options.freeze_vit_region,
+                    freeze_vit_region_pos_embed=model_options.freeze_vit_region_pos_embed,
+                    dropout=model_options.dropout,
+                    slide_pos_embed=model_options.slide_pos_embed,
                 )
-        elif level == "local":
-            self.model = LocalGlobalHIPT(
-                num_classes=num_classes,
-                region_size=model_options.region_size,
-                patch_size=model_options.patch_size,
-                pretrain_vit_region=model_options.pretrain_vit_region,
-                freeze_vit_region=model_options.freeze_vit_region,
-                freeze_vit_region_pos_embed=model_options.freeze_vit_region_pos_embed,
-                dropout=model_options.dropout,
-                slide_pos_embed=model_options.slide_pos_embed,
-            )
-        else:
-            self.model = HIPT(
-                num_classes=num_classes,
-                pretrain_vit_patch=model_options.pretrain_vit_patch,
-                freeze_vit_patch=model_options.freeze_vit_patch,
-                freeze_vit_patch_pos_embed=model_options.freeze_vit_patch_pos_embed,
-                mini_patch_size=model_options.mini_patch_size,
-                pretrain_vit_region=model_options.pretrain_vit_region,
-                freeze_vit_region=model_options.freeze_vit_region,
-                freeze_vit_region_pos_embed=model_options.freeze_vit_region_pos_embed,
-                region_size=model_options.region_size,
-                patch_size=model_options.patch_size,
-                dropout=model_options.dropout,
-                slide_pos_embed=model_options.slide_pos_embed,
-            )
+            else:
+                self.model = HIPT(
+                    num_classes=num_classes,
+                    pretrain_vit_patch=model_options.pretrain_vit_patch,
+                    freeze_vit_patch=model_options.freeze_vit_patch,
+                    freeze_vit_patch_pos_embed=model_options.freeze_vit_patch_pos_embed,
+                    mini_patch_size=model_options.mini_patch_size,
+                    pretrain_vit_region=model_options.pretrain_vit_region,
+                    freeze_vit_region=model_options.freeze_vit_region,
+                    freeze_vit_region_pos_embed=model_options.freeze_vit_region_pos_embed,
+                    region_size=model_options.region_size,
+                    patch_size=model_options.patch_size,
+                    dropout=model_options.dropout,
+                    slide_pos_embed=model_options.slide_pos_embed,
+                )
+        elif task == "regression":
+            if level == "global":
+                if model_options.agg_method == "self_att":
+                    raise KeyError(f"aggregation method '{model_options.agg_method}' is not supported yet for {task} task")
+                elif model_options.agg_method == "concat" or not model_options.agg_method:
+                    self.model = GlobalRegressionHIPT(
+                            num_classes=num_classes,
+                            dropout=model_options.dropout,
+                            slide_pos_embed=model_options.slide_pos_embed,
+                        )
+
 
     def get_model(self):
         return self.model
@@ -966,5 +979,70 @@ class GlobalPatientLevelCoordsHIPT(GlobalPatientLevelHIPT):
         z_patient = self.global_rho_patient(z_att)
 
         logits = self.classifier(z_patient)
+
+        return logits
+
+
+class GlobalRegressionHIPT(GlobalHIPT):
+    def __init__(
+        self,
+        num_classes: int = 2,
+        embed_dim_region: int = 192,
+        d_model: int = 192,
+        dropout: float = 0.25,
+        slide_pos_embed: Optional[DictConfig] = None,
+    ):
+
+        super().__init__(num_classes, embed_dim_region, d_model, dropout, slide_pos_embed)
+        self.classifier = nn.Linear(192, 1)
+
+
+class GlobalOrdinalHIPT(GlobalHIPT):
+    def __init__(
+        self,
+        num_classes: int = 2,
+        embed_dim_region: int = 192,
+        d_model: int = 192,
+        dropout: float = 0.25,
+        slide_pos_embed: Optional[DictConfig] = None,
+    ):
+
+        super().__init__(num_classes, embed_dim_region, d_model, dropout, slide_pos_embed)
+        self.classifier = nn.Linear(192, num_classes-1)
+
+
+class GlobalCoralHIPT(GlobalHIPT):
+    def __init__(
+        self,
+        num_classes: int = 2,
+        embed_dim_region: int = 192,
+        d_model: int = 192,
+        dropout: float = 0.25,
+        slide_pos_embed: Optional[DictConfig] = None,
+    ):
+
+        super().__init__(num_classes, embed_dim_region, d_model, dropout, slide_pos_embed)
+        self.classifier = nn.Linear(192, 1, bias=False)
+        self.bias = nn.Parameter(torch.zeros(num_classes-1).float())
+
+    def forward(self, x):
+
+        # x = [M, 192]
+        x = self.global_phi(x)
+
+        if self.slide_pos_embed.use:
+            x = self.pos_encoder(x)
+
+        # in nn.TransformerEncoderLayer, batch_first defaults to False
+        # hence, input is expected to be of shape (seq_length, batch, emb_size)
+        x = self.global_transformer(x.unsqueeze(1)).squeeze(1)
+        att, x = self.global_attn_pool(x)
+        att = torch.transpose(att, 1, 0)
+        att = F.softmax(att, dim=1)
+        x_att = torch.mm(att, x)
+        x_wsi = self.global_rho(x_att)
+
+        logits = self.classifier(x_wsi)
+        logits = logits + self.bias
 
         return logits
