@@ -148,10 +148,13 @@ def compute_time(start_time, end_time):
     return elapsed_mins, elapsed_secs
 
 
-def get_binary_metrics(probs: np.array(float), preds: List[int], labels: List[int]):
+def get_binary_metrics(preds: List[int], labels: List[int], probs: Optional[np.array] = None):
     labels = np.asarray(labels)
     acc = metrics.accuracy_score(labels, preds)
-    auc = metrics.roc_auc_score(labels, probs)
+    if probs is not None:
+        auc = metrics.roc_auc_score(labels, probs)
+    else:
+        auc = -1.
     precision = metrics.precision_score(labels, preds, zero_division=0)
     recall = metrics.recall_score(labels, preds)
     metrics_dict = {
@@ -172,6 +175,8 @@ def get_metrics(
     labels = np.asarray(labels)
     if probs is not None:
         auc = metrics.roc_auc_score(labels, probs, multi_class=multi_class)
+    else:
+        auc = -1.
     quadratic_weighted_kappa = metrics.cohen_kappa_score(
         labels, preds, weights="quadratic"
     )
@@ -298,6 +303,13 @@ def get_preds_from_ordinal_logits(logits):
 
 def get_label_from_ordinal_label(label):
     return (label > 0.5).cumprod(axis=1).sum(axis=1)
+
+
+def get_label_from_regression_logits(logits, num_classes):
+    pred = torch.max(torch.min(torch.round(logits), torch.Tensor([num_classes-1])), torch.Tensor([0]))
+    # prob = (pred == logits) * torch.Tensor([1.0]) + (pred < logits) * (1 -(logits) % 1) + (pred > logits) * (logits % 1)
+    # need to deal with border values, e.g. logits < -0.5 or logits > num_classes-0.5
+    return pred
 
 
 def aggregated_cindex(df: pd.DataFrame, label_name: str = "label", agg: str = "mean"):
@@ -558,11 +570,11 @@ def train(
         dataset.df.loc[idxs, f"prob_{class_idx}"] = p.tolist()
 
     if dataset.num_classes == 2:
-        metrics = get_binary_metrics(probs[:, 1], preds, labels)
+        metrics = get_binary_metrics(preds, labels, probs[:, 1])
         # roc_auc_curve = get_roc_auc_curve(probs[:, 1], labels)
         # results.update({"roc_auc_curve": roc_auc_curve})
     else:
-        metrics = get_metrics(probs, preds, labels)
+        metrics = get_metrics(preds, labels, probs)
 
     results.update(metrics)
 
@@ -636,11 +648,11 @@ def tune(
         dataset.df.loc[idxs, f"prob_{class_idx}"] = p.tolist()
 
     if dataset.num_classes == 2:
-        metrics = get_binary_metrics(probs[:, 1], preds, labels)
+        metrics = get_binary_metrics(preds, labels, probs[:, 1])
         # roc_auc_curve = get_roc_auc_curve(probs[:, 1], labels)
         # results.update({"roc_auc_curve": roc_auc_curve})
     else:
-        metrics = get_metrics(probs, preds, labels)
+        metrics = get_metrics(preds, labels, probs)
 
     results.update(metrics)
 
@@ -708,12 +720,210 @@ def test(
         dataset.df.loc[idxs, f"prob_{class_idx}"] = p.tolist()
 
     if dataset.num_classes == 2:
-        metrics = get_binary_metrics(probs[:, 1], preds, labels)
+        metrics = get_binary_metrics(preds, labels, probs[:, 1])
         # roc_auc_curve = get_roc_auc_curve(probs[:, 1], labels)
         # results.update({"roc_auc_curve": roc_auc_curve})
     else:
-        metrics = get_metrics(probs, preds, labels)
+        metrics = get_metrics(preds, labels, probs)
 
+    results.update(metrics)
+
+    return results
+
+
+def train_regression(
+    epoch: int,
+    model: nn.Module,
+    dataset: torch.utils.data.Dataset,
+    optimizer: torch.optim.Optimizer,
+    criterion: Callable,
+    collate_fn: Callable = partial(collate_features, label_type="float"),
+    batch_size: Optional[int] = 1,
+    weighted_sampling: Optional[bool] = False,
+    gradient_accumulation: Optional[int] = None,
+):
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    model.train()
+    epoch_loss = 0
+    preds, labels = [], []
+    idxs = []
+
+    sampler = torch.utils.data.RandomSampler(dataset)
+    if weighted_sampling:
+        weights = make_weights_for_balanced_classes(dataset)
+        sampler = torch.utils.data.WeightedRandomSampler(
+            weights,
+            len(weights),
+        )
+
+    loader = torch.utils.data.DataLoader(
+        dataset,
+        batch_size=batch_size,
+        sampler=sampler,
+        collate_fn=collate_fn,
+    )
+
+    results = {}
+
+    with tqdm.tqdm(
+        loader,
+        desc=(f"Train - Epoch {epoch}"),
+        unit=" slide",
+        ncols=80,
+        unit_scale=batch_size,
+        leave=True,
+    ) as t:
+
+        for i, batch in enumerate(t):
+
+            optimizer.zero_grad()
+            idx, x, label = batch
+            x, label = x.to(device, non_blocking=True), label.to(
+                device, non_blocking=True
+            )
+            logits = model(x)
+            loss = criterion(logits, label)
+
+            loss_value = loss.item()
+            epoch_loss += loss_value
+
+            if gradient_accumulation:
+                loss = loss / gradient_accumulation
+
+            loss.backward()
+            optimizer.step()
+
+            pred = get_label_from_regression_logits(logits, dataset.num_classes)
+            preds.extend(pred[:, 0].clone().tolist())
+
+            labels.extend(label.clone().tolist())
+            idxs.extend(list(idx))
+
+    metrics = get_metrics(preds, labels)
+    results.update(metrics)
+
+    train_loss = epoch_loss / len(loader)
+    results["loss"] = train_loss
+
+    return results
+
+
+def tune_regression(
+    epoch: int,
+    model: nn.Module,
+    dataset: torch.utils.data.Dataset,
+    criterion: Callable,
+    collate_fn: Callable = partial(collate_features, label_type="float"),
+    batch_size: Optional[int] = 1,
+):
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    model.eval()
+    epoch_loss = 0
+    preds, labels = [], []
+    idxs = []
+
+    sampler = torch.utils.data.SequentialSampler(dataset)
+
+    loader = torch.utils.data.DataLoader(
+        dataset,
+        batch_size=batch_size,
+        sampler=sampler,
+        collate_fn=collate_fn,
+    )
+
+    results = {}
+
+    with tqdm.tqdm(
+        loader,
+        desc=(f"Tune - Epoch {epoch}"),
+        unit=" slide",
+        ncols=80,
+        unit_scale=batch_size,
+        leave=True,
+    ) as t:
+
+        with torch.no_grad():
+
+            for i, batch in enumerate(t):
+
+                idx, x, label = batch
+                x, label = x.to(device, non_blocking=True), label.to(
+                    device, non_blocking=True
+                )
+                logits = model(x)
+                loss = criterion(logits, label)
+
+                pred = get_label_from_regression_logits(logits, dataset.num_classes)
+                preds.extend(pred[:, 0].clone().tolist())
+
+                labels.extend(label.clone().tolist())
+                idxs.extend(list(idx))
+
+                epoch_loss += loss.item()
+
+    metrics = get_metrics(preds, labels)
+    results.update(metrics)
+
+    tune_loss = epoch_loss / len(loader)
+    results["loss"] = tune_loss
+
+    return results
+
+
+def test_regression(
+    model: nn.Module,
+    dataset: torch.utils.data.Dataset,
+    collate_fn: Callable = partial(collate_features, label_type="float"),
+    batch_size: Optional[int] = 1,
+):
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    model.eval()
+    preds, labels = [], []
+    idxs = []
+
+    sampler = torch.utils.data.SequentialSampler(dataset)
+
+    loader = torch.utils.data.DataLoader(
+        dataset,
+        batch_size=batch_size,
+        sampler=sampler,
+        collate_fn=collate_fn,
+    )
+
+    results = {}
+
+    with tqdm.tqdm(
+        loader,
+        desc=(f"Test"),
+        unit=" slide",
+        ncols=80,
+        unit_scale=batch_size,
+        leave=True,
+    ) as t:
+
+        with torch.no_grad():
+
+            for i, batch in enumerate(t):
+
+                idx, x, label = batch
+                x, label = x.to(device, non_blocking=True), label.to(
+                    device, non_blocking=True
+                )
+                logits = model(x)
+
+                pred = get_label_from_regression_logits(logits, dataset.num_classes)
+                preds.extend(pred[:, 0].clone().tolist())
+
+                labels.extend(label.clone().tolist())
+                idxs.extend(list(idx))
+
+    metrics = get_metrics(preds, labels)
     results.update(metrics)
 
     return results
@@ -928,6 +1138,7 @@ def train_survival(
     criterion: Callable,
     agg_method: Optional[str] = "concat",
     batch_size: Optional[int] = 1,
+    weighted_sampling: Optional[bool] = False,
     gradient_accumulation: Optional[int] = 1,
 ):
 
@@ -940,6 +1151,13 @@ def train_survival(
     idxs = []
 
     sampler = torch.utils.data.RandomSampler(dataset)
+    if weighted_sampling:
+        weights = make_weights_for_balanced_classes(dataset)
+        sampler = torch.utils.data.WeightedRandomSampler(
+            weights,
+            len(weights),
+        )
+
     if dataset.use_coords:
         collate_fn = partial(
             collate_survival_features_coords, label_type="int", agg_method=agg_method
