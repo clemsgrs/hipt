@@ -1,26 +1,27 @@
 data:
-  train_csv: ''
-  tune_csv: ''
-  test_csv: ''
+  train_csv: '/home/user/code/git/clemsgrs/hs2p/data/toy/train.csv'
+  tune_csv: '/home/user/code/git/clemsgrs/hs2p/data/toy/train.csv'
+  test_csv: '/home/user/code/git/clemsgrs/hs2p/data/toy/train.csv'
 
 features_dir:
 output_dir: 'output'
-experiment_name: 'tcga_brca'
+experiment_name: 'debug'
 level: 'global'
 
-nepochs: 50
+nepochs: 5
 num_classes: 2
 label_name: 'label'
 label_mapping:
+label_encoding:
 
-task: 'subtyping'
+task: 'classification'
 loss: 'ce'
 
 training:
   batch_size: 1
   pct:
-  weighted_sampling: True
-  gradient_accumulation: 32
+  weighted_sampling: False
+  gradient_accumulation: 1
 
 tuning:
   batch_size: 1
@@ -46,8 +47,6 @@ model:
     learned: False
     type: '1d'
     max_seq_len: 512
-    max_nslide: 21
-    tile_size: ${model.region_size}
 
 optim:
   name: 'adam'
@@ -67,7 +66,7 @@ early_stopping:
   save_all: False
 
 wandb:
-  enable: True
+  enable: False
   project: 'hipt'
   username: 'clemsg'
   exp_name: '${experiment_name}'

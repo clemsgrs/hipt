@@ -1,0 +1,83 @@
+data:
+  train_csv: ''
+  tune_csv: ''
+  test_csv: ''
+
+features_dir:
+output_dir: 'output'
+experiment_name: 'tcga_brca'
+level: 'global'
+
+nepochs: 50
+num_classes: 2
+label_name: 'label'
+label_mapping:
+label_encoding:
+
+task: 'classification'
+loss: 'ce'
+loss_options:
+  num_classes: ${num_classes}
+
+training:
+  batch_size: 1
+  pct:
+  weighted_sampling: True
+  gradient_accumulation: 32
+
+tuning:
+  batch_size: 1
+  tune_every: 1
+
+testing:
+  retrieve_checkpoint: 'best'
+
+model:
+  pretrain_vit_patch: 'checkpoints/vit_256_small_dino.pth'
+  freeze_vit_patch: True
+  freeze_vit_patch_pos_embed: True
+  pretrain_vit_region: 'checkpoints/vit_4096_xs_dino.pth'
+  freeze_vit_region: True
+  freeze_vit_region_pos_embed: True
+  region_size: 4096
+  patch_size: 256
+  mini_patch_size: 16
+  dropout: 0.25
+  agg_method: 'concat'
+  slide_pos_embed:
+    use: False
+    learned: False
+    type: '1d'
+    max_seq_len: 512
+    max_nslide: 21
+    tile_size: ${model.region_size}
+
+optim:
+  name: 'adam'
+  lr: 2e-4
+  wd: 1e-5
+  lr_scheduler:
+    name: 'step'
+    step_size: 50
+    gamma: 0.5
+
+early_stopping:
+  enable: False
+  tracking: 'loss'
+  min_max: 'min'
+  patience: 10
+  min_epoch: 30
+  save_all: False
+
+wandb:
+  enable: True
+  project: 'hipt'
+  username: 'clemsg'
+  exp_name: '${experiment_name}'
+  dir: '/home/user'
+  to_log: ['loss', 'auc', 'kappa', 'roc_auc_curve']
+  group:
+
+hydra:
+  run:
+    dir: /tmp/hydra_output

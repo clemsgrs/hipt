@@ -3,7 +3,6 @@ import time
 import tqdm
 import wandb
 import torch
-import torch.nn as nn
 import hydra
 import statistics
 import numpy as np
@@ -12,12 +11,16 @@ from pathlib import Path
 from omegaconf import DictConfig
 
 from source.models import ModelFactory
-from source.dataset import ExtractedFeaturesDataset
+from source.components import LossFactory
+from source.dataset import SubtypingDatasetOptions, DatasetFactory
 from source.utils import (
     initialize_wandb,
     train,
+    train_ordinal,
     tune,
+    tune_ordinal,
     test,
+    test_ordinal,
     compute_time,
     update_log_dict,
     EarlyStopping,
@@ -28,7 +31,7 @@ from source.utils import (
 
 @hydra.main(
     version_base="1.2.0",
-    config_path="../config/training/subtyping",
+    config_path="../config/training/classification",
     config_name="multi",
 )
 def main(cfg: DictConfig):
@@ -78,15 +81,32 @@ def main(cfg: DictConfig):
             print(f"Training on {cfg.training.pct*100}% of the data")
             train_df = train_df.sample(frac=cfg.training.pct).reset_index(drop=True)
 
-        train_dataset = ExtractedFeaturesDataset(
-            train_df, features_dir, cfg.label_name, cfg.label_mapping
+        train_dataset_options = SubtypingDatasetOptions(
+        df=train_df,
+        features_dir=features_dir,
+        label_name=cfg.label_name,
+        label_mapping=cfg.label_mapping,
+        label_encoding=cfg.label_encoding,
         )
-        tune_dataset = ExtractedFeaturesDataset(
-            tune_df, features_dir, cfg.label_name, cfg.label_mapping
+        tune_dataset_options = SubtypingDatasetOptions(
+            df=tune_df,
+            features_dir=features_dir,
+            label_name=cfg.label_name,
+            label_mapping=cfg.label_mapping,
+            label_encoding=cfg.label_encoding,
         )
-        test_dataset = ExtractedFeaturesDataset(
-            test_df, features_dir, cfg.label_name, cfg.label_mapping
+        test_dataset_options = SubtypingDatasetOptions(
+            df=test_df,
+            features_dir=features_dir,
+            label_name=cfg.label_name,
+            label_mapping=cfg.label_mapping,
+            label_encoding=cfg.label_encoding,
         )
+
+        print(f"Initializing datasets")
+        train_dataset = DatasetFactory(cfg.task, train_dataset_options).get_dataset()
+        tune_dataset = DatasetFactory(cfg.task, tune_dataset_options).get_dataset()
+        test_dataset = DatasetFactory(cfg.task, test_dataset_options).get_dataset()
 
         train_c, tune_c, test_c = (
             train_dataset.num_classes,
@@ -97,7 +117,7 @@ def main(cfg: DictConfig):
             train_c == tune_c == test_c
         ), f"Different number of classes C in train (C={train_c}), tune (C={tune_c}) and test (C={test_c}) sets!"
 
-        model = ModelFactory(cfg.level, cfg.num_classes, cfg.model).get_model()
+        model = ModelFactory(cfg.level, cfg.num_classes, cfg.task, cfg.model).get_model()
         model.relocate()
         print(model)
 
@@ -107,7 +127,7 @@ def main(cfg: DictConfig):
         ).get_optimizer()
         scheduler = SchedulerFactory(optimizer, cfg.optim.lr_scheduler).get_scheduler()
 
-        criterion = nn.CrossEntropyLoss()
+        criterion = LossFactory(cfg.task, cfg.loss, cfg.label_encoding, cfg.loss_options).get_loss()
 
         early_stopping = EarlyStopping(
             cfg.early_stopping.tracking,
@@ -138,16 +158,28 @@ def main(cfg: DictConfig):
                 if cfg.wandb.enable:
                     log_dict = {f"train/fold_{i}/epoch": epoch + 1}
 
-                train_results = train(
-                    epoch + 1,
-                    model,
-                    train_dataset,
-                    optimizer,
-                    criterion,
-                    batch_size=cfg.training.batch_size,
-                    weighted_sampling=cfg.training.weighted_sampling,
-                    gradient_accumulation=cfg.training.gradient_accumulation,
-                )
+                if cfg.label_encoding == "ordinal":
+                    train_results = train_ordinal(
+                        epoch + 1,
+                        model,
+                        train_dataset,
+                        optimizer,
+                        criterion,
+                        batch_size=cfg.training.batch_size,
+                        weighted_sampling=cfg.training.weighted_sampling,
+                        gradient_accumulation=cfg.training.gradient_accumulation,
+                    )
+                else:
+                    train_results = train(
+                        epoch + 1,
+                        model,
+                        train_dataset,
+                        optimizer,
+                        criterion,
+                        batch_size=cfg.training.batch_size,
+                        weighted_sampling=cfg.training.weighted_sampling,
+                        gradient_accumulation=cfg.training.gradient_accumulation,
+                    )
 
                 if cfg.wandb.enable:
                     update_log_dict(
@@ -163,13 +195,22 @@ def main(cfg: DictConfig):
 
                 if epoch % cfg.tuning.tune_every == 0:
 
-                    tune_results = tune(
-                        epoch + 1,
-                        model,
-                        tune_dataset,
-                        criterion,
-                        batch_size=cfg.tuning.batch_size,
-                    )
+                    if cfg.label_encoding == "ordinal":
+                        tune_results = tune_ordinal(
+                            epoch + 1,
+                            model,
+                            tune_dataset,
+                            criterion,
+                            batch_size=cfg.tuning.batch_size,
+                        )
+                    else:
+                        tune_results = tune(
+                            epoch + 1,
+                            model,
+                            tune_dataset,
+                            criterion,
+                            batch_size=cfg.tuning.batch_size,
+                        )
 
                     if cfg.wandb.enable:
                         update_log_dict(
@@ -223,7 +264,10 @@ def main(cfg: DictConfig):
         best_model_sd = torch.load(best_model_fp)
         model.load_state_dict(best_model_sd)
 
-        test_results = test(model, test_dataset, batch_size=1)
+        if cfg.label_encoding == "ordinal":
+            test_results = test_ordinal(model, test_dataset, batch_size=1)
+        else:
+            test_results = test(model, test_dataset, batch_size=1)
         test_dataset.df.to_csv(Path(result_dir, f"test.csv"), index=False)
 
         for r, v in test_results.items():

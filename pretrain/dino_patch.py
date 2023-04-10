@@ -402,7 +402,8 @@ def main(cfg: DictConfig):
                 )
 
             # ensure other gpus wait until gpu_0 is finished with tuning before starting next training iteration
-            torch.distributed.barrier()
+            if distributed:
+                torch.distributed.barrier()
 
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))

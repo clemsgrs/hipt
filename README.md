@@ -110,8 +110,8 @@ If you want to run testing at the end, you can provide a `test.csv` file.<br>
 
 Once features have been extracted, create a configuration file under:
 
-- `config/training/subtyping` for training a subtyping model
-- `config/training/survival` for training a survival model
+- `config/training/classification` for training a classification model
+- `config/training/survival` for training a survival prediction model
 
 You can take inspiration from `single.yaml` files.<br>
 Dump in there the paths to your `train.csv` and `tune.csv` files.<br>
@@ -122,7 +122,7 @@ If you train the top & the intermediate Transformer blocks (i.e. leveraging loca
 
 Then, run the following command to kick off model training on a single fold:
 
-- subtyping: `python3 train/subtyping.py --config-name <subtyping_single_fold_config_filename>`
+- classification: `python3 train/classification.py --config-name <classification_single_fold_config_filename>`
 - survival: `python3 train/survival.py --config-name <survival_single_fold_config_filename>`
 
 **3. Train a *multi-fold* model on extracted features**
@@ -147,15 +147,15 @@ fold_dir/
 
 Create a configuration file under:
 
-- `config/training/subtyping` for training a subtyping model
-- `config/training/survival` for training a survival model
+- `config/training/classification` for training a classification model
+- `config/training/survival` for training a survival prediction model
 
 You can take inspiration from `multi.yaml` files.<br>
 Remember to indicate the root directory where your folds are located under `data.fold_dir`.<br>
 
 Then, run the following command to kick off model training on multiple folds:
 
-- subtyping: `python3 train/subtyping_multi.py --config-name <subtyping_multi_fold_config_filename>`
+- classification: `python3 train/classification_multi.py --config-name <classification_multi_fold_config_filename>`
 - survival: `python3 train/survival_multi.py --config-name <survival_single_fold_config_filename>`
 
 ## Hierarchical Pretraining

@@ -1,4 +1,5 @@
 import os
+import tqdm
 import time
 import wandb
 import torch
@@ -24,7 +25,7 @@ from source.utils import (
 
 @hydra.main(
     version_base="1.2.0",
-    config_path="../config/training/subtyping",
+    config_path="../config/training/classification",
     config_name="region",
 )
 def main(cfg: DictConfig):
@@ -48,7 +49,7 @@ def main(cfg: DictConfig):
         wandb_run.define_metric("lr", step_metric="epoch")
         print()
 
-    model = ModelFactory(cfg.level, cfg.num_classes, cfg.model).get_model()
+    model = ModelFactory(cfg.level, cfg.num_classes, cfg.task, cfg.model).get_model()
     model.relocate()
     print(model)
 
