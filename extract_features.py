@@ -106,7 +106,7 @@ def main(cfg: DictConfig):
     print()
     slide_ids, region_slide_ids = [], []
     slide_feature_paths, region_feature_paths = [], []
-    x_coords, y_coords = [], [], []
+    x_coords, y_coords = [], []
 
     with tqdm.tqdm(
         loader,
@@ -158,6 +158,7 @@ def main(cfg: DictConfig):
                 stacked_features = torch.stack(features, dim=0).squeeze(1)
                 save_path = Path(slide_features_dir, f"{slide_id}.pt")
                 torch.save(stacked_features, save_path)
+                slide_feature_paths.append(save_path)
 
                 df.loc[idx, "process"] = 0
                 df.loc[idx, "status"] = "processed"
@@ -173,18 +174,19 @@ def main(cfg: DictConfig):
         'feature_path': slide_feature_paths,
         'slide_id': slide_ids,
         'level': [f'{cfg.level}']*len(slide_ids),
-        'tile_size': [cfg.patch_size]*len(slide_ids),
-    })
-    region_features_df = pd.DataFrame.from_dict({
-        'feature_path': region_feature_paths,
-        'slide_id': region_slide_ids,
-        'level': [f'{cfg.level}']*len(region_slide_ids),
-        'tile_size': [cfg.patch_size]*len(region_slide_ids),
-        'x': x_coords,
-        'y': y_coords,
+        'tile_size': [cfg.region_size]*len(slide_ids),
     })
     slide_features_df.to_csv(Path(features_dir, 'slide_features.csv'))
-    region_features_df.to_csv(Path(features_dir, 'region_features.csv'))
+    if cfg.save_region_features:
+        region_features_df = pd.DataFrame.from_dict({
+            'feature_path': region_feature_paths,
+            'slide_id': region_slide_ids,
+            'level': [f'{cfg.level}']*len(region_slide_ids),
+            'tile_size': [cfg.region_size]*len(region_slide_ids),
+            'x': x_coords,
+            'y': y_coords,
+        })
+        region_features_df.to_csv(Path(features_dir, 'region_features.csv'))
 
 
 if __name__ == "__main__":
