@@ -352,6 +352,7 @@ def knn_classifier(train_features, train_labels, test_features, test_labels, k, 
     retrieval_one_hot = torch.zeros(k, num_classes).to(train_features.device)
     for idx in range(0, num_test_images, imgs_per_chunk):
         # get the features for test images
+        # the use of min ensures we don't compute features more than once if num_test_images is not divisible by num_chunks
         features = test_features[
             idx : min((idx + imgs_per_chunk), num_test_images), :
         ]
