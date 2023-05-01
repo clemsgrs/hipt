@@ -29,23 +29,20 @@ def main(cfg: DictConfig):
         wandb_run.define_metric("processed", summary="max")
         run_id = wandb_run.id
 
-    output_dir = Path(cfg.output_dir, cfg.experiment_name, run_id)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    features_dir = Path(output_dir, "features", cfg.level)
-    slide_features_dir = Path(features_dir, "slide")
-    region_features_dir = Path(features_dir, "region")
+    output_dir = Path(cfg.output_dir, cfg.experiment_name, cfg.level, run_id)
+    slide_features_dir = Path(output_dir, "slide")
+    region_features_dir = Path(output_dir, "region")
     if not cfg.resume:
-        if features_dir.exists():
-            print(f"{features_dir} already exists! deleting it...")
-            shutil.rmtree(features_dir)
+        if output_dir.exists():
+            print(f"{output_dir} already exists! deleting it...")
+            shutil.rmtree(output_dir)
             print("done")
-            features_dir.mkdir(parents=False)
+            output_dir.mkdir(parents=False)
             slide_features_dir.mkdir()
             if cfg.save_region_features:
                 region_features_dir.mkdir()
         else:
-            features_dir.mkdir(parents=True, exist_ok=True)
+            output_dir.mkdir(parents=True, exist_ok=True)
             slide_features_dir.mkdir(exist_ok=True)
             if cfg.save_region_features:
                 region_features_dir.mkdir(exist_ok=True)
@@ -78,10 +75,10 @@ def main(cfg: DictConfig):
 
     process_list_fp = None
     if (
-        Path(features_dir.parent, f"process_list_{cfg.level}.csv").is_file()
+        Path(output_dir, f"process_list_{cfg.level}.csv").is_file()
         and cfg.resume
     ):
-        process_list_fp = Path(output_dir, "features", f"process_list_{cfg.level}.csv")
+        process_list_fp = Path(output_dir, f"process_list_{cfg.level}.csv")
 
     if process_list_fp is None:
         df = initialize_df(slide_ids)
@@ -163,7 +160,7 @@ def main(cfg: DictConfig):
                 df.loc[idx, "process"] = 0
                 df.loc[idx, "status"] = "processed"
                 df.to_csv(
-                    Path(features_dir.parent, f"process_list_{cfg.level}.csv"),
+                    Path(output_dir, f"process_list_{cfg.level}.csv"),
                     index=False,
                 )
 
@@ -176,7 +173,7 @@ def main(cfg: DictConfig):
         'level': [f'{cfg.level}']*len(slide_ids),
         'tile_size': [cfg.region_size]*len(slide_ids),
     })
-    slide_features_df.to_csv(Path(features_dir, 'slide_features.csv'))
+    slide_features_df.to_csv(Path(output_dir, 'slide_features.csv'), index=False)
     if cfg.save_region_features:
         region_features_df = pd.DataFrame.from_dict({
             'feature_path': region_feature_paths,
@@ -186,7 +183,7 @@ def main(cfg: DictConfig):
             'x': x_coords,
             'y': y_coords,
         })
-        region_features_df.to_csv(Path(features_dir, 'region_features.csv'))
+        region_features_df.to_csv(Path(output_dir, 'region_features.csv'), index=False)
 
 
 if __name__ == "__main__":
