@@ -51,19 +51,21 @@ def main(cfg: DictConfig):
             print(f"Distributed session successfully initialized")
     else:
         gpu_id = -1
+
     if is_main_process():
         print(f"torch.cuda.device_count(): {torch.cuda.device_count()}")
+        run_id = datetime.datetime.now().strftime("%Y-%m-%d_%H_%M")
         # set up wandb
         if cfg.wandb.enable:
             key = os.environ.get("WANDB_API_KEY")
             wandb_run = initialize_wandb(cfg, key=key)
             wandb_run.define_metric("epoch", summary="max")
+            run_id = wandb_run.id
 
     fix_random_seeds(cfg.seed)
-
     cudnn.benchmark = True
 
-    output_dir = Path(cfg.output_dir, cfg.experiment_name)
+    output_dir = Path(cfg.output_dir, cfg.experiment_name, run_id)
     snapshot_dir = Path(output_dir, "snapshots")
     features_dir = Path(output_dir, "features")
     if not cfg.resume and is_main_process():
@@ -295,7 +297,7 @@ def main(cfg: DictConfig):
 
             epoch_start_time = time.time()
             if cfg.wandb.enable and is_main_process():
-                log_dict = {"epoch": epoch+1}
+                log_dict = {"epoch": epoch}
 
             if distributed:
                 data_loader.sampler.set_epoch(epoch)
@@ -372,19 +374,18 @@ def main(cfg: DictConfig):
                 )
                 break
 
-            # save snapshot
+            # save snapshot and log to wandb
             if is_main_process():
                 save_path = Path(snapshot_dir, f"epoch_{epoch:03}.pt")
                 if (
                     cfg.early_stopping.save_every
                     and epoch % cfg.early_stopping.save_every == 0
-                    and is_main_process()
                     and not save_path.is_file()
                 ):
                     torch.save(snapshot, save_path)
 
                 if cfg.wandb.enable:
-                    wandb.log(log_dict, step=epoch+1)
+                    wandb.log(log_dict, step=epoch)
 
             log_stats = {
                 **{f"train_{k}": v for k, v in train_stats.items()},

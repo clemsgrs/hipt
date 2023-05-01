@@ -17,7 +17,7 @@ from omegaconf import DictConfig
 
 import source.vision_transformer as vits
 
-from source.utils import initialize_wandb, compute_time
+from source.utils import initialize_wandb, compute_time, update_log_dict
 from source.dataset import HierarchicalPretrainingDataset
 from source.components import DINOLoss
 from utils import (
@@ -27,6 +27,7 @@ from utils import (
     fix_random_seeds,
     has_batchnorms,
     get_params_groups,
+    resume_from_checkpoint,
     cosine_scheduler,
     get_world_size,
     start_from_checkpoint,
@@ -49,6 +50,7 @@ def main(cfg: DictConfig):
         gpu_id = -1
 
     if is_main_process():
+        print(f"torch.cuda.device_count(): {torch.cuda.device_count()}")
         run_id = datetime.datetime.now().strftime("%Y-%m-%d_%H_%M")
         # set up wandb
         if cfg.wandb.enable:
@@ -61,7 +63,15 @@ def main(cfg: DictConfig):
     cudnn.benchmark = True
 
     output_dir = Path(cfg.output_dir, cfg.experiment_name, run_id)
-    output_dir.mkdir(parents=True, exist_ok=True)
+    snapshot_dir = Path(output_dir, "snapshots")
+    if not cfg.resume and is_main_process():
+        if output_dir.exists():
+                print(f"WARNING: {output_dir} already exists! Deleting its content...")
+                shutil.rmtree(output_dir)
+                output_dir.mkdir(parents=True)
+        else:
+            output_dir.mkdir(exist_ok=True, parents=True)
+        snapshot_dir.mkdir(exist_ok=True, parents=True)
 
     # preparing data
     if is_main_process():
@@ -75,7 +85,7 @@ def main(cfg: DictConfig):
         cfg.model.patch_size,
     )
 
-    # using custom dataset for our [256 x 384] tensors
+    # using custom dataset for our [256 x 384] tensors ("local" features)
     dataset = HierarchicalPretrainingDataset(cfg.data_dir, transform)
     if cfg.training.pct:
         print(f"Pre-training on {cfg.training.pct*100}% of the data")
@@ -96,7 +106,7 @@ def main(cfg: DictConfig):
         drop_last=True,
     )
     if is_main_process():
-        print(f"Data loaded: there are {len(dataset)} regions.")
+        print(f"Pretraining data loaded ({len(dataset)} regions)")
 
     # building student and teacher networks
     if is_main_process():
@@ -221,22 +231,55 @@ def main(cfg: DictConfig):
     if is_main_process():
         print(f"Models built, kicking off training")
 
+    epochs_run = 0
+
+    # leverage torch native fault tolerance
+    snapshot_path = Path(snapshot_dir, "latest.pt")
+    if distributed:
+        if snapshot_path.exists():
+            print("Loading snapshot")
+            loc = f"cuda:{gpu_id}"
+            snapshot = torch.load(snapshot_path, map_location=loc)
+            epochs_run = snapshot["epoch"]
+            student.load_state_dict(snapshot["student"])
+            teacher.load_state_dict(snapshot["teacher"])
+            optimizer.load_state_dict(snapshot["optimizer"])
+            dino_loss.load_state_dict(snapshot["dino_loss"])
+            if fp16_scaler is not None:
+                fp16_scaler.load_state_dict(snapshot["fp16_scaler"])
+            print(f"Resuming training from snapshot at Epoch {epochs_run}")
+    elif cfg.resume:
+        ckpt_path = Path(cfg.resume_from_checkpoint)
+        epochs_run = resume_from_checkpoint(
+            ckpt_path,
+            student=student,
+            teacher=teacher,
+            optimizer=optimizer,
+            fp16_scaler=fp16_scaler,
+            dino_loss=dino_loss,
+        )
+        print(f"Resuming training from checkpoint at Epoch {epochs_run}")
+
     start_time = time.time()
 
     with tqdm.tqdm(
-        range(cfg.training.nepochs),
-        desc=(f"Hierarchical DINO Pre-Training"),
+        range(epochs_run, cfg.training.nepochs),
+        desc=(f"Hierarchical DINO Pretraining"),
         unit=" epoch",
         ncols=100,
         leave=True,
+        initial=epochs_run,
+        total=cfg.training.nepochs,
         file=sys.stdout,
+        position=0,
+        disable=not is_main_process()
     ) as t:
 
         for epoch in t:
 
             epoch_start_time = time.time()
-            if cfg.wandb.enable:
-                wandb.log({"epoch": epoch + 1})
+            if cfg.wandb.enable and is_main_process():
+                log_dict = {"epoch": epoch}
 
             if distributed:
                 data_loader.sampler.set_epoch(epoch)
@@ -260,37 +303,32 @@ def main(cfg: DictConfig):
                 gpu_id,
             )
 
-            lr = train_stats["lr"]
-            loss = train_stats["loss"]
-            if cfg.wandb.enable:
-                wandb.define_metric("lr", step_metric="epoch")
-                wandb.define_metric("loss", step_metric="epoch")
-                wandb.log({"lr": lr})
-                wandb.log({"loss": loss})
+            if cfg.wandb.enable and is_main_process():
+                update_log_dict(
+                    "train", train_stats, log_dict, step="epoch"
+                )
 
-            # writing logs
-            save_dict = {
-                "student": student.state_dict(),
-                "teacher": teacher.state_dict(),
-                "optimizer": optimizer.state_dict(),
-                "epoch": epoch,
-                "cfg": cfg,
-                "dino_loss": dino_loss.state_dict(),
-            }
-
-            if fp16_scaler is not None:
-                save_dict["fp16_scaler"] = fp16_scaler.state_dict()
+            # save snapshot and log to wandb
             if is_main_process():
-                save_path = Path(output_dir, "latest.pth")
-                torch.save(save_dict, save_path)
+                snapshot = {
+                    "epoch": epoch,
+                    "student": student.state_dict(),
+                    "teacher": teacher.state_dict(),
+                    "optimizer": optimizer.state_dict(),
+                    "dino_loss": dino_loss.state_dict(),
+                }
+                if fp16_scaler is not None:
+                    snapshot["fp16_scaler"] = fp16_scaler.state_dict()
 
-            if (
-                cfg.logging.save_ckpt_every
-                and epoch % cfg.logging.save_ckpt_every == 0
-                and is_main_process()
-            ):
-                save_path = Path(output_dir, f"checkpoint_{epoch:03}.pth")
-                torch.save(save_dict, save_path)
+                save_path = Path(snapshot_dir, f"epoch_{epoch:03}.pt")
+                if (
+                    cfg.logging.save_snapshot_every
+                    and epoch % cfg.logging.save_snapshot_every == 0
+                ):
+                    torch.save(snapshot, save_path)
+
+                if cfg.wandb.enable:
+                    wandb.log(log_dict, step=epoch)
 
             log_stats = {
                 **{f"train_{k}": v for k, v in train_stats.items()},
@@ -302,13 +340,14 @@ def main(cfg: DictConfig):
 
             epoch_end_time = time.time()
             epoch_mins, epoch_secs = compute_time(epoch_start_time, epoch_end_time)
-            tqdm.tqdm.write(
-                f"End of epoch {epoch+1}/{cfg.training.nepochs} \t Time Taken:  {epoch_mins}m {epoch_secs}s"
-            )
+            if is_main_process():
+                tqdm.tqdm.write(
+                    f"End of epoch {epoch+1}/{cfg.training.nepochs} \t Time Taken:  {epoch_mins}m {epoch_secs}s"
+                )
 
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
-    print("Training time {}".format(total_time_str))
+    print("Pretraining time {}".format(total_time_str))
 
     if distributed:
         torch.distributed.destroy_process_group()
@@ -316,8 +355,7 @@ def main(cfg: DictConfig):
 
 if __name__ == "__main__":
 
-    # python3 pre-train/dino_4k.py --config-name 'dino_4k'
-    # torchrun pre-train/dino_4k.py --config-name 'dino_4k'
+    # python3 -m torch.distributed.run --standalone --nproc_per_node=gpu pretrain/dino_region.py --config-name "default"
 
     # m = {}
     # for i in range(torch.cuda.device_count()):
