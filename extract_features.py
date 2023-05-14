@@ -29,7 +29,7 @@ def main(cfg: DictConfig):
         wandb_run.define_metric("processed", summary="max")
         run_id = wandb_run.id
 
-    output_dir = Path(cfg.output_dir, cfg.experiment_name, cfg.level, run_id)
+    output_dir = Path(cfg.output_dir, cfg.experiment_name, run_id)
     slide_features_dir = Path(output_dir, "slide")
     region_features_dir = Path(output_dir, "region")
     if not cfg.resume:
@@ -120,8 +120,7 @@ def main(cfg: DictConfig):
 
             for i, batch in enumerate(t1):
 
-                idx, region_fps = batch
-                slide_id = process_stack.loc[idx.item(), "slide_id"]
+                idx, region_fps, slide_id = batch
                 slide_ids.append(slide_id)
                 features = []
 
@@ -148,14 +147,14 @@ def main(cfg: DictConfig):
                         if cfg.save_region_features:
                             save_path = Path(region_features_dir, f"{slide_id}_{x_y}.pt")
                             torch.save(feature, save_path)
-                            region_feature_paths.append(save_path)
+                            region_feature_paths.append(save_path.resolve())
                             region_slide_ids.append(slide_id)
                         features.append(feature)
 
                 stacked_features = torch.stack(features, dim=0).squeeze(1)
                 save_path = Path(slide_features_dir, f"{slide_id}.pt")
                 torch.save(stacked_features, save_path)
-                slide_feature_paths.append(save_path)
+                slide_feature_paths.append(save_path.resolve())
 
                 df.loc[idx, "process"] = 0
                 df.loc[idx, "status"] = "processed"

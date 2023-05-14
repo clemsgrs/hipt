@@ -8,6 +8,7 @@ import pandas as pd
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
+import torch.distributed as dist
 import matplotlib.pyplot as plt
 
 from pathlib import Path
@@ -17,6 +18,39 @@ from typing import Optional, Callable, List
 from sklearn import metrics
 from sklearn.model_selection import train_test_split
 from sksurv.metrics import concordance_index_censored, cumulative_dynamic_auc
+
+
+def is_dist_avail_and_initialized():
+    if not dist.is_available():
+        return False
+    if not dist.is_initialized():
+        return False
+    return True
+
+
+def get_world_size():
+    if not is_dist_avail_and_initialized():
+        return 1
+    return dist.get_world_size()
+
+
+def get_rank():
+    if not is_dist_avail_and_initialized():
+        return 0
+    return dist.get_rank()
+
+
+def is_main_process():
+    return get_rank() == 0
+
+
+def fix_random_seeds(seed=31):
+    """
+    Fix random seeds.
+    """
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    np.random.seed(seed)
 
 
 def write_dictconfig(d, f, child: bool = False, ntab=0):
@@ -244,7 +278,8 @@ def collate_region_filepaths(batch):
     item = batch[0]
     idx = torch.LongTensor([item[0]])
     fp = item[1]
-    return [idx, fp]
+    sid = item[2]
+    return [idx, fp, sid]
 
 
 def get_roc_auc_curve(
@@ -530,11 +565,11 @@ def train(
 
     with tqdm.tqdm(
         loader,
-        desc=(f"Train - Epoch {epoch}"),
+        desc=(f"Epoch {epoch} - Train"),
         unit=" slide",
         ncols=80,
         unit_scale=batch_size,
-        leave=True,
+        leave=False,
     ) as t:
 
         for i, batch in enumerate(t):
@@ -614,11 +649,11 @@ def tune(
 
     with tqdm.tqdm(
         loader,
-        desc=(f"Tune - Epoch {epoch}"),
+        desc=(f"Epoch {epoch} - Tune"),
         unit=" slide",
         ncols=80,
         unit_scale=batch_size,
-        leave=True,
+        leave=False,
     ) as t:
 
         with torch.no_grad():
@@ -769,11 +804,11 @@ def train_regression(
 
     with tqdm.tqdm(
         loader,
-        desc=(f"Train - Epoch {epoch}"),
+        desc=(f"Epoch {epoch} - Train"),
         unit=" slide",
         ncols=80,
         unit_scale=batch_size,
-        leave=True,
+        leave=False,
     ) as t:
 
         for i, batch in enumerate(t):
@@ -784,7 +819,7 @@ def train_regression(
                 device, non_blocking=True
             )
             logits = model(x)
-            loss = criterion(logits, label)
+            loss = criterion(logits, label.unsqueeze(1))
 
             loss_value = loss.item()
             epoch_loss += loss_value
@@ -795,7 +830,7 @@ def train_regression(
             loss.backward()
             optimizer.step()
 
-            pred = get_label_from_regression_logits(logits, dataset.num_classes)
+            pred = get_label_from_regression_logits(logits.cpu(), dataset.num_classes)
             preds.extend(pred[:, 0].clone().tolist())
 
             labels.extend(label.clone().tolist())
@@ -839,11 +874,11 @@ def tune_regression(
 
     with tqdm.tqdm(
         loader,
-        desc=(f"Tune - Epoch {epoch}"),
+        desc=(f"Epoch {epoch} - Tune"),
         unit=" slide",
         ncols=80,
         unit_scale=batch_size,
-        leave=True,
+        leave=False,
     ) as t:
 
         with torch.no_grad():
@@ -855,9 +890,9 @@ def tune_regression(
                     device, non_blocking=True
                 )
                 logits = model(x)
-                loss = criterion(logits, label)
+                loss = criterion(logits, label.unsqueeze(1))
 
-                pred = get_label_from_regression_logits(logits, dataset.num_classes)
+                pred = get_label_from_regression_logits(logits.cpu(), dataset.num_classes)
                 preds.extend(pred[:, 0].clone().tolist())
 
                 labels.extend(label.clone().tolist())
@@ -917,7 +952,7 @@ def test_regression(
                 )
                 logits = model(x)
 
-                pred = get_label_from_regression_logits(logits, dataset.num_classes)
+                pred = get_label_from_regression_logits(logits.cpu(), dataset.num_classes)
                 preds.extend(pred[:, 0].clone().tolist())
 
                 labels.extend(label.clone().tolist())
@@ -967,11 +1002,11 @@ def train_ordinal(
 
     with tqdm.tqdm(
         loader,
-        desc=(f"Train - Epoch {epoch}"),
+        desc=(f"Epoch {epoch} - Train"),
         unit=" slide",
         ncols=80,
         unit_scale=batch_size,
-        leave=True,
+        leave=False,
     ) as t:
 
         for i, batch in enumerate(t):
@@ -1000,7 +1035,7 @@ def train_ordinal(
             labels.extend(label.clone().tolist())
             idxs.extend(list(idx))
 
-    metrics = get_metrics(preds, labels, preds)
+    metrics = get_metrics(preds, labels)
     results.update(metrics)
 
     train_loss = epoch_loss / len(loader)
@@ -1038,11 +1073,11 @@ def tune_ordinal(
 
     with tqdm.tqdm(
         loader,
-        desc=(f"Tune - Epoch {epoch}"),
+        desc=(f"Epoch {epoch} - Tune"),
         unit=" slide",
         ncols=80,
         unit_scale=batch_size,
-        leave=True,
+        leave=False,
     ) as t:
 
         with torch.no_grad():
@@ -1065,7 +1100,7 @@ def tune_ordinal(
 
                 epoch_loss += loss.item()
 
-    metrics = get_metrics(preds, labels, preds)
+    metrics = get_metrics(preds, labels)
     results.update(metrics)
 
     tune_loss = epoch_loss / len(loader)
@@ -1124,7 +1159,7 @@ def test_ordinal(
                 labels.extend(label.clone().tolist())
                 idxs.extend(list(idx))
 
-    metrics = get_metrics(preds, labels, preds)
+    metrics = get_metrics(preds, labels)
     results.update(metrics)
 
     return results
@@ -1178,11 +1213,11 @@ def train_survival(
 
     with tqdm.tqdm(
         loader,
-        desc=(f"Train - Epoch {epoch}"),
+        desc=(f"Epoch {epoch} - Train"),
         unit=" patient",
         ncols=80,
         unit_scale=batch_size,
-        leave=True,
+        leave=False,
     ) as t:
 
         for i, batch in enumerate(t):
@@ -1295,11 +1330,11 @@ def tune_survival(
 
     with tqdm.tqdm(
         loader,
-        desc=(f"Tune - Epoch {epoch}"),
+        desc=(f"Epoch {epoch} - Tune"),
         unit=" patient",
         ncols=80,
         unit_scale=batch_size,
-        leave=True,
+        leave=False,
     ) as t:
 
         with torch.no_grad():
