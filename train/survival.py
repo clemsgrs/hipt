@@ -110,7 +110,7 @@ def main(cfg: DictConfig):
 
     print("Configuring model")
     model = ModelFactory(
-        cfg.level, num_classes=cfg.nbins, task="survival", model_options=cfg.model
+        cfg.level, num_classes=cfg.nbins, task="survival", label_encoding=cfg.label_encoding, model_options=cfg.model
     ).get_model()
     model.relocate()
     print(model)

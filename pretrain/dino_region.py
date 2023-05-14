@@ -58,6 +58,13 @@ def main(cfg: DictConfig):
             wandb_run = initialize_wandb(cfg, key=key)
             wandb_run.define_metric("epoch", summary="max")
             run_id = wandb_run.id
+    else:
+        run_id = ""
+
+    if distributed:
+        obj = [run_id]
+        torch.distributed.broadcast_object_list(obj, 0, device=torch.device(f"cuda:{gpu_id}"))
+        run_id = obj[0]
 
     fix_random_seeds(cfg.seed)
     cudnn.benchmark = True
@@ -159,7 +166,7 @@ def main(cfg: DictConfig):
 
     if distributed:
         student = nn.parallel.DistributedDataParallel(
-            student, device_ids=[gpu_id], output_device=gpu_id, find_unused_parameters=True
+            student, device_ids=[gpu_id], output_device=gpu_id,
         )
 
     # optionally start student from existing checkpoint
@@ -326,6 +333,7 @@ def main(cfg: DictConfig):
                     and epoch % cfg.logging.save_snapshot_every == 0
                 ):
                     torch.save(snapshot, save_path)
+                torch.save(snapshot, Path(snapshot_dir, f"latest.pt"))
 
                 if cfg.wandb.enable:
                     wandb.log(log_dict, step=epoch)
