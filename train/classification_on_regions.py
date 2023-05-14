@@ -49,7 +49,7 @@ def main(cfg: DictConfig):
         wandb_run.define_metric("lr", step_metric="epoch")
         print()
 
-    model = ModelFactory(cfg.level, cfg.num_classes, cfg.task, cfg.model).get_model()
+    model = ModelFactory(cfg.level, cfg.num_classes, cfg.task, cfg.label_encoding, cfg.model).get_model()
     model.relocate()
     print(model)
 

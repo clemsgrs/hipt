@@ -13,15 +13,18 @@ from omegaconf import DictConfig
 
 from source.models import ModelFactory
 from source.components import LossFactory
-from source.dataset import SubtypingDatasetOptions, DatasetFactory
+from source.dataset import ClassificationDatasetOptions, DatasetFactory
 from source.utils import (
     initialize_wandb,
     train,
     train_ordinal,
+    train_regression,
     tune,
     tune_ordinal,
+    tune_regression,
     test,
     test_ordinal,
+    test_regression,
     compute_time,
     update_log_dict,
     collate_features,
@@ -34,7 +37,7 @@ from source.utils import (
 @hydra.main(
     version_base="1.2.0",
     config_path="../config/training/classification",
-    config_name="panda_radboud",
+    config_name="panda",
 )
 def main(cfg: DictConfig):
 
@@ -57,10 +60,10 @@ def main(cfg: DictConfig):
 
     features_dir = Path(cfg.features_dir)
 
-    num_classes = cfg.num_classes
+    assert (cfg.task != "classification" and cfg.label_encoding != "ordinal") or (cfg.task == "classification")
     criterion = LossFactory(cfg.task, cfg.loss, cfg.label_encoding, cfg.loss_options).get_loss()
 
-    model = ModelFactory(cfg.level, num_classes, cfg.task, cfg.model).get_model()
+    model = ModelFactory(cfg.level, cfg.num_classes, cfg.task, cfg.label_encoding, cfg.model).get_model()
     model.relocate()
     print(model)
 
@@ -74,21 +77,21 @@ def main(cfg: DictConfig):
         train_df = train_df.sample(frac=cfg.training.pct).reset_index(drop=True)
         tune_df = tune_df.sample(frac=cfg.training.pct).reset_index(drop=True)
 
-    train_dataset_options = SubtypingDatasetOptions(
+    train_dataset_options = ClassificationDatasetOptions(
         df=train_df,
         features_dir=features_dir,
         label_name=cfg.label_name,
         label_mapping=cfg.label_mapping,
         label_encoding=cfg.label_encoding,
     )
-    tune_dataset_options = SubtypingDatasetOptions(
+    tune_dataset_options = ClassificationDatasetOptions(
         df=tune_df,
         features_dir=features_dir,
         label_name=cfg.label_name,
         label_mapping=cfg.label_mapping,
         label_encoding=cfg.label_encoding,
     )
-    test_dataset_options = SubtypingDatasetOptions(
+    test_dataset_options = ClassificationDatasetOptions(
         df=test_df,
         features_dir=features_dir,
         label_name=cfg.label_name,
@@ -138,7 +141,18 @@ def main(cfg: DictConfig):
             if cfg.wandb.enable:
                 log_dict = {"epoch": epoch + 1}
 
-            if cfg.label_encoding == "ordinal":
+            if cfg.task == "regression":
+                train_results = train_regression(
+                    epoch + 1,
+                    model,
+                    train_dataset,
+                    optimizer,
+                    criterion,
+                    batch_size=cfg.training.batch_size,
+                    weighted_sampling=cfg.training.weighted_sampling,
+                    gradient_accumulation=cfg.training.gradient_accumulation,
+                )
+            elif cfg.label_encoding == "ordinal":
                 train_results = train_ordinal(
                     epoch + 1,
                     model,
@@ -169,8 +183,15 @@ def main(cfg: DictConfig):
             train_dataset.df.to_csv(Path(result_dir, f"train_{epoch}.csv"), index=False)
 
             if epoch % cfg.tuning.tune_every == 0:
-
-                if cfg.label_encoding == "ordinal":
+                if cfg.task == "regression":
+                    tune_results = tune_regression(
+                        epoch + 1,
+                        model,
+                        tune_dataset,
+                        criterion,
+                        batch_size=cfg.tuning.batch_size,
+                    )
+                elif cfg.label_encoding == "ordinal":
                     tune_results = tune_ordinal(
                         epoch + 1,
                         model,
@@ -230,7 +251,13 @@ def main(cfg: DictConfig):
     best_model_sd = torch.load(best_model_fp)
     model.load_state_dict(best_model_sd)
 
-    if cfg.label_encoding == "ordinal":
+    if cfg.task == "regression":
+        test_results = test_regression(
+            model,
+            test_dataset,
+            batch_size=1,
+        )
+    elif cfg.label_encoding == "ordinal":
         test_results = test_ordinal(
             model,
             test_dataset,

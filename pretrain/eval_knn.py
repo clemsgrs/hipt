@@ -7,7 +7,6 @@ import pandas as pd
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import torch.distributed as dist
 import torch.backends.cudnn as cudnn
 
@@ -15,7 +14,6 @@ from pathlib import Path
 from typing import Optional
 from sklearn import metrics
 from omegaconf import DictConfig
-from torchvision import datasets
 from torchvision import transforms
 
 import source.vision_transformer as vits

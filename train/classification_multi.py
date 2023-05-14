@@ -12,7 +12,7 @@ from omegaconf import DictConfig
 
 from source.models import ModelFactory
 from source.components import LossFactory
-from source.dataset import SubtypingDatasetOptions, DatasetFactory
+from source.dataset import ClassificationDatasetOptions, DatasetFactory
 from source.utils import (
     initialize_wandb,
     train,
@@ -81,21 +81,21 @@ def main(cfg: DictConfig):
             print(f"Training on {cfg.training.pct*100}% of the data")
             train_df = train_df.sample(frac=cfg.training.pct).reset_index(drop=True)
 
-        train_dataset_options = SubtypingDatasetOptions(
+        train_dataset_options = ClassificationDatasetOptions(
         df=train_df,
         features_dir=features_dir,
         label_name=cfg.label_name,
         label_mapping=cfg.label_mapping,
         label_encoding=cfg.label_encoding,
         )
-        tune_dataset_options = SubtypingDatasetOptions(
+        tune_dataset_options = ClassificationDatasetOptions(
             df=tune_df,
             features_dir=features_dir,
             label_name=cfg.label_name,
             label_mapping=cfg.label_mapping,
             label_encoding=cfg.label_encoding,
         )
-        test_dataset_options = SubtypingDatasetOptions(
+        test_dataset_options = ClassificationDatasetOptions(
             df=test_df,
             features_dir=features_dir,
             label_name=cfg.label_name,
@@ -117,7 +117,7 @@ def main(cfg: DictConfig):
             train_c == tune_c == test_c
         ), f"Different number of classes C in train (C={train_c}), tune (C={tune_c}) and test (C={test_c}) sets!"
 
-        model = ModelFactory(cfg.level, cfg.num_classes, cfg.task, cfg.model).get_model()
+        model = ModelFactory(cfg.level, cfg.num_classes, cfg.task, cfg.label_encoding, cfg.model).get_model()
         model.relocate()
         print(model)
 
