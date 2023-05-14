@@ -18,6 +18,7 @@ class ModelFactory:
         level: str,
         num_classes: int = 2,
         task: str = "classification",
+        label_encoding: Optional[str] = None,
         model_options: Optional[DictConfig] = None,
     ):
 
@@ -39,6 +40,12 @@ class ModelFactory:
                 elif model_options.agg_method == "concat" or not model_options.agg_method:
                     if model_options.slide_pos_embed.type == '2d' and model_options.slide_pos_embed.use:
                         self.model = GlobalCoordsHIPT(
+                            num_classes=num_classes,
+                            dropout=model_options.dropout,
+                            slide_pos_embed=model_options.slide_pos_embed,
+                        )
+                    elif label_encoding == "ordinal":
+                        self.model = GlobalOrdinalHIPT(
                             num_classes=num_classes,
                             dropout=model_options.dropout,
                             slide_pos_embed=model_options.slide_pos_embed,
@@ -576,6 +583,8 @@ class GlobalFeatureExtractor(nn.Module):
         pretrain_vit_region: str = "path/to/pretrained/vit_region/weights.pth",
         embed_dim_patch: int = 384,
         embed_dim_region: int = 192,
+        split_across_gpus: bool = False,
+        verbose: bool = True,
     ):
 
         super(GlobalFeatureExtractor, self).__init__()
@@ -583,9 +592,11 @@ class GlobalFeatureExtractor(nn.Module):
 
         self.npatch = int(region_size // patch_size)
         self.ps = patch_size
+        self.split_across_gpus = split_across_gpus
 
-        self.device_patch = torch.device("cuda:0")
-        self.device_region = torch.device("cuda:1")
+        if split_across_gpus:
+            self.device_patch = torch.device("cuda:0")
+            self.device_region = torch.device("cuda:1")
 
         self.vit_patch = vit_small(
             img_size=patch_size,
@@ -594,7 +605,8 @@ class GlobalFeatureExtractor(nn.Module):
         )
 
         if Path(pretrain_vit_patch).is_file():
-            print("Loading pretrained weights for patch-level Transformer...")
+            if verbose:
+                print("Loading pretrained weights for patch-level Transformer...")
             state_dict = torch.load(pretrain_vit_patch, map_location="cpu")
             if checkpoint_key is not None and checkpoint_key in state_dict:
                 print(f"Take key {checkpoint_key} in provided checkpoint dict")
@@ -605,20 +617,24 @@ class GlobalFeatureExtractor(nn.Module):
             state_dict = {k.replace("backbone.", ""): v for k, v in state_dict.items()}
             state_dict, msg = update_state_dict(self.vit_patch.state_dict(), state_dict)
             self.vit_patch.load_state_dict(state_dict, strict=False)
-            print(f"Pretrained weights found at {pretrain_vit_patch}")
-            print(msg)
+            if verbose:
+                print(f"Pretrained weights found at {pretrain_vit_patch}")
+                print(msg)
 
-        else:
+        elif verbose:
             print(
                 f"{pretrain_vit_patch} doesnt exist ; please provide path to existing file"
             )
 
-        print("Freezing pretrained patch-level Transformer")
+        if verbose:
+            print("Freezing pretrained patch-level Transformer")
         for param in self.vit_patch.parameters():
             param.requires_grad = False
-        print("Done")
+        if verbose:
+            print("Done")
 
-        self.vit_patch.to(self.device_patch)
+        if split_across_gpus:
+            self.vit_patch.to(self.device_patch)
 
         self.vit_region = vit4k_xs(
             img_size=region_size,
@@ -641,20 +657,24 @@ class GlobalFeatureExtractor(nn.Module):
                 self.vit_region.state_dict(), state_dict
             )
             self.vit_region.load_state_dict(state_dict, strict=False)
-            print(f"Pretrained weights found at {pretrain_vit_region}")
-            print(msg)
+            if verbose:
+                print(f"Pretrained weights found at {pretrain_vit_region}")
+                print(msg)
 
-        else:
+        elif verbose:
             print(
                 f"{pretrain_vit_region} doesnt exist ; please provide path to existing file"
             )
 
-        print("Freezing pretrained region-level Transformer")
+        if verbose:
+            print("Freezing pretrained region-level Transformer")
         for param in self.vit_region.parameters():
             param.requires_grad = False
-        print("Done")
+        if verbose:
+            print("Done")
 
-        self.vit_region.to(self.device_region)
+        if split_across_gpus:
+            self.vit_region.to(self.device_region)
 
     def forward(self, x):
 
@@ -666,14 +686,16 @@ class GlobalFeatureExtractor(nn.Module):
         x = rearrange(
             x, "b c p1 p2 w h -> (b p1 p2) c w h"
         )  # [1*npatch*npatch, 3, ps, ps]
-        x = x.to(self.device_patch, non_blocking=True)  # [num_patches, 3, ps, ps]
+        if self.split_across_gpus:
+            x = x.to(self.device_patch, non_blocking=True)  # [num_patches, 3, ps, ps]
 
         patch_features = self.vit_patch(x)  # [num_patches, 384]
         patch_features = patch_features.unsqueeze(0)  # [1, num_patches, 384]
         patch_features = patch_features.unfold(1, self.npatch, self.npatch).transpose(
             1, 2
         )  # [1, 384, npatch, npatch]
-        patch_features = patch_features.to(self.device_region, non_blocking=True)
+        if self.split_across_gpus:
+            patch_features = patch_features.to(self.device_region, non_blocking=True)
 
         region_feature = self.vit_region(patch_features).cpu()  # [1, 192]
 
@@ -687,14 +709,13 @@ class LocalFeatureExtractor(nn.Module):
         mini_patch_size: int = 16,
         pretrain_vit_patch: str = "path/to/pretrained/vit_patch/weights.pth",
         embed_dim_patch: int = 384,
+        verbose: bool = True,
     ):
 
         super(LocalFeatureExtractor, self).__init__()
         checkpoint_key = "teacher"
 
         self.ps = patch_size
-
-        self.device_patch = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         self.vit_patch = vit_small(
             img_size=patch_size,
@@ -703,10 +724,12 @@ class LocalFeatureExtractor(nn.Module):
         )
 
         if Path(pretrain_vit_patch).is_file():
-            print("Loading pretrained weights for patch-level Transformer")
+            if verbose:
+                print("Loading pretrained weights for patch-level Transformer")
             state_dict = torch.load(pretrain_vit_patch, map_location="cpu")
             if checkpoint_key is not None and checkpoint_key in state_dict:
-                print(f"Take key {checkpoint_key} in provided checkpoint dict")
+                if verbose:
+                    print(f"Take key {checkpoint_key} in provided checkpoint dict")
                 state_dict = state_dict[checkpoint_key]
             # remove `module.` prefix
             state_dict = {k.replace("module.", ""): v for k, v in state_dict.items()}
@@ -714,20 +737,21 @@ class LocalFeatureExtractor(nn.Module):
             state_dict = {k.replace("backbone.", ""): v for k, v in state_dict.items()}
             state_dict, msg = update_state_dict(self.vit_patch.state_dict(), state_dict)
             self.vit_patch.load_state_dict(state_dict, strict=False)
-            print(f"Pretrained weights found at {pretrain_vit_patch}")
-            print(msg)
+            if verbose:
+                print(f"Pretrained weights found at {pretrain_vit_patch}")
+                print(msg)
 
-        else:
+        elif verbose:
             print(
                 f"{pretrain_vit_patch} doesnt exist ; please provide path to existing file"
             )
 
-        print("Freezing pretrained patch-level Transformer")
+        if verbose:
+            print("Freezing pretrained patch-level Transformer")
         for param in self.vit_patch.parameters():
             param.requires_grad = False
-        print("Done")
-
-        self.vit_patch.to(self.device_patch)
+        if verbose:
+            print("Done")
 
     def forward(self, x):
 
@@ -737,7 +761,6 @@ class LocalFeatureExtractor(nn.Module):
             3, self.ps, self.ps
         )  # [1, 3, npatch, region_size, ps] -> [1, 3, npatch, npatch, ps, ps]
         x = rearrange(x, "b c p1 p2 w h -> (b p1 p2) c w h")  # [num_patches, 3, ps, ps]
-        x = x.to(self.device_patch, non_blocking=True)
 
         patch_feature = self.vit_patch(x).detach().cpu()  # [num_patches, 384]
 

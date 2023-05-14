@@ -69,8 +69,8 @@ region_dir/
 Create a configuration file under `config/feature_extraction/` taking inspiration from existing files.<br>
 A good starting point is to use the default configuration file `config/default.yaml` where parameters are documented.
 
-- extract region-level features : make sure to set `level: 'global'` in your config and have 2 gpus available.<br>
-- extract patch-level features : make sure to set `level: 'local'` in your config and have 1 gpu available..<br>
+- extract region-level features : make sure to set `level: 'global'` in your config.<br>
+- extract patch-level features : make sure to set `level: 'local'` in your config.<br>
 
 Then run the following command to kick off feature extraction:
 
@@ -89,6 +89,9 @@ hipt/
 │     │    └── ...
 │     └── process_list_<level>.csv
 ```
+
+NB: if you encounter OOM errors whil extracting region-level features, it could be that the model is too big to fit on your gpu.<br>
+In that case, work with 2 gpus and enable model split across gpus setting `split_across_gpus: True` in your config file.
 
 ## HIPT Training
 
