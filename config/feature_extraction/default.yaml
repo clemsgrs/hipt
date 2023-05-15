@@ -1,7 +1,7 @@
 region_dir: '/home/user/code/git/clemsgrs/hs2p/output/tcga_brca_survival_debug/patches/'
 
-output_dir: 'output'
-experiment_name: 'tcga_brca_survival_debug'
+output_dir: 'output/tcga_brca_survival_debug'
+experiment_name: 'feature_extraction'
 resume: False
 
 slide_list:
@@ -13,12 +13,13 @@ mini_patch_size: 16
 format: 'jpg'
 level: 'global'
 save_region_features: False
+num_workers: 4
 
 pretrain_vit_patch: 'checkpoints/vit_256_small_dino.pth'
 pretrain_vit_region: 'checkpoints/vit_4096_xs_dino.pth'
 
 wandb:
-  enable: True
+  enable: False
   project: 'hipt'
   username: 'clemsg'
   exp_name: '${experiment_name}'
