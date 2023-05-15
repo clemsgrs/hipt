@@ -111,7 +111,7 @@ def ppcess_survival_data(
 
 
 @dataclass
-class SubtypingDatasetOptions:
+class ClassificationDatasetOptions:
     df: pd.DataFrame
     features_dir: Path
     label_name: str
@@ -136,7 +136,7 @@ class DatasetFactory:
         agg_method: str = "concat",
     ):
 
-        if task == "subtyping":
+        if task in["classification", "regression"]:
             if options.label_encoding == "ordinal":
                 self.dataset = ExtractedFeaturesOrdinalDataset(
                     options.df,
@@ -270,7 +270,7 @@ class ExtractedFeaturesOrdinalDataset(ExtractedFeaturesDataset):
         slide_id = row.slide_id
         fp = Path(self.features_dir, f"{slide_id}.pt")
         features = torch.load(fp)
-        label = np.zeros(self.num_classes).astype(np.float32)
+        label = np.zeros(self.num_classes-1).astype(np.float32)
         label[:row.label] = 1.
         return idx, features, label
 
@@ -645,7 +645,7 @@ class RegionFilepathsDataset(torch.utils.data.Dataset):
         slide_id = row.slide_id
         slide_dir = Path(self.region_dir, slide_id, "imgs")
         regions = [str(fp) for fp in slide_dir.glob(f"*.{self.format}")]
-        return idx, regions
+        return idx, regions, slide_id
 
     def __len__(self):
         return len(self.df)

@@ -1,6 +1,6 @@
 region_dir: '/data/pathology/projects/ais-cap/dataset/witali-liver/hs2p/packed/patches/4096/jpg'
 
-output_dir: '/data/pathology/projects/ais-cap/code/git/clems/hipt/output/witali-liver'
+output_dir: 'output/witali-liver'
 experiment_name: 'feature_extraction'
 resume: False
 
@@ -11,12 +11,13 @@ patch_size: 256
 mini_patch_size: 16
 
 format: 'jpg'
-level: 'local'
+level: 'global'
 save_region_features: True
+num_workers: 16
 
 pretrain_vit_patch: '/data/pathology/projects/ais-cap/dataset/witali-liver/hipt/dino/vit_256_small_dino.pth'
 # pretrain_vit_region: 'checkpoints/vit_4096_xs_dino.pth'
-pretrain_vit_region: ''
+pretrain_vit_region: '/data/pathology/projects/ais-cap/dataset/witali-liver/hipt/dino/vit_4096_xs_dino.pt'
 
 wandb:
   enable: True

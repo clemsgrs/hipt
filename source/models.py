@@ -609,7 +609,8 @@ class GlobalFeatureExtractor(nn.Module):
                 print("Loading pretrained weights for patch-level Transformer...")
             state_dict = torch.load(pretrain_vit_patch, map_location="cpu")
             if checkpoint_key is not None and checkpoint_key in state_dict:
-                print(f"Take key {checkpoint_key} in provided checkpoint dict")
+                if verbose:
+                    print(f"Take key {checkpoint_key} in provided checkpoint dict")
                 state_dict = state_dict[checkpoint_key]
             # remove `module.` prefix
             state_dict = {k.replace("module.", ""): v for k, v in state_dict.items()}
@@ -644,10 +645,12 @@ class GlobalFeatureExtractor(nn.Module):
         )
 
         if Path(pretrain_vit_region).is_file():
-            print("Loading pretrained weights for region-level Transformer...")
+            if verbose:
+                print("Loading pretrained weights for region-level Transformer...")
             state_dict = torch.load(pretrain_vit_region, map_location="cpu")
             if checkpoint_key is not None and checkpoint_key in state_dict:
-                print(f"Take key {checkpoint_key} in provided checkpoint dict")
+                if verbose:
+                    print(f"Take key {checkpoint_key} in provided checkpoint dict")
                 state_dict = state_dict[checkpoint_key]
             # remove `module.` prefix
             state_dict = {k.replace("module.", ""): v for k, v in state_dict.items()}
