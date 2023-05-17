@@ -289,8 +289,8 @@ class ExtractedFeaturesSurvivalDataset(torch.utils.data.Dataset):
         self.use_coords = False
         self.agg_level = "patient"
 
-        self.slide_df = self.filter_df(slide_df)
-        self.df = patient_df
+        self.slide_df, case_ids = self.filter_df(slide_df)
+        self.df = patient_df[patient_df.case_id.isin(case_ids)]
 
     def filter_df(self, df):
         missing_slide_ids = []
@@ -301,8 +301,10 @@ class ExtractedFeaturesSurvivalDataset(torch.utils.data.Dataset):
             print(
                 f"WARNING: {len(missing_slide_ids)} slides dropped because missing on disk"
             )
+            print(f'missing_slide_ids: {missing_slide_ids}')
         filtered_df = df[~df.slide_id.isin(missing_slide_ids)].reset_index(drop=True)
-        return filtered_df
+        remaining_case_ids = filtered_df.case_id.unique().tolist()
+        return filtered_df, remaining_case_ids
 
     def __getitem__(self, idx: int):
 

@@ -52,10 +52,10 @@ def main(cfg: DictConfig):
     output_dir = Path(cfg.output_dir, cfg.experiment_name, run_id)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    checkpoint_dir = Path(output_dir, "checkpoints", cfg.level)
+    checkpoint_dir = Path(output_dir, "checkpoints")
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
-    result_dir = Path(output_dir, "results", cfg.level)
+    result_dir = Path(output_dir, "results")
     result_dir.mkdir(parents=True, exist_ok=True)
 
     features_dir = Path(cfg.features_dir)

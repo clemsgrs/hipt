@@ -258,5 +258,5 @@ def main(cfg: DictConfig):
 
 if __name__ == "__main__":
 
-    # python3 -m torch.distributed.run --standalone --nproc_per_node=gpu extract_features_dist.py --config-name 'debug'
+    # python3 -m torch.distributed.run --standalone --nproc_per_node=gpu extract_features.py --config-name 'debug'
     main()

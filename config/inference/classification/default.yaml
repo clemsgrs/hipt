@@ -5,13 +5,19 @@ output_dir: 'output/debug'
 experiment_name: 'inference'
 level: 'global'
 
+task: 'classification'
+
 num_classes: 2
 label_name: 'label'
 label_mapping:
+label_encoding:
 
 model:
   checkpoint:
   dropout: 0.25
+  region_size: 4096
+  patch_size: 256
+  mini_patch_size: 16
   agg_method: 'concat'
   slide_pos_embed:
     use: False
