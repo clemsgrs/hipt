@@ -9,7 +9,7 @@ from omegaconf import DictConfig, OmegaConf
 
 from source.vision_transformer import vit_small, vit4k_xs
 from source.model_utils import Attn_Net_Gated, PositionalEncoderFactory
-from source.utils import update_state_dict
+from source.utils import update_state_dict, get_device
 
 
 class ModelFactory:
@@ -18,6 +18,7 @@ class ModelFactory:
         level: str,
         num_classes: int = 2,
         task: str = "classification",
+        loss: Optional[str] = None,
         label_encoding: Optional[str] = None,
         model_options: Optional[DictConfig] = None,
     ):
@@ -45,11 +46,18 @@ class ModelFactory:
                             slide_pos_embed=model_options.slide_pos_embed,
                         )
                     elif label_encoding == "ordinal":
-                        self.model = GlobalOrdinalHIPT(
-                            num_classes=num_classes,
-                            dropout=model_options.dropout,
-                            slide_pos_embed=model_options.slide_pos_embed,
-                        )
+                        if loss == 'coral':
+                            self.model = GlobalCoralHIPT(
+                                num_classes=num_classes,
+                                dropout=model_options.dropout,
+                                slide_pos_embed=model_options.slide_pos_embed,
+                            )
+                        else:
+                            self.model = GlobalOrdinalHIPT(
+                                num_classes=num_classes,
+                                dropout=model_options.dropout,
+                                slide_pos_embed=model_options.slide_pos_embed,
+                            )
                     else:
                         self.model = GlobalHIPT(
                             num_classes=num_classes,
@@ -61,16 +69,28 @@ class ModelFactory:
                         f"cfg.model.agg_method ({model_options.agg_method}) not supported"
                     )
             elif level == "local":
-                self.model = LocalGlobalHIPT(
-                    num_classes=num_classes,
-                    region_size=model_options.region_size,
-                    patch_size=model_options.patch_size,
-                    pretrain_vit_region=model_options.pretrain_vit_region,
-                    freeze_vit_region=model_options.freeze_vit_region,
-                    freeze_vit_region_pos_embed=model_options.freeze_vit_region_pos_embed,
-                    dropout=model_options.dropout,
-                    slide_pos_embed=model_options.slide_pos_embed,
-                )
+                if label_encoding == "ordinal":
+                    self.model = LocalGlobalOrdinalHIPT(
+                        num_classes=num_classes,
+                        region_size=model_options.region_size,
+                        patch_size=model_options.patch_size,
+                        pretrain_vit_region=model_options.pretrain_vit_region,
+                        freeze_vit_region=model_options.freeze_vit_region,
+                        freeze_vit_region_pos_embed=model_options.freeze_vit_region_pos_embed,
+                        dropout=model_options.dropout,
+                        slide_pos_embed=model_options.slide_pos_embed,
+                    )
+                else:
+                    self.model = LocalGlobalHIPT(
+                        num_classes=num_classes,
+                        region_size=model_options.region_size,
+                        patch_size=model_options.patch_size,
+                        pretrain_vit_region=model_options.pretrain_vit_region,
+                        freeze_vit_region=model_options.freeze_vit_region,
+                        freeze_vit_region_pos_embed=model_options.freeze_vit_region_pos_embed,
+                        dropout=model_options.dropout,
+                        slide_pos_embed=model_options.slide_pos_embed,
+                    )
             else:
                 self.model = HIPT(
                     num_classes=num_classes,
@@ -113,7 +133,6 @@ class GlobalHIPT(nn.Module):
     ):
 
         super(GlobalHIPT, self).__init__()
-        self.num_classes = num_classes
         self.slide_pos_embed = slide_pos_embed
 
         # Global Aggregation
@@ -176,9 +195,8 @@ class GlobalHIPT(nn.Module):
 
         return logits
 
-    def relocate(self):
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
+    def relocate(self, gpu_id: int = -1):
+        device = get_device(gpu_id)
         self.global_phi = self.global_phi.to(device)
         if self.slide_pos_embed.use:
             self.pos_encoder = self.pos_encoder.to(device)
@@ -207,7 +225,7 @@ class LocalGlobalHIPT(nn.Module):
         num_classes: int = 2,
         region_size: int = 4096,
         patch_size: int = 256,
-        pretrain_vit_region: str = "path/to/pretrained/vit_region/weights.pth",
+        pretrain_vit_region: Optional[str] = None,
         embed_dim_patch: int = 384,
         embed_dim_region: int = 192,
         freeze_vit_region: bool = True,
@@ -217,7 +235,6 @@ class LocalGlobalHIPT(nn.Module):
     ):
 
         super(LocalGlobalHIPT, self).__init__()
-        self.num_classes = num_classes
         self.npatch = int(region_size // patch_size)
         self.slide_pos_embed = slide_pos_embed
 
@@ -230,7 +247,7 @@ class LocalGlobalHIPT(nn.Module):
             output_embed_dim=embed_dim_region,
         )
 
-        if Path(pretrain_vit_region).is_file():
+        if pretrain_vit_region and Path(pretrain_vit_region).is_file():
             print("Loading pretrained weights for region-level Transformer...")
             state_dict = torch.load(pretrain_vit_region, map_location="cpu")
             if checkpoint_key is not None and checkpoint_key in state_dict:
@@ -247,12 +264,12 @@ class LocalGlobalHIPT(nn.Module):
             print(f"Pretrained weights found at {pretrain_vit_region}")
             print(msg)
 
-        else:
+        elif pretrain_vit_region:
             print(
                 f"{pretrain_vit_region} doesnt exist ; please provide path to existing file"
             )
 
-        if freeze_vit_region:
+        if pretrain_vit_region and freeze_vit_region:
             print("Freezing pretrained region-level Transformer")
             for name, param in self.vit_region.named_parameters():
                 param.requires_grad = False
@@ -326,13 +343,9 @@ class LocalGlobalHIPT(nn.Module):
 
         return logits
 
-    def relocate(self):
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        if torch.cuda.device_count() >= 1:
-            device_ids = list(range(torch.cuda.device_count()))
-            self.vit_region = nn.DataParallel(
-                self.vit_region, device_ids=device_ids
-            ).to("cuda:0")
+    def relocate(self, gpu_id: int = -1):
+        device = get_device(gpu_id)
+        self.vit_region = self.vit_region.to(device)
 
         self.global_phi = self.global_phi.to(device)
         if self.slide_pos_embed.use:
@@ -376,7 +389,6 @@ class HIPT(nn.Module):
     ):
 
         super(HIPT, self).__init__()
-        self.num_classes = num_classes
         self.npatch = int(region_size // patch_size)
         self.num_patches = self.npatch**2
         self.ps = patch_size
@@ -782,7 +794,6 @@ class GlobalPatientLevelHIPT(nn.Module):
     ):
 
         super(GlobalPatientLevelHIPT, self).__init__()
-        self.num_classes = num_classes
         self.slide_pos_embed = slide_pos_embed
 
         # from region to slide aggregation
@@ -1072,3 +1083,22 @@ class GlobalCoralHIPT(GlobalHIPT):
         logits = logits + self.bias
 
         return logits
+
+
+class LocalGlobalOrdinalHIPT(LocalGlobalHIPT):
+    def __init__(
+        self,
+        num_classes: int = 2,
+        region_size: int = 4096,
+        patch_size: int = 256,
+        pretrain_vit_region: Optional[str] = None,
+        embed_dim_patch: int = 384,
+        embed_dim_region: int = 192,
+        freeze_vit_region: bool = True,
+        freeze_vit_region_pos_embed: bool = True,
+        dropout: float = 0.25,
+        slide_pos_embed: Optional[DictConfig] = None,
+    ):
+
+        super().__init__(num_classes, region_size, patch_size, pretrain_vit_region, embed_dim_patch, embed_dim_region,freeze_vit_region, freeze_vit_region_pos_embed, dropout, slide_pos_embed)
+        self.classifier = nn.Linear(192, num_classes-1)

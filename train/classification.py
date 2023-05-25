@@ -63,7 +63,7 @@ def main(cfg: DictConfig):
     assert (cfg.task != "classification" and cfg.label_encoding != "ordinal") or (cfg.task == "classification")
     criterion = LossFactory(cfg.task, cfg.loss, cfg.label_encoding, cfg.loss_options).get_loss()
 
-    model = ModelFactory(cfg.level, cfg.num_classes, cfg.task, cfg.label_encoding, cfg.model).get_model()
+    model = ModelFactory(cfg.level, cfg.num_classes, cfg.task, cfg.loss, cfg.label_encoding, cfg.model).get_model()
     model.relocate()
     print(model)
 

@@ -67,7 +67,7 @@ def main(cfg: DictConfig):
     test_dataset = DatasetFactory("survival", test_dataset_options, cfg.model.agg_method).get_dataset()
 
     model = ModelFactory(
-        cfg.level, num_classes=cfg.nbins, task="survival", label_encoding=cfg.label_encoding, model_options=cfg.model
+        cfg.level, num_classes=cfg.nbins, task="survival", loss=cfg.loss, label_encoding=cfg.label_encoding, model_options=cfg.model
     ).get_model()
     model.relocate()
     print(model)

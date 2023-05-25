@@ -117,7 +117,7 @@ def main(cfg: DictConfig):
             train_c == tune_c == test_c
         ), f"Different number of classes C in train (C={train_c}), tune (C={tune_c}) and test (C={test_c}) sets!"
 
-        model = ModelFactory(cfg.level, cfg.num_classes, cfg.task, cfg.label_encoding, cfg.model).get_model()
+        model = ModelFactory(cfg.level, cfg.num_classes, cfg.task, cfg.loss, cfg.label_encoding, cfg.model).get_model()
         model.relocate()
         print(model)
 
