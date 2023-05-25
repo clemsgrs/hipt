@@ -52,16 +52,16 @@ def main(cfg: DictConfig):
     output_dir = Path(cfg.output_dir, cfg.experiment_name, run_id)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    checkpoint_root_dir = Path(output_dir, "checkpoints", cfg.level)
+    checkpoint_root_dir = Path(output_dir, "checkpoints")
     checkpoint_root_dir.mkdir(parents=True, exist_ok=True)
 
-    result_root_dir = Path(output_dir, "results", cfg.level)
+    result_root_dir = Path(output_dir, "results")
     result_root_dir.mkdir(parents=True, exist_ok=True)
 
     features_dir = Path(cfg.features_dir)
 
     tiles_df = None
-    if cfg.model.slide_pos_embed.type == "2d" and cfg.model.slide_pos_embed.use:
+    if cfg.model.slide_pos_embed.type == "2d" and cfg.model.slide_pos_embed.use and cfg.model.agg_method:
         tiles_df = pd.read_csv(cfg.data.tiles_csv)
 
     fold_root_dir = Path(cfg.data.fold_dir)

@@ -44,6 +44,17 @@ def is_main_process():
     return get_rank() == 0
 
 
+def get_device(gpu_id: int):
+    if gpu_id == -1 and torch.cuda.is_available():
+        device_name = "cuda"
+    elif torch.cuda.is_available():
+        device_name = f"cuda:{gpu_id}"
+    else:
+        device_name = "cpu"
+    device = torch.device(device_name)
+    return device
+
+
 def fix_random_seeds(seed=31):
     """
     Fix random seeds.
@@ -88,13 +99,14 @@ def write_dictconfig(d, f, child: bool = False, ntab=0):
 
 def initialize_wandb(
     cfg: DictConfig,
-    tags: Optional[List] = None,
     key: Optional[str] = "",
 ):
     command = f"wandb login {key}"
     subprocess.call(command, shell=True)
-    if tags == None:
+    if cfg.wandb.tags == None:
         tags = []
+    else:
+        tags = cfg.wandb.tags
     config = OmegaConf.to_container(cfg, resolve=True, throw_on_missing=True)
     run = wandb.init(
         project=cfg.wandb.project,
@@ -1412,7 +1424,7 @@ def test_survival(
 
     model.eval()
     censorships, event_times = [], []
-    risk_scores, labels = [], []
+    risk_scores = []
     idxs = []
 
     sampler = torch.utils.data.SequentialSampler(dataset)
@@ -1448,7 +1460,7 @@ def test_survival(
             for i, batch in enumerate(t):
 
                 if dataset.use_coords:
-                    idx, x, coords, label, event_time, c = batch
+                    idx, x, coords, _, event_time, c = batch
                     if agg_method == "concat":
                         x, coords = x.to(device, non_blocking=True), coords.to(
                             device, non_blocking=True
@@ -1457,7 +1469,7 @@ def test_survival(
                         x = [f.to(device, non_blocking=True) for f in x[0]]
                         coords = [c.to(device, non_blocking=True) for c in coords[0]]
                 else:
-                    idx, x, label, event_time, c = batch
+                    idx, x, _, event_time, c = batch
                     if agg_method == "self_att":
                         x = [
                             xx[j].to(device, non_blocking=True)
@@ -1466,9 +1478,7 @@ def test_survival(
                         ]
                     else:
                         x = x.to(device, non_blocking=True)
-                label, c = label.to(device, non_blocking=True), c.to(
-                    device, non_blocking=True
-                )
+                c = c.to(device, non_blocking=True)
 
                 if dataset.use_coords:
                     logits = model(x, coords)
@@ -1483,7 +1493,6 @@ def test_survival(
                 censorships.append(c.item())
                 event_times.append(event_time.item())
 
-                labels.extend(label.clone().tolist())
                 idxs.extend(list(idx))
 
     dataset.df.loc[idxs, "risk"] = risk_scores

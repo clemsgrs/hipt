@@ -5,12 +5,12 @@ output_dir: 'output/debug'
 experiment_name: 'inference'
 level: 'global'
 
-task: 'classification'
+task: 'survival'
 
-num_classes: 2
 label_name: 'label'
 label_mapping:
 label_encoding:
+nbins:
 
 model:
   checkpoint:
@@ -34,7 +34,7 @@ wandb:
   exp_name: '${experiment_name}'
   tags:
   dir: '/home/user'
-  to_log: ['loss', 'auc', 'kappa', 'roc_auc_curve']
+  to_log: ['loss', 'auc', 'kappa']
   group:
 
 hydra:

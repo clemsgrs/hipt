@@ -71,6 +71,7 @@ wandb:
   project: 'hipt'
   username: 'clemsg'
   exp_name: '${experiment_name}'
+  tags:
   dir: '/home/user'
   group:
   to_log: ['loss', 'c-index']
