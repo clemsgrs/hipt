@@ -1060,7 +1060,7 @@ class GlobalCoralHIPT(GlobalHIPT):
 
         super().__init__(num_classes, embed_dim_region, d_model, dropout, slide_pos_embed)
         self.classifier = nn.Linear(192, 1, bias=False)
-        self.bias = nn.Parameter(torch.zeros(num_classes-1).float())
+        self.b = nn.Parameter(torch.zeros(num_classes-1).float()).cuda()
 
     def forward(self, x):
 
@@ -1080,7 +1080,7 @@ class GlobalCoralHIPT(GlobalHIPT):
         x_wsi = self.global_rho(x_att)
 
         logits = self.classifier(x_wsi)
-        logits = logits + self.bias
+        logits = logits + self.b
 
         return logits
 
