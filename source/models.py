@@ -70,21 +70,35 @@ class ModelFactory:
                     )
             elif level == "local":
                 if label_encoding == "ordinal":
-                    self.model = LocalGlobalOrdinalHIPT(
-                        num_classes=num_classes,
-                        region_size=model_options.region_size,
-                        patch_size=model_options.patch_size,
-                        pretrain_vit_region=model_options.pretrain_vit_region,
-                        freeze_vit_region=model_options.freeze_vit_region,
-                        freeze_vit_region_pos_embed=model_options.freeze_vit_region_pos_embed,
-                        dropout=model_options.dropout,
-                        slide_pos_embed=model_options.slide_pos_embed,
-                    )
+                    if loss == 'coral':
+                        self.model = LocalGlobalCoralHIPT(
+                            num_classes=num_classes,
+                            region_size=model_options.region_size,
+                            patch_size=model_options.patch_size,
+                            pretrain_vit_region=model_options.pretrain_vit_region,
+                            freeze_vit_region=model_options.freeze_vit_region,
+                            freeze_vit_region_pos_embed=model_options.freeze_vit_region_pos_embed,
+                            dropout=model_options.dropout,
+                            slide_pos_embed=model_options.slide_pos_embed,
+                        )
+                    else:
+                        self.model = LocalGlobalOrdinalHIPT(
+                            num_classes=num_classes,
+                            region_size=model_options.region_size,
+                            patch_size=model_options.patch_size,
+                            pretrain_vit_region=model_options.pretrain_vit_region,
+                            freeze_vit_region=model_options.freeze_vit_region,
+                            freeze_vit_region_pos_embed=model_options.freeze_vit_region_pos_embed,
+                            dropout=model_options.dropout,
+                            slide_pos_embed=model_options.slide_pos_embed,
+                        )
                 else:
                     self.model = LocalGlobalHIPT(
                         num_classes=num_classes,
                         region_size=model_options.region_size,
                         patch_size=model_options.patch_size,
+                        embed_dim_patch=model_options.embed_dim_patch,
+                        embed_dim_region=model_options.embed_dim_region,
                         pretrain_vit_region=model_options.pretrain_vit_region,
                         freeze_vit_region=model_options.freeze_vit_region,
                         freeze_vit_region_pos_embed=model_options.freeze_vit_region_pos_embed,
@@ -113,6 +127,20 @@ class ModelFactory:
                 elif model_options.agg_method == "concat" or not model_options.agg_method:
                     self.model = GlobalRegressionHIPT(
                             num_classes=num_classes,
+                            dropout=model_options.dropout,
+                            slide_pos_embed=model_options.slide_pos_embed,
+                        )
+            elif level == "local":
+                if model_options.agg_method == "self_att":
+                    raise KeyError(f"aggregation method '{model_options.agg_method}' is not supported yet for {task} task")
+                elif model_options.agg_method == "concat" or not model_options.agg_method:
+                    self.model = LocalGlobalRegressionHIPT(
+                            num_classes=num_classes,
+                            region_size=model_options.region_size,
+                            patch_size=model_options.patch_size,
+                            pretrain_vit_region=model_options.pretrain_vit_region,
+                            freeze_vit_region=model_options.freeze_vit_region,
+                            freeze_vit_region_pos_embed=model_options.freeze_vit_region_pos_embed,
                             dropout=model_options.dropout,
                             slide_pos_embed=model_options.slide_pos_embed,
                         )
@@ -1102,3 +1130,67 @@ class LocalGlobalOrdinalHIPT(LocalGlobalHIPT):
 
         super().__init__(num_classes, region_size, patch_size, pretrain_vit_region, embed_dim_patch, embed_dim_region,freeze_vit_region, freeze_vit_region_pos_embed, dropout, slide_pos_embed)
         self.classifier = nn.Linear(192, num_classes-1)
+
+
+class LocalGlobalCoralHIPT(LocalGlobalHIPT):
+    def __init__(
+        self,
+        num_classes: int = 2,
+        region_size: int = 4096,
+        patch_size: int = 256,
+        pretrain_vit_region: Optional[str] = None,
+        embed_dim_patch: int = 384,
+        embed_dim_region: int = 192,
+        freeze_vit_region: bool = True,
+        freeze_vit_region_pos_embed: bool = True,
+        dropout: float = 0.25,
+        slide_pos_embed: Optional[DictConfig] = None,
+    ):
+
+        super().__init__(num_classes, region_size, patch_size, pretrain_vit_region, embed_dim_patch, embed_dim_region,freeze_vit_region, freeze_vit_region_pos_embed, dropout, slide_pos_embed)
+        self.classifier = nn.Linear(192, 1, bias=False)
+        self.b = nn.Parameter(torch.zeros(num_classes-1).float()).cuda()
+
+    def forward(self, x):
+
+        # x = [M, 256, 384]
+        x = self.vit_region(
+            x.unfold(1, self.npatch, self.npatch).transpose(1, 2)
+        )  # [M, 192]
+        x = self.global_phi(x)  # [M, 192]
+
+        if self.slide_pos_embed.use:
+            x = self.pos_encoder(x)
+
+        # in nn.TransformerEncoderLayer, batch_first defaults to False
+        # hence, input is expected to be of shape (seq_length, batch, emb_size)
+        x = self.global_transformer(x.unsqueeze(1)).squeeze(1)
+        att, x = self.global_attn_pool(x)
+        att = torch.transpose(att, 1, 0)
+        att = F.softmax(att, dim=1)
+        x_att = torch.mm(att, x)
+        x_wsi = self.global_rho(x_att)
+
+        logits = self.classifier(x_wsi)
+        logits = logits + self.b
+
+        return logits
+
+
+class LocalGlobalRegressionHIPT(LocalGlobalHIPT):
+    def __init__(
+        self,
+        num_classes: int = 2,
+        region_size: int = 4096,
+        patch_size: int = 256,
+        pretrain_vit_region: Optional[str] = None,
+        embed_dim_patch: int = 384,
+        embed_dim_region: int = 192,
+        freeze_vit_region: bool = True,
+        freeze_vit_region_pos_embed: bool = True,
+        dropout: float = 0.25,
+        slide_pos_embed: Optional[DictConfig] = None,
+    ):
+
+        super().__init__(num_classes, region_size, patch_size, pretrain_vit_region, embed_dim_patch, embed_dim_region,freeze_vit_region, freeze_vit_region_pos_embed, dropout, slide_pos_embed)
+        self.classifier = nn.Linear(192, 1)

@@ -30,9 +30,11 @@ testing:
   retrieve_checkpoint: 'latest'
 
 model:
+  embed_dim_patch: 384
   pretrain_vit_patch: 'checkpoints/vit_256_small_dino.pth'
   freeze_vit_patch: True
   freeze_vit_patch_pos_embed: True
+  embed_dim_region: 192
   pretrain_vit_region: 'checkpoints/vit_4096_xs_dino.pth'
   freeze_vit_region: True
   freeze_vit_region_pos_embed: True

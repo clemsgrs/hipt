@@ -6,6 +6,7 @@ experiment_name: 'inference'
 level: 'global'
 
 task: 'classification'
+loss: 'ce'
 
 num_classes: 2
 label_name: 'label'
@@ -15,6 +16,8 @@ label_encoding:
 model:
   checkpoint:
   dropout: 0.25
+  embed_dim_patch: 384
+  embed_dim_region: 192
   region_size: 4096
   patch_size: 256
   mini_patch_size: 16

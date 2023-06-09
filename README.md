@@ -41,7 +41,7 @@ gdown 1A2eHTT0dedHgdCvy6t3d9HwluF8p5yjz
 If you want to benefit from wandb logging, you need to follow these simple steps:
  - grab your wandb API key under your profile and export
  - run the following command in your terminal: `export WANDB_API_KEY=<your_personal_key>`
- - update wandb parameters in the relevant config files (mainly `project` and `username`)
+ - update wandb parameters in the relevant `.yaml` config files (see next)
 
 **2. Extract features**
 
@@ -78,20 +78,29 @@ Then run the following command to kick off feature extraction:
 python3 extract_features.py --config-name <feature_extraction_config_filename>
 ```
 
-This will produce one .pt file per slide and save it under `output/<experiment_name>/<level>/`:
+This will produce one `.pt` file per slide and save it under `output/<experiment_name>/<experiment_id>/slide`.<br>
+If you set `save_region_features` to True in your config file, it will also produce one `.pt` file per region and save it under `output/<experiment_name>/<experiment_id>/region`. In the end, the output folder should look like:
 
 ```
 hipt/
-├── output/<experiment_name>/<experiment_id>/features
-│     ├── level/
+├── output/<experiment_name>/<experiment_id>/features/
+│     ├── slide/
 │     │    ├── slide_1.pt
 │     │    ├── slide_2.pt
 │     │    └── ...
-│     └── process_list_<level>.csv
+│     └── region/
+│          ├── slide_1_x1_y1.pt
+│          ├── slide_1_x2_y2.pt
+│          └── ...
 ```
 
-NB: if you encounter OOM errors whil extracting region-level features, it could be that the model is too big to fit on your gpu.<br>
-In that case, work with 2 gpus and enable model split across gpus setting `split_across_gpus: True` in your config file.
+If you encounter OOM errors while extracting region-level features, it could be that the model is too big to fit on your gpu. In that case, work with 2 gpus and enable model split across gpus setting `split_across_gpus: True` in your config file.
+
+**Distributed** feature extraction across multiple gpus is supported via:
+
+```bash
+python3 -m torch.distributed.run --standalone --nproc_per_node=gpu extract_features.py --config-name <feature_extraction_config_filename>
+```
 
 ## HIPT Training
 
@@ -120,13 +129,12 @@ You can take inspiration from `single.yaml` files.<br>
 Dump in there the paths to your `train.csv` and `tune.csv` files.<br>
 If you want to run testing as well, add the path to your `test.csv` file. Otherwise, leave it blank (it'll skip testing).
 
-If you train the top Transformer block only (i.e. leveraging global features), you only need 1 gpu.
-If you train the top & the intermediate Transformer blocks (i.e. leveraging local features), you'll need 2 gpus.
-
 Then, run the following command to kick off model training on a single fold:
 
 - classification: `python3 train/classification.py --config-name <classification_single_fold_config_filename>`
 - survival: `python3 train/survival.py --config-name <survival_single_fold_config_filename>`
+
+Once again, if you encounter OOM errors here, it could be that the model is too big to fit on your gpu. In that case, work with 2 gpus and enable model split across gpus setting `split_across_gpus: True` in your config file.
 
 **3. Train a *multi-fold* model on extracted features**
 
@@ -176,8 +184,8 @@ PRETRAINING_DIR/
             ├── patch_2.png
             └── ...
   └──region_4096_pretraining/
-      ├── slide_1_1.pt
-      ├── slide_1_2.pt
+      ├── slide_1_region_1.pt
+      ├── slide_1_region_2.pt
       └── ...
 ```
 </details>
@@ -198,19 +206,16 @@ python3 pretrain/dino_patch.py --config-name <dino_patch_config>
 python3 pretrain/dino_region.py --config-name <dino_region__config>
 ```
 
-**Distributed** pretraining across multiple is supported via:
+**Distributed** pretraining across multiple gpus is supported via:
 
 ```bash
 python3 -m torch.distributed.run --nproc_per_node=gpu pretrain/dino_patch.py --config-name <dino_patch_config>
 python3 -m torch.distributed.run --nproc_per_node=gpu pretrain/dino_region.py --config-name <dino_region_config>
 ```
 
-## Resuming experiment after crash / bug
-
-If, for some reason, feature extraction crashes, you should be able to resume from last processed slide simply by turning the `resume` parameter in your feature extraction config file to `True`, keeping all other parameters unchanged.
+**Early Stopping DINO pretraining**
 
 ## TODO List
 
 - [ ] switch back optimizer.zero_grad( ) before .step( )
 - [ ] implement heatmap visualization
-- [ ] add early stopping mechanism to DINO pretraining
