@@ -262,7 +262,7 @@ class SmoothedValue(object):
         if not is_dist_avail_and_initialized():
             return
         if gpu_id == -1:
-            main_device ="cuda"
+            main_device = "cuda"
         else:
             main_device = torch.device(f"cuda:{gpu_id}")
         t = torch.tensor([self.count, self.total], dtype=torch.float64, device=main_device)
@@ -684,7 +684,7 @@ def init_distributed_mode(cfg):
         rank=cfg.rank,
     )
 
-    torch.cuda.set_device(cfg.gpu)
+    torch.cuda.device(cfg.gpu)
     dist.barrier()
     setup_for_distributed(cfg.rank == 0)
 
@@ -724,7 +724,7 @@ def train_one_epoch(
         unit_scale=data_loader.batch_size,
         leave=False,
         file=sys.stdout,
-        disable=not (gpu_id==0),
+        disable=not (gpu_id in [-1, 0]),
     ) as t:
         for it, (images, _) in enumerate(t):
             # update weight decay and learning rate according to their schedule
