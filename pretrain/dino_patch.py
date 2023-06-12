@@ -61,6 +61,13 @@ def main(cfg: DictConfig):
             wandb_run = initialize_wandb(cfg, key=key)
             wandb_run.define_metric("epoch", summary="max")
             run_id = wandb_run.id
+    else:
+        run_id = ""
+
+    if distributed:
+        obj = [run_id]
+        torch.distributed.broadcast_object_list(obj, 0, device=torch.device(f"cuda:{gpu_id}"))
+        run_id = obj[0]
 
     fix_random_seeds(cfg.seed)
     cudnn.benchmark = True
