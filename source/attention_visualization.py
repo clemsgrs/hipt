@@ -9,26 +9,26 @@ from source.attention_visualization_utils import cmap_map, create_patch_heatmaps
 
 
 @hydra.main(
-    version_base="1.2.0", config_path="../config", config_name="debug"
+    version_base="1.2.0", config_path="../config/heatmaps", config_name="default"
 )
 def main(cfg: DictConfig):
 
     patch = Image.open(cfg.patch_fp)
     region = Image.open(cfg.region_fp)
 
-    patch_device = torch.device('cpu')
-    region_device = torch.device('cpu')
+    patch_device = torch.device('cuda:0')
+    region_device = torch.device('cuda:0')
 
-    patch_pretrained_weights = Path('/data/pathology/projects/ais-cap/code/git/clemsgrs/hipt/checkpoints/vit_256_small_dino.pth')
-    patch_model = get_vit256(pretrained_weights=patch_pretrained_weights, device=patch_device)
-
-    region_pretrained_weights = Path('/data/pathology/projects/ais-cap/code/git/clemsgrs/hipt/checkpoints/vit4k_xs_dino.pth')
-    region_model = get_vit4k(pretrained_weights=region_pretrained_weights, device=region_device)
+    patch_model = get_vit256(pretrained_weights=cfg.patch_weights, device=patch_device)
+    region_model = get_vit4k(pretrained_weights=cfg.region_weights, device=region_device)
 
     light_jet = cmap_map(lambda x: x/2 + 0.5, matplotlib.cm.jet)
 
+    output_dir = Path(cfg.output_dir)
+    output_dir.mkdir(exist_ok=True, parents=True)
+
     print(f'Computing indiviudal patch-level attention heatmaps')
-    output_dir_patch = Path('attention_heatmaps/patch_indiv')
+    output_dir_patch = Path(output_dir, 'patch_indiv')
     output_dir_patch.mkdir(exist_ok=True, parents=True)
     create_patch_heatmaps_indiv(
         patch,
@@ -42,7 +42,7 @@ def main(cfg: DictConfig):
     print('done!')
 
     print(f'Computing concatenated patch-level attention heatmaps')
-    output_dir_patch_concat = Path('attention_heatmaps/patch_concat')
+    output_dir_patch_concat = Path(output_dir, 'patch_concat')
     output_dir_patch_concat.mkdir(exist_ok=True, parents=True)
     create_patch_heatmaps_concat(
         patch,
@@ -56,7 +56,7 @@ def main(cfg: DictConfig):
     print('done!')
 
     print(f'Computing individual region-level attention heatmaps')
-    output_dir_region = Path('attention_heatmaps/region_indiv')
+    output_dir_region = Path(output_dir, 'region_indiv')
     output_dir_region.mkdir(exist_ok=True, parents=True)
     create_hierarchical_heatmaps_indiv(
         region,
@@ -73,7 +73,7 @@ def main(cfg: DictConfig):
     print('done!')
 
     print(f'Computing concatenated region-level attention heatmaps')
-    output_dir_region_concat = Path('attention_heatmaps/region_concat')
+    output_dir_region_concat = Path(output_dir, 'region_concat')
     output_dir_region_concat.mkdir(exist_ok=True, parents=True)
     create_hierarchical_heatmaps_concat(
         region,
