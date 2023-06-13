@@ -1,17 +1,17 @@
 import cv2
+import numpy as np
 import matplotlib
 import matplotlib.pyplot as plt
-import numpy as np
+import torch
+import torch.nn as nn
+import torchvision.transforms as transforms
+
 from PIL import Image
 from PIL import ImageFont
 from PIL import ImageDraw 
+from einops import rearrange
 from scipy.stats import rankdata
-
-import torch
-import torch.nn as nn
-import torchvision
-import torchvision.transforms as transforms
-from einops import rearrange, repeat
+from typing import Optional
 
 import source.vision_transformer as vits
 
@@ -43,18 +43,55 @@ def get_patch_scores(attns, size=(256,256)):
 
 def concat_patch_scores(attns, size=(256,256)):
     rank = lambda v: rankdata(v) / len(v)
-    color_block = [rank(attn.flatten()).reshape(size) for attn in attns]
+    color_block = [rank(attn.flatten()).reshape(size) for attn in attns] # [(256, 256)] of length len(attns)
     color_hm = np.concatenate([
         np.concatenate(color_block[i:(i+16)], axis=1)
         for i in range(0,256,16)
     ])
+    # (16*256, 16*256)
     return color_hm
 
 
 def concat_region_scores(attn, size=(4096, 4096)):
     rank = lambda v: rankdata(v) / len(v)
-    color_hm = rank(attn.flatten()).reshape(size)
+    color_hm = rank(attn.flatten()).reshape(size)   # (4096, 4096)
     return color_hm
+
+
+def getConcatImage(imgs, how='horizontal', gap=0):
+    """
+    Function to concatenate list of images (vertical or horizontal).
+
+    Args:
+        - imgs (list of PIL.Image): List of PIL Images to concatenate.
+        - how (str): How the images are concatenated (either 'horizontal' or 'vertical')
+        - gap (int): Gap (in px) between images
+
+    Return:
+        - dst (PIL.Image): Concatenated image result.
+    """
+    gap_dist = (len(imgs)-1)*gap
+    
+    if how == 'vertical':
+        w, h = np.max([img.width for img in imgs]), np.sum([img.height for img in imgs])
+        h += gap_dist
+        curr_h = 0
+        dst = Image.new('RGBA', (w, h), color=(255, 255, 255, 0))
+        for img in imgs:
+            dst.paste(img, (0, curr_h))
+            curr_h += img.height + gap
+
+    elif how == 'horizontal':
+        w, h = np.sum([img.width for img in imgs]), np.min([img.height for img in imgs])
+        w += gap_dist
+        curr_w = 0
+        dst = Image.new('RGBA', (w, h), color=(255, 255, 255, 0))
+
+        for idx, img in enumerate(imgs):
+            dst.paste(img, (curr_w, 0))
+            curr_w += img.width + gap
+
+    return dst
 
 
 def cmap_map(function, cmap):
@@ -136,14 +173,14 @@ def get_patch_attention_scores(
     return tensorbatch2im(batch), attention
 
 
-def create_patch_heatmaps_indiv_custom(
+def create_patch_heatmaps_indiv(
     patch,
     patch_model,
     output_dir,
-    fname,
-    threshold=0.5,
-    offset=16,
-    alpha=0.5,
+    patch_size: int = 256,
+    fname: str = 'patch',
+    threshold: float = 0.5,
+    alpha: float = 0.5,
     cmap=plt.get_cmap('coolwarm'),
     patch_device=torch.device('cuda:0'),
 ):
@@ -151,88 +188,110 @@ def create_patch_heatmaps_indiv_custom(
     Creates patch heatmaps (saved individually).
     
     Args:
-    - patch (PIL.Image): 256x256 input patch
+    - patch (PIL.Image): input patch
     - patch_model (torch.nn): patch-level ViT 
     - output_dir (str): save directory
+    - patch_size (int): size of input patch
     - fname (str): naming structure of files
-    - offset (int): how much to offset (from top-left corner with zero-padding) the region by for blending 
     - alpha (float): image blending factor for cv2.addWeighted
     - cmap (matplotlib.pyplot): colormap for creating heatmaps
     """
     patch1 = patch.copy()
     _, att = get_patch_attention_scores(patch1, patch_model, patch_device=patch_device)
     save_region = np.array(patch.copy())
-    s = 256
 
     if threshold != None:
-        for i in range(6):
-            att_scores = get_patch_scores(att[:,i,:,:], size=(s,)*2)
-            att_mask = att_scores.copy()
-            att_mask[att_mask < threshold] = 0
-            att_mask[att_mask > threshold] = 0.95
 
-            color_block = (cmap(att_mask)*255)[:,:,:3].astype(np.uint8)
+        with tqdm.tqdm(
+            range(6),
+            desc='Iterating over patch-level heads',
+            unit=' head',
+            leave=True,
+        ) as t:
+
+            for i in t:
+
+                att_scores = get_patch_scores(att[:,i,:,:], size=(patch_size,)*2)
+                att_mask = att_scores.copy()
+                att_mask[att_mask < threshold] = 0
+                att_mask[att_mask > threshold] = 0.95
+
+                color_block = (cmap(att_mask)*255)[:,:,:3].astype(np.uint8)
+                region_hm = cv2.addWeighted(color_block, alpha, save_region.copy(), 1-alpha, 0, save_region.copy())
+                region_hm[att_mask == 0] = 0
+                img_inverse = save_region.copy()
+                img_inverse[att_mask == 0.95] = 0
+                img_thresh = Image.fromarray(region_hm+img_inverse)
+                img_thresh.save(Path(output_dir, f'{fname}_{patch_size}_head_{i}_thresh.png'))
+
+    with tqdm.tqdm(
+        range(6),
+        desc='Iterating over patch-level heads',
+        unit=' head',
+        leave=True,
+    ) as t:
+
+        for i in t:
+
+            att_scores = get_patch_scores(att[:,i,:,:], size=(patch_size,)*2)
+            color_block = (cmap(att_scores)*255)[:,:,:3].astype(np.uint8)
             region_hm = cv2.addWeighted(color_block, alpha, save_region.copy(), 1-alpha, 0, save_region.copy())
-            region_hm[att_mask == 0] = 0
-            img_inverse = save_region.copy()
-            img_inverse[att_mask == 0.95] = 0
-            img_thresh = Image.fromarray(region_hm+img_inverse)
-            img_thresh.save(Path(output_dir, f'{fname}_{s}_head_{i}_thresh.png'))
-
-    for i in range(6):
-        att_scores = get_patch_scores(att[:,i,:,:], size=(s,)*2)
-        color_block = (cmap(att_scores)*255)[:,:,:3].astype(np.uint8)
-        region_hm = cv2.addWeighted(color_block, alpha, save_region.copy(), 1-alpha, 0, save_region.copy())
-        img = Image.fromarray(region_hm)
-        img.save(Path(output_dir, f'{fname}_{s}_head_{i}.png'))
-
+            img = Image.fromarray(region_hm)
+            img.save(Path(output_dir, f'{fname}_{patch_size}_head_{i}.png'))
 
         
 def create_patch_heatmaps_concat(
     patch,
     patch_model,
     output_dir,
-    fname,
-    threshold=0.5,
-    offset=16,
-    alpha=0.5,
+    patch_size: int = 256,
+    fname: str = 'patch',
+    threshold: float = 0.5,
+    alpha: float = 0.5,
     cmap=plt.get_cmap('coolwarm'),
+    patch_device=torch.device('cuda:0'),
 ):
     """
     Creates patch heatmaps (concatenated for easy comparison)
     
     Args:
-    - patch (PIL.Image): 256x256 input patch
+    - patch (PIL.Image): input patch
     - patch_model (torch.nn): patch-level ViT 
     - output_dir (str): save directory
+    - patch_size (int): size of input patch
     - fname (str): naming structure of files
-    - offset (int): how much to offset (from top-left corner with zero-padding) the region by for blending 
     - alpha (float): image blending factor for cv2.addWeighted
     - cmap (matplotlib.pyplot): colormap for creating heatmaps
-    
-    Returns:
-    - None
     """
     patch1 = patch.copy()
-    _, att = get_patch_attention_scores(patch1, patch_model)
+    _, att = get_patch_attention_scores(patch1, patch_model, patch_device=patch_device)
     save_region = np.array(patch.copy())
-    s = 256
 
     if threshold != None:
+
         ths = []
-        for i in range(6):
-            att_scores = get_patch_scores(att[:,i,:,:], size=(s,)*2)
 
-            att_mask = att_scores.copy()
-            att_mask[att_mask < threshold] = 0
-            att_mask[att_mask > threshold] = 0.95
+        with tqdm.tqdm(
+            range(6),
+            desc='Iterating over patch-level heads',
+            unit=' head',
+            leave=True,
+        ) as t:
 
-            color_block = (cmap(att_mask)*255)[:,:,:3].astype(np.uint8)
-            region_hm = cv2.addWeighted(color_block, alpha, save_region.copy(), 1-alpha, 0, save_region.copy())
-            region_hm[att_mask == 0] = 0
-            img_inverse = save_region.copy()
-            img_inverse[att_mask == 0.95] = 0
-            ths.append(region_hm+img_inverse)
+            for i in t:
+
+                att_scores = get_patch_scores(att[:,i,:,:], size=(patch_size,)*2)
+
+                att_mask = att_scores.copy()
+                att_mask[att_mask < threshold] = 0
+                att_mask[att_mask > threshold] = 0.95
+
+                color_block = (cmap(att_mask)*255)[:,:,:3].astype(np.uint8)
+                region_hm = cv2.addWeighted(color_block, alpha, save_region.copy(), 1-alpha, 0, save_region.copy())
+                region_hm[att_mask == 0] = 0
+                img_inverse = save_region.copy()
+                img_inverse[att_mask == 0.95] = 0
+                ths.append(region_hm+img_inverse)
             
         ths = [Image.fromarray(img) for img in ths]
             
@@ -240,14 +299,23 @@ def create_patch_heatmaps_concat(
             [getConcatImage(ths[0:3]),
             getConcatImage(ths[3:6])
         ], how='vertical')
-        concat_img_thresh.save(Path(output_dir, f'{fname}_{s}thresh.png'))
+        concat_img_thresh.save(Path(output_dir, f'{fname}_{patch_size}_thresh.png'))
     
     hms = []
-    for i in range(6):
-        att_scores = get_patch_scores(att[:,i,:,:], size=(s,)*2)
-        color_block = (cmap(att_scores)*255)[:,:,:3].astype(np.uint8)
-        region_hm = cv2.addWeighted(color_block, alpha, save_region.copy(), 1-alpha, 0, save_region.copy())
-        hms.append(region_hm)
+
+    with tqdm.tqdm(
+        range(6),
+        desc='Iterating over patch-level heads',
+        unit=' head',
+        leave=True,
+    ) as t:
+
+        for i in t:
+
+            att_scores = get_patch_scores(att[:,i,:,:], size=(patch_size,)*2)
+            color_block = (cmap(att_scores)*255)[:,:,:3].astype(np.uint8)
+            region_hm = cv2.addWeighted(color_block, alpha, save_region.copy(), 1-alpha, 0, save_region.copy())
+            hms.append(region_hm)
 
     hms = [Image.fromarray(img) for img in hms]
 
@@ -255,16 +323,18 @@ def create_patch_heatmaps_concat(
         [
             getConcatImage(hms[0:3]),
             getConcatImage(hms[3:6])
-        ], how='vertical').
+        ], how='vertical')
 
-    concat_img.save(Path(output_dir, f'{fname}_{s}_hm.png'))
+    concat_img.save(Path(output_dir, f'{fname}_{patch_size}_hm.png'))
 
 
 def get_region_attention_scores(
     region,
     patch_model,
     region_model,
-    scale=1,
+    patch_size: int = 256,
+    mini_patch_size: int = 16,
+    scale: int = 1,
     patch_device=torch.device('cuda:0'),
     region_device=torch.device('cuda:1'),
 ):
@@ -272,9 +342,11 @@ def get_region_attention_scores(
     Forward pass in hierarchical model with attention scores saved.
     
     Args:
-    - region (PIL.Image): 4096x4096 input region 
+    - region (PIL.Image): input region 
     - patch_model (torch.nn): patch-level ViT 
     - region_model (torch.nn): region-level Transformer 
+    - patch_size (int): size of patches used for unrolling input region
+    - mini_patch_size (int): size of mini-patches used for unrolling patch_model inputs
     - scale (int): how much to scale the output image by (e.g. scale=4 will resize images to be 1024x1024)
     
     Returns:
@@ -288,24 +360,26 @@ def get_region_attention_scores(
             [0.5, 0.5, 0.5], [0.5, 0.5, 0.5]
         )
     ])
+    n_patch = region_size // patch_size
+    n_minipatch = patch_size // mini_patch_size
 
     with torch.no_grad():   
-        patches = t(region).unsqueeze(0).unfold(2, 256, 256).unfold(3, 256, 256)
-        patches = rearrange(patches, 'b c p1 p2 w h -> (b p1 p2) c w h')
+        patches = t(region).unsqueeze(0).unfold(2, patch_size, patch_size).unfold(3, patch_size, patch_size) # (1, 3, region_size, region_size) -> (1, 3, n_patch, n_patch, patch_size, patch_size)
+        patches = rearrange(patches, 'b c p1 p2 w h -> (b p1 p2) c w h') # (n_patch**2, 3, patch_size, patch_size)
         patches = patches.to(patch_device, non_blocking=True)
-        patch_features = patch_model(patches)
+        patch_features = patch_model(patches)   # (n_patch**2, 384)
 
         patch_attention = patch_model.get_last_selfattention(patches)
         nh = patch_attention.shape[1] # number of head
-        patch_attention = patch_attention[:, :, 0, 1:].reshape(256, nh, -1)
-        patch_attention = patch_attention.reshape(256, nh, 16, 16)
-        patch_attention = nn.functional.interpolate(patch_attention, scale_factor=int(16/scale), mode="nearest").cpu().numpy()
+        patch_attention = patch_attention[:, :, 0, 1:].reshape(n_minipatch**2, nh, -1)
+        patch_attention = patch_attention.reshape(n_minipatch**2, nh, mini_patch_size, mini_patch_size) # (n_minipatch**2, 6, 16, 16)
+        patch_attention = nn.functional.interpolate(patch_attention, scale_factor=int(16/scale), mode="nearest").cpu().numpy()  # (n_minipatch**2, 6, 256, 256) when scale = 1
 
-        region_features = patch_features.unfold(0, 16, 16).transpose(0,1).unsqueeze(dim=0)
+        region_features = patch_features.unfold(0, mini_patch_size, mini_patch_size).transpose(0,1).unsqueeze(dim=0)    # (n_minipatch**2, 384)
         region_attention = region_model.get_last_selfattention(region_features.detach().to(region_device))
         nh = region_attention.shape[1] # number of head
         region_attention = region_attention[0, :, 0, 1:].reshape(nh, -1)
-        region_attention = region_attention.reshape(nh, 16, 16)
+        region_attention = region_attention.reshape(nh, mini_patch_size, mini_patch_size)
         region_attention = nn.functional.interpolate(region_attention.unsqueeze(0), scale_factor=int(256/scale), mode="nearest")[0].cpu().numpy()
 
         if scale != 1:
@@ -319,79 +393,115 @@ def create_hierarchical_heatmaps_indiv(
     patch_model,
     region_model,
     output_dir,
-    fname,
-    offset=128,
-    scale=4,
-    alpha=0.5,
+    mini_patch_size: int = 16,
+    fname: str = 'region',
+    scale: int = 4,
+    alpha: float = 0.5,
     cmap=plt.get_cmap('coolwarm'),
-    threshold=None,
+    threshold: Optional[float] = None,
+    patch_device=torch.device('cuda:0'),
+    region_device=torch.device('cuda:1'),
 ):
     """
     Creates hierarchical heatmaps (Raw H&E + ViT-256 + ViT-4K + Blended Heatmaps saved individually).  
     
     Args:
-    - region (PIL.Image): 4096x4096 input region 
+    - region (PIL.Image): input region 
     - patch_model (torch.nn): patch-level ViT 
     - region_model (torch.nn): region-level Transformer 
     - output_dir (str): save directory / subdirectory
+    - mini_patch_size (int): size of mini-patches used for unrolling patch_model inputs
     - fname (str): naming structure of files
-    - offset (int): how much to offset (from top-left corner with zero-padding) the region by for blending 
     - scale (int): how much to scale the output image by 
     - alpha (float): image blending factor for cv2.addWeighted
     - cmap (matplotlib.pyplot): colormap for creating heatmaps
     """
-    _, patch_att, region_att = get_region_attention_scores(region, patch_model, region_model, scale)
-    s = 4096//scale
+    region_size = region.size[0]
+    _, patch_att, region_att = get_region_attention_scores(region, patch_model, region_model, scale=scale, patch_device=patch_device, region_device=region_device)
+    s = region_size // scale
     save_region = np.array(region.resize((s, s)))
     
     if threshold != None:
-        for i in range(6):
-            patch_att_scores = concat_patch_scores(patch_att[:,i,:,:], size=(s//16,)*2)
-            
-            att_mask = patch_att_scores.copy()
-            att_mask[att_mask < threshold] = 0
-            att_mask[att_mask > threshold] = 0.95
-            
-            patch_color_block = (cmap(att_mask)*255)[:,:,:3].astype(np.uint8)
-            patch_hm = cv2.addWeighted(patch_color_block, alpha, save_region.copy(), 1-alpha, 0, save_region.copy())
-            patch_hm[att_mask == 0] = 0
-            img_inverse = save_region.copy()
-            img_inverse[att_mask == 0.95] = 0
-            img = Image.fromarray(patch_hm+img_inverse)
-            img.save(os.path.join(output_dir, f'{fname}_256th[{i}].png'))
-    
-    if False:
-        for j in range(6):
+
+        with tqdm.tqdm(
+            range(6),
+            desc='Iterating over patch-level heads',
+            unit=' head',
+            leave=True,
+        ) as t:
+
+            for i in t:
+
+                patch_att_scores = concat_patch_scores(patch_att[:,i,:,:], size=(s//mini_patch_size,)*2)
+                
+                att_mask = patch_att_scores.copy()
+                att_mask[att_mask < threshold] = 0
+                att_mask[att_mask > threshold] = 0.95
+                
+                patch_color_block = (cmap(att_mask)*255)[:,:,:3].astype(np.uint8)
+                patch_hm = cv2.addWeighted(patch_color_block, alpha, save_region.copy(), 1-alpha, 0, save_region.copy())
+                patch_hm[att_mask == 0] = 0
+                img_inverse = save_region.copy()
+                img_inverse[att_mask == 0.95] = 0
+                img = Image.fromarray(patch_hm+img_inverse)
+                img.save(Path(output_dir, f'{fname}_256_head_{i}_thresh.png'))
+
+    with tqdm.tqdm(
+        range(6),
+        desc='Iterating over region-level heads',
+        unit=' head',
+        leave=True,
+    ) as t:
+
+        for j in t:
+
             region_att_scores = concat_region_scores(region_att[j], size=(s,)*2)
-            region_att_scores = region_att_scores / 100
             region_color_block = (cmap(region_att_scores)*255)[:,:,:3].astype(np.uint8)
             region_hm = cv2.addWeighted(region_color_block, alpha, save_region.copy(), 1-alpha, 0, save_region.copy())
             img = Image.fromarray(region_hm)
-            img.save(os.path.join(output_dir, f'{fname}_4k[{j}].png'))
-        
-    for j in range(6):
+            img.save(Path(output_dir, f'{fname}_1024_head_{j}.png'))
+
+    with tqdm.tqdm(
+        range(6),
+        desc='Iterating over patch-level heads',
+        unit=' head',
+        leave=True,
+    ) as t:
+
+        for i in t:
+
+            patch_att_scores = concat_patch_scores(patch_att[:,i,:,:], size=(s//mini_patch_size,)*2)
+            patch_color_block = (cmap(patch_att_scores)*255)[:,:,:3].astype(np.uint8)
+            patch_hm = cv2.addWeighted(patch_color_block, alpha, save_region.copy(), 1-alpha, 0, save_region.copy())
+            img = Image.fromarray(patch_hm)
+            img.save(Path(output_dir, f'{fname}_256_head_{i}.png'))
+
+    with tqdm.tqdm(
+        range(6),
+        desc='Iterating over region-level heads',
+        unit=' head',
+        leave=True,
+    ) as t1:
+
+        for j in t1:
+
         region_att_scores = concat_region_scores(region_att[j], size=(s,)*2)
-        region_color_block = (cmap(region_att_scores)*255)[:,:,:3].astype(np.uint8)
-        region_hm = cv2.addWeighted(region_color_block, alpha, save_region.copy(), 1-alpha, 0, save_region.copy())
-        img = Image.fromarray(region_hm)
-        img.save(os.path.join(output_dir, f'{fname}_1024[{j}].png'))
-        
-    for i in range(6):
-        patch_att_scores = concat_patch_scores(patch_att[:,i,:,:], size=(s//16,)*2)
-        patch_color_block = (cmap(patch_att_scores)*255)[:,:,:3].astype(np.uint8)
-        patch_hm = cv2.addWeighted(patch_color_block, alpha, save_region.copy(), 1-alpha, 0, save_region.copy())
-        img = Image.fromarray(patch_hm)
-        img.save(Path(output_dir, f'{fname}_256[{i}].png'))
-    
-    for j in range(6):
-        region_att_scores = concat_region_scores(region_att[j], size=(s,)*2)
-        for i in range(6):
-            patch_att_scores = concat_patch_scores(patch_att[:,i,:,:], size=(s//16,)*2)
-            score = region_att_scores + patch_att_scores
-            color_block = (cmap(score)*255)[:,:,:3].astype(np.uint8)
-            region_hm = cv2.addWeighted(color_block, alpha, save_region.copy(), 1-alpha, 0, save_region.copy())
-            img = Image.fromarray(region_hm)
-            img.save(Path(output_dir, f'{fname}_factorized_4k{j}]_256[{i}].png'))
+
+        with tqdm.tqdm(
+            range(6),
+            desc='Iterating over patch-level heads',
+            unit=' head',
+            leave=False,
+        ) as t2:
+
+            for i in t2:
+
+                patch_att_scores = concat_patch_scores(patch_att[:,i,:,:], size=(s//mini_patch_size,)*2)
+                score = region_att_scores + patch_att_scores
+                color_block = (cmap(score)*255)[:,:,:3].astype(np.uint8)
+                region_hm = cv2.addWeighted(color_block, alpha, save_region.copy(), 1-alpha, 0, save_region.copy())
+                img = Image.fromarray(region_hm)
+                img.save(Path(output_dir, f'{fname}_factorized_4k_head_{j}_256_head_{i}.png'))
 
 
 def create_hierarchical_heatmaps_concat(
@@ -399,54 +509,158 @@ def create_hierarchical_heatmaps_concat(
     patch_model,
     region_model,
     output_dir,
-    fname,
-    offset=128,
-    scale=4,
-    alpha=0.5,
+    mini_patch_size: int = 16,
+    fname: str = 'region',
+    scale: int = 4,
+    alpha: float = 0.5,
     cmap=plt.get_cmap('coolwarm'),
+    patch_device=torch.device('cuda:0'),
+    region_device=torch.device('cuda:1'),
 ):
     """
     Creates hierarchical heatmaps (With Raw H&E + ViT-256 + ViT-4K + Blended Heatmaps concatenated for easy comparison)
     
     Args:
-    - region (PIL.Image): 4096x4096 input region 
+    - region (PIL.Image): input region 
     - patch_model (torch.nn): patch-level ViT 
     - region_model (torch.nn): region-level Transformer 
     - output_dir (str): save directory / subdirectory
+    - mini_patch_size (int): size of mini-patches used for unrolling patch_model inputs
     - fname (str): naming structure of files
-    - offset (int): how much to offset (from top-left corner with zero-padding) the region by for blending 
     - scale (int): how much to scale the output image by 
     - alpha (float): image blending factor for cv2.addWeighted
     - cmap (matplotlib.pyplot): colormap for creating heatmaps
     """
-    _, patch_att, region_att = get_region_attention_scores(region, patch_model, region_model, scale)
-    s = 4096//scale
-    save_region = np.array(region.resize((s, s)))
+    region_size = region.size[0]
+    _, patch_att, region_att = get_region_attention_scores(region, patch_model, region_model, scale=scale, patch_device=patch_device, region_device=region_device) # (256, 6, 128, 128), (6, 2048, 2048) when scale = 2
+    s = region_size // scale                        # 2048 for scale = 2, region_size = 4096
+    save_region = np.array(region.resize((s, s)))   # (2048, 2048) for scale = 2, region_size = 4096
 
-    for j in range(6):
-        region_att_scores = concat_region_scores(region_att[j], size=(s,)*2)
-        region_color_block = (cmap(region_att_scores/100)*255)[:,:,:3].astype(np.uint8)
-        region_hm = cv2.addWeighted(region_color_block, alpha, save_region.copy(), 1-alpha, 0, save_region.copy())
-        
-        for i in range(6):
-            patch_att_scores = concat_patch_scores(patch_att[:,i,:,:], size=(s//16,)*2)
-            patch_color_block = (cmap(patch_att_scores)*255)[:,:,:3].astype(np.uint8)
-            patch_hm = cv2.addWeighted(patch_color_block, alpha, save_region.copy(), 1-alpha, 0, save_region.copy())
-        
-            score = region_att_scores + patch_att_scores
-            color_block = (cmap(score)*255)[:,:,:3].astype(np.uint8)
-            hierarchical_region_hm = cv2.addWeighted(color_block, alpha, save_region.copy(), 1-alpha, 0, save_region.copy())
+    with tqdm.tqdm(
+        range(6),
+        desc='Iterating over region-level heads',
+        unit=' head',
+        leave=True,
+    ) as t1:
+
+        for j in t1:
+
+            region_att_scores = concat_region_scores(region_att[j], size=(s,)*2)    # (2048, 2048) for scale = 2
+            region_color_block = (cmap(region_att_scores)*255)[:,:,:3].astype(np.uint8)
+            region_hm = cv2.addWeighted(region_color_block, alpha, save_region.copy(), 1-alpha, 0, save_region.copy())  # (2048, 2048) for scale = 2, region_size = 4096
             
-            pad = 100
-            canvas = Image.new('RGB', (s*2+pad,)*2, (255,)*3)
-            draw = ImageDraw.Draw(canvas)
-            font = ImageFont.truetype("arial.ttf", 50)
-            draw.text((1024*0.5-pad*2, pad//4), "ViT-256 (Head: %d)" % i, (0, 0, 0), font=font)
-            canvas = canvas.rotate(90)
-            draw = ImageDraw.Draw(canvas)
-            draw.text((1024*1.5-pad, pad//4), "ViT-4K (Head: %d)" % j, (0, 0, 0), font=font)
-            canvas.paste(Image.fromarray(save_region), (pad,pad))
-            canvas.paste(Image.fromarray(region_hm), (1024+pad,pad))
-            canvas.paste(Image.fromarray(patch_hm), (pad,1024+pad))
-            canvas.paste(Image.fromarray(hierarchical_region_hm), (s+pad,s+pad))
-            canvas.save(Path(output_dir, f'{fname}_4k[{j}]_256[{i}].png'))
+            with tqdm.tqdm(
+                range(6),
+                desc='Iterating over patch-level heads',
+                unit=' head',
+                leave=False,
+            ) as t2:
+
+                for i in t2:
+
+                    patch_att_scores = concat_patch_scores(patch_att[:,i,:,:], size=(s//mini_patch_size,)*2) # (2048, 2048) for scale = 2
+                    patch_color_block = (cmap(patch_att_scores)*255)[:,:,:3].astype(np.uint8)
+                    patch_hm = cv2.addWeighted(patch_color_block, alpha, save_region.copy(), 1-alpha, 0, save_region.copy())    # (2048, 2048) for scale = 2
+                
+                    score = region_att_scores + patch_att_scores
+                    color_block = (cmap(score)*255)[:,:,:3].astype(np.uint8)
+                    hierarchical_region_hm = cv2.addWeighted(color_block, alpha, save_region.copy(), 1-alpha, 0, save_region.copy())    # (2048, 2048) for scale = 2
+                    
+                    pad = 100
+                    canvas = Image.new('RGB', (s*2+pad*3,)*2, (255,)*3)   # (2 * region_size // scale + 100, 2 * region_size // scale + 100, 3) ; (4096, 4096, 3) for scale = 2, region_size = 4096
+                    draw = ImageDraw.Draw(canvas)
+                    draw.text((s*0.5-pad*2, pad//4), f"patch-level Transformer (Head: {i})", (0, 0, 0))
+                    canvas = canvas.rotate(90)
+                    draw = ImageDraw.Draw(canvas)
+                    draw.text((s*1.5-pad, pad//4), f"region-level Transformer (Head: {j})", (0, 0, 0))
+                    canvas.paste(Image.fromarray(save_region), (pad,pad))                       # (2048, 2048) for scale = 2, region_size = 4096 ; (100, 100)
+                    canvas.paste(Image.fromarray(region_hm), (s+2*pad,pad))                     # (2048, 2048) for scale = 2, region_size = 4096 ; (2048+100, 100)
+                    canvas.paste(Image.fromarray(patch_hm), (pad,s+2*pad))                      # (2048, 2048) for scale = 2, region_size = 4096 ; (100, 2048+100)
+                    canvas.paste(Image.fromarray(hierarchical_region_hm), (s+2*pad,s+2*pad))    # (2048, 2048) for scale = 2, region_size = 4096 ; (2048+100, 2048+100)
+                    canvas.save(Path(output_dir, f'{fname}_4k[{j}]_256[{i}].png'))
+
+
+def main():
+
+    patch_fp = 'image_256.png'
+    patch = Image.open(patch_fp)
+
+    region_fp = 'image_4k.png'
+    region = Image.open(region_fp)
+
+    patch_device = torch.device('cpu')
+    region_device = torch.device('cpu')
+
+    patch_pretrained_weights = Path('/data/pathology/projects/ais-cap/code/git/clemsgrs/hipt/checkpoints/vit_256_small_dino.pth')
+    patch_model = get_vit256(pretrained_weights=patch_pretrained_weights, device=patch_device)
+
+    region_pretrained_weights = Path('/data/pathology/projects/ais-cap/code/git/clemsgrs/hipt/checkpoints/vit4k_xs_dino.pth')
+    region_model = get_vit4k(pretrained_weights=region_pretrained_weights, device=region_device)
+
+    light_jet = cmap_map(lambda x: x/2 + 0.5, matplotlib.cm.jet)
+
+    print(f'Computing indiviudal patch-level attention heatmaps')
+    output_dir_patch = Path('attention_heatmaps/patch_indiv')
+    output_dir_patch.mkdir(exist_ok=True, parents=True)
+    create_patch_heatmaps_indiv(
+        patch,
+        patch_model
+        output_dir_patch,
+        threshold=0.5,
+        alpha=0.5,
+        cmap=light_jet,
+        patch_device=patch_device
+    )
+    print('done!')
+
+    print(f'Computing concatenated patch-level attention heatmaps')
+    output_dir_patch_concat = Path('attention_heatmaps/patch_concat')
+    output_dir_patch_concat.mkdir(exist_ok=True, parents=True)
+    create_patch_heatmaps_concat(
+        patch,
+        patch_model,
+        output_dir_patch_concat,
+        threshold=0.5,
+        alpha=0.5,
+        cmap=light_jet,
+        patch_device=patch_device,
+    )
+    print('done!')
+
+    print(f'Computing individual region-level attention heatmaps')
+    output_dir_region = Path('attention_heatmaps/region_indiv')
+    output_dir_region.mkdir(exist_ok=True, parents=True)
+    create_hierarchical_heatmaps_indiv(
+        region,
+        patch_model,
+        region_model,
+        output_dir_region,
+        scale=2,
+        threshold=0.5,
+        alpha=0.5,
+        cmap=light_jet,
+        patch_device=patch_device,
+        region_device=region_device,
+    )
+    print('done!')
+
+    print(f'Computing concatenated region-level attention heatmaps')
+    output_dir_region_concat = Path('attention_heatmaps/region_concat')
+    output_dir_region_concat.mkdir(exist_ok=True, parents=True)
+    create_hierarchical_heatmaps_concat(
+        region,
+        patch_model,
+        region_model,
+        output_dir_region_concat,
+        scale=2,
+        alpha=0.5,
+        cmap=light_jet,
+        patch_device=patch_device,
+        region_device=region_device,
+    )
+    print('done!')
+
+
+if __name__ == "__main__":
+
+    main()
