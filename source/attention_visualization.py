@@ -2,11 +2,14 @@ import hydra
 import torch
 import matplotlib
 
+from PIL import Image
 from pathlib import Path
 from omegaconf import DictConfig
 
 from source.attention_visualization_utils import (
     cmap_map,
+    get_patch_model,
+    get_region_model,
     create_patch_heatmaps_indiv,
     create_patch_heatmaps_concat,
     create_hierarchical_heatmaps_indiv,
@@ -25,9 +28,12 @@ def main(cfg: DictConfig):
     patch_device = torch.device("cuda:0")
     region_device = torch.device("cuda:0")
 
-    patch_model = get_vit256(pretrained_weights=cfg.patch_weights, device=patch_device)
-    region_model = get_vit4k(
-        pretrained_weights=cfg.region_weights, device=region_device
+    patch_weights = Path(cfg.patch_weights)
+    patch_model = get_patch_model(pretrained_weights=patch_weights, device=patch_device)
+
+    region_weights = Path(cfg.region_weights)
+    region_model = get_region_model(
+        pretrained_weights=region_weights, device=region_device
     )
 
     light_jet = cmap_map(lambda x: x / 2 + 0.5, matplotlib.cm.jet)

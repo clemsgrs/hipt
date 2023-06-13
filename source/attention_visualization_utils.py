@@ -13,8 +13,61 @@ from PIL import ImageDraw
 from einops import rearrange
 from scipy.stats import rankdata
 from typing import Optional
+from pathlib import Path
 
 import source.vision_transformer as vits
+
+
+def get_patch_model(pretrained_weights, arch='vit_small', device: Optional[torch.device] = None):
+    
+    checkpoint_key = 'teacher'
+    if device is None:
+        device = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
+    patch_model = vits.__dict__[arch](patch_size=16, num_classes=0)
+    for p in patch_model.parameters():
+        p.requires_grad = False
+    patch_model.eval()
+    patch_model.to(device)
+
+    if pretrained_weights.is_file():
+        state_dict = torch.load(pretrained_weights, map_location="cpu")
+        if checkpoint_key is not None and checkpoint_key in state_dict:
+            print(f"Take key {checkpoint_key} in provided checkpoint dict")
+            state_dict = state_dict[checkpoint_key]
+        # remove `module.` prefix
+        state_dict = {k.replace("module.", ""): v for k, v in state_dict.items()}
+        # remove `backbone.` prefix induced by multicrop wrapper
+        state_dict = {k.replace("backbone.", ""): v for k, v in state_dict.items()}
+        msg = patch_model.load_state_dict(state_dict, strict=False)
+        print('Pretrained weights found at {} and loaded with msg: {}'.format(pretrained_weights, msg))
+        
+    return patch_model
+
+
+def get_region_model(pretrained_weights, arch='vit4k_xs', device: Optional[torch.device] = None):
+    
+    checkpoint_key = 'teacher'
+    if device is None:
+        device = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
+    region_model = vits.__dict__[arch](num_classes=0)
+    for p in region_model.parameters():
+        p.requires_grad = False
+    region_model.eval()
+    region_model.to(device)
+
+    if pretrained_weights.is_file():
+        state_dict = torch.load(pretrained_weights, map_location="cpu")
+        if checkpoint_key is not None and checkpoint_key in state_dict:
+            print(f"Take key {checkpoint_key} in provided checkpoint dict")
+            state_dict = state_dict[checkpoint_key]
+        # remove `module.` prefix
+        state_dict = {k.replace("module.", ""): v for k, v in state_dict.items()}
+        # remove `backbone.` prefix induced by multicrop wrapper
+        state_dict = {k.replace("backbone.", ""): v for k, v in state_dict.items()}
+        msg = region_model.load_state_dict(state_dict, strict=False)
+        print('Pretrained weights found at {} and loaded with msg: {}'.format(pretrained_weights, msg))
+        
+    return region_model
 
 
 def tensorbatch2im(input_image, imtype=np.uint8):
@@ -383,6 +436,7 @@ def get_region_attention_scores(
     t = transforms.Compose(
         [transforms.ToTensor(), transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5])]
     )
+    region_size = region.size[0]
     n_patch = region_size // patch_size
     n_minipatch = patch_size // mini_patch_size
 
@@ -716,14 +770,14 @@ def create_hierarchical_heatmaps_concat(
                     )  # (2 * region_size // scale + 100, 2 * region_size // scale + 100, 3) ; (4096, 4096, 3) for scale = 2, region_size = 4096
                     draw = ImageDraw.Draw(canvas)
                     draw.text(
-                        (s * 0.5 - pad * 2, pad // 4),
+                        (s * 0.5 + pad, pad // 4),
                         f"patch-level Transformer (Head: {i})",
                         (0, 0, 0),
                     )
                     canvas = canvas.rotate(90)
                     draw = ImageDraw.Draw(canvas)
                     draw.text(
-                        (s * 1.5 - pad, pad // 4),
+                        (s * 1.5 + pad * 2, pad // 4),
                         f"region-level Transformer (Head: {j})",
                         (0, 0, 0),
                     )
