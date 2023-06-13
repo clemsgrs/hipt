@@ -1,9 +1,10 @@
 import cv2
-import numpy as np
+import tqdm
 import matplotlib
 import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
+import numpy as np
 import torchvision.transforms as transforms
 
 from PIL import Image
@@ -578,89 +579,3 @@ def create_hierarchical_heatmaps_concat(
                     canvas.paste(Image.fromarray(patch_hm), (pad,s+2*pad))                      # (2048, 2048) for scale = 2, region_size = 4096 ; (100, 2048+100)
                     canvas.paste(Image.fromarray(hierarchical_region_hm), (s+2*pad,s+2*pad))    # (2048, 2048) for scale = 2, region_size = 4096 ; (2048+100, 2048+100)
                     canvas.save(Path(output_dir, f'{fname}_4k[{j}]_256[{i}].png'))
-
-
-def main():
-
-    patch_fp = 'image_256.png'
-    patch = Image.open(patch_fp)
-
-    region_fp = 'image_4k.png'
-    region = Image.open(region_fp)
-
-    patch_device = torch.device('cpu')
-    region_device = torch.device('cpu')
-
-    patch_pretrained_weights = Path('/data/pathology/projects/ais-cap/code/git/clemsgrs/hipt/checkpoints/vit_256_small_dino.pth')
-    patch_model = get_vit256(pretrained_weights=patch_pretrained_weights, device=patch_device)
-
-    region_pretrained_weights = Path('/data/pathology/projects/ais-cap/code/git/clemsgrs/hipt/checkpoints/vit4k_xs_dino.pth')
-    region_model = get_vit4k(pretrained_weights=region_pretrained_weights, device=region_device)
-
-    light_jet = cmap_map(lambda x: x/2 + 0.5, matplotlib.cm.jet)
-
-    print(f'Computing indiviudal patch-level attention heatmaps')
-    output_dir_patch = Path('attention_heatmaps/patch_indiv')
-    output_dir_patch.mkdir(exist_ok=True, parents=True)
-    create_patch_heatmaps_indiv(
-        patch,
-        patch_model
-        output_dir_patch,
-        threshold=0.5,
-        alpha=0.5,
-        cmap=light_jet,
-        patch_device=patch_device
-    )
-    print('done!')
-
-    print(f'Computing concatenated patch-level attention heatmaps')
-    output_dir_patch_concat = Path('attention_heatmaps/patch_concat')
-    output_dir_patch_concat.mkdir(exist_ok=True, parents=True)
-    create_patch_heatmaps_concat(
-        patch,
-        patch_model,
-        output_dir_patch_concat,
-        threshold=0.5,
-        alpha=0.5,
-        cmap=light_jet,
-        patch_device=patch_device,
-    )
-    print('done!')
-
-    print(f'Computing individual region-level attention heatmaps')
-    output_dir_region = Path('attention_heatmaps/region_indiv')
-    output_dir_region.mkdir(exist_ok=True, parents=True)
-    create_hierarchical_heatmaps_indiv(
-        region,
-        patch_model,
-        region_model,
-        output_dir_region,
-        scale=2,
-        threshold=0.5,
-        alpha=0.5,
-        cmap=light_jet,
-        patch_device=patch_device,
-        region_device=region_device,
-    )
-    print('done!')
-
-    print(f'Computing concatenated region-level attention heatmaps')
-    output_dir_region_concat = Path('attention_heatmaps/region_concat')
-    output_dir_region_concat.mkdir(exist_ok=True, parents=True)
-    create_hierarchical_heatmaps_concat(
-        region,
-        patch_model,
-        region_model,
-        output_dir_region_concat,
-        scale=2,
-        alpha=0.5,
-        cmap=light_jet,
-        patch_device=patch_device,
-        region_device=region_device,
-    )
-    print('done!')
-
-
-if __name__ == "__main__":
-
-    main()
