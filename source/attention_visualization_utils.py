@@ -12,10 +12,12 @@ from PIL import ImageFont
 from PIL import ImageDraw
 from einops import rearrange
 from scipy.stats import rankdata
-from typing import Optional
+from typing import Optional, List, Tuple
 from pathlib import Path
+from collections import defaultdict
 
 import source.vision_transformer as vits
+from source.wsi import WholeSlideImage
 
 
 def get_patch_model(pretrained_weights, arch='vit_small', device: Optional[torch.device] = None):
@@ -795,3 +797,398 @@ def create_hierarchical_heatmaps_concat(
                         (s + 2 * pad, s + 2 * pad),
                     )  # (2048, 2048) for scale = 2, region_size = 4096 ; (2048+100, 2048+100)
                     canvas.save(Path(output_dir, f"{fname}_4k[{j}]_256[{i}].png"))
+
+
+def get_slide_patch_level_heatmaps(
+    slide_id: str,
+    patch_model,
+    region_model,
+    region_dir: Path,
+    output_dir: Path,
+    patch_size: int = 256,
+    mini_patch_size: int = 16,
+    scale: int = 1,
+    alpha: float = 0.5,
+    cmap = plt.get_cmap('coolwarm'),
+    threshold: Optional[float] = None,
+    region_fmt: str = "jpg",
+    save_to_disk: bool = False,
+    patch_device: torch.device = torch.device('cuda:0'),
+    region_device: torch.device = torch.device('cuda:0'),
+):
+    """
+    Creates slide-level heatmaps of patch-level Transformer attention
+
+    Args:
+    - slide_id (str): input slide id
+    - patch_model (torch.nn): patch-level Transformer
+    - region_model (torch.nn): region-level Transformer
+    - output_dir (str): save directory / subdirectory
+    - patch_size (int): size of patches used for unrolling region_model inputs
+    - mini_patch_size (int): size of mini-patches used for unrolling patch_model inputs
+    - scale (int): how much to scale the output image by
+    - alpha (float): image blending factor for cv2.addWeighted
+    - cmap (matplotlib.pyplot): colormap for creating heatmaps
+    """
+    patch_output_dir = Path(output_dir, "patch")
+    patch_output_dir.mkdir(exist_ok=True, parents=True)
+
+    region_paths = [fp for fp in Path(region_dir, slide_id, "imgs").glob(f"*.{region_fmt}")]
+    nregions = len(region_paths)
+    patch_heatmaps, coords = defaultdict(list), defaultdict(list)
+
+    with tqdm.tqdm(
+        region_paths,
+        desc=f"Processing {slide_id}",
+        unit=" region",
+        leave=True,
+        position=0,
+    ) as t1:
+
+        for k, fp in enumerate(t1):
+
+            region = Image.open(fp)
+            region_size = region.size[0]
+            _, patch_att, _ = get_region_attention_scores(
+                region,
+                patch_model,
+                region_model,
+                scale=scale,
+                patch_device=patch_device,
+                region_device=region_device,
+            )
+            s = region_size // scale
+            save_region = np.array(region.resize((s, s)))
+
+            if threshold != None:
+
+                patch_hm_output_dir = Path(patch_output_dir, f"{patch_size}_thresh")
+                patch_hm_output_dir.mkdir(exist_ok=True, parents=True)
+
+                with tqdm.tqdm(
+                    range(6),
+                    desc=f"Processing region [{k+1}/{nregions}]",
+                    unit=" head",
+                    leave=True,
+                ) as t2:
+
+                    for i in t2:
+
+                        x, y = int(fp.stem.split('_')[0]), int(fp.stem.split('_')[1])
+                        coords[i].append((x,y))
+
+                        patch_att_scores = concat_patch_scores(
+                            patch_att[:, i, :, :], size=(s // mini_patch_size,) * 2
+                        )
+
+                        att_mask = patch_att_scores.copy()
+                        att_mask[att_mask < threshold] = 0
+                        att_mask[att_mask > threshold] = 0.95
+
+                        patch_color_block = (cmap(att_mask) * 255)[:, :, :3].astype(np.uint8)
+                        patch_hm = cv2.addWeighted(
+                            patch_color_block,
+                            alpha,
+                            save_region.copy(),
+                            1 - alpha,
+                            0,
+                            save_region.copy(),
+                        )
+                        patch_hm[att_mask == 0] = 0
+                        img_inverse = save_region.copy()
+                        img_inverse[att_mask == 0.95] = 0
+                        patch_hm = patch_hm + img_inverse
+                        patch_heatmaps[i].append(patch_hm)
+                        if save_to_disk:
+                            img = Image.fromarray(patch_hm)
+                            img.save(Path(patch_hm_output_dir, f"head_{i}.png"))
+
+            else:
+
+                patch_hm_output_dir = Path(patch_output_dir, f"{patch_size}")
+                patch_hm_output_dir.mkdir(exist_ok=True, parents=True)
+
+                with tqdm.tqdm(
+                    range(6),
+                    desc=f"Processing region [{k+1}/{nregions}]",
+                    unit=" head",
+                    leave=True,
+                ) as t2:
+
+                    for i in t2:
+
+                        x, y = int(fp.stem.split('_')[0]), int(fp.stem.split('_')[1])
+                        coords[i].append((x,y))
+
+                        patch_att_scores = concat_patch_scores(
+                            patch_att[:, i, :, :], size=(s // mini_patch_size,) * 2
+                        )
+                        patch_color_block = (cmap(patch_att_scores) * 255)[:, :, :3].astype(
+                            np.uint8
+                        )
+                        patch_hm = cv2.addWeighted(
+                            patch_color_block,
+                            alpha,
+                            save_region.copy(),
+                            1 - alpha,
+                            0,
+                            save_region.copy(),
+                        )
+                        patch_heatmaps[i].append(patch_hm)
+                        if save_to_disk:
+                            img = Image.fromarray(patch_hm)
+                            img.save(Path(output_dir, f"head_{i}.png"))
+
+    return patch_heatmaps, coords
+
+
+def get_slide_region_level_heatmaps(
+    slide_id: str,
+    patch_model,
+    region_model,
+    region_dir: Path,
+    output_dir: Path,
+    mini_patch_size: int = 16,
+    scale: int = 1,
+    alpha: float = 0.5,
+    cmap = plt.get_cmap('coolwarm'),
+    threshold: Optional[float] = None,
+    region_fmt: str = "jpg",
+    save_to_disk: bool = None,
+    patch_device: torch.device = torch.device('cuda:0'),
+    region_device: torch.device = torch.device('cuda:0'),
+):
+    """
+    Creates slide-level heatmaps of region-level Transformer.
+
+    Args:
+    - slide_id (str): input slide id
+    - patch_model (torch.nn): patch-level Transformer
+    - region_model (torch.nn): region-level Transformer
+    - output_dir (str): save directory / subdirectory
+    - mini_patch_size (int): size of mini-patches used for unrolling patch_model inputs
+    - scale (int): how much to scale the output image by
+    - alpha (float): image blending factor for cv2.addWeighted
+    - cmap (matplotlib.pyplot): colormap for creating heatmaps
+    """
+    region_output_dir = Path(output_dir, "region")
+    region_output_dir.mkdir(exist_ok=True, parents=True)
+
+    region_paths = [fp for fp in Path(region_dir, slide_id, "imgs").glob(f"*.{region_fmt}")]
+    nregions = len(region_paths)
+    region_heatmaps, coords = defaultdict(list), defaultdict(list)
+
+    with tqdm.tqdm(
+        region_paths,
+        desc=f"Processing {slide_id}",
+        unit=" region",
+        leave=True,
+        position=0,
+    ) as t1:
+
+        for k, fp in enumerate(t1):
+
+            region = Image.open(fp)
+            region_size = region.size[0]
+
+            region_hm_output_dir = Path(region_output_dir, f"{region_size}")
+            region_hm_output_dir.mkdir(exist_ok=True, parents=True)
+
+            _, _, region_att = get_region_attention_scores(
+                region,
+                patch_model,
+                region_model,
+                scale=scale,
+                patch_device=patch_device,
+                region_device=region_device,
+            )
+            s = region_size // scale
+            save_region = np.array(region.resize((s, s)))
+
+            with tqdm.tqdm(
+                range(6),
+                desc=f"Processing region [{k+1}/{nregions}]",
+                unit=" head",
+                leave=True,
+            ) as t2:
+
+                for j in t2:
+
+                    x, y = int(fp.stem.split('_')[0]), int(fp.stem.split('_')[1])
+                    coords[j].append((x,y))
+
+                    region_att_scores = concat_region_scores(region_att[j], size=(s,) * 2)
+                    region_color_block = (cmap(region_att_scores) * 255)[:, :, :3].astype(
+                        np.uint8
+                    )
+                    region_hm = cv2.addWeighted(
+                        region_color_block,
+                        alpha,
+                        save_region.copy(),
+                        1 - alpha,
+                        0,
+                        save_region.copy(),
+                    )
+                    region_heatmaps[j].append(region_hm)
+                    if save_to_disk:
+                        img = Image.fromarray(region_hm)
+                        img.save(Path(region_hm_output_dir, f"head_{j}.png"))
+
+    return region_heatmaps, coords
+
+
+
+def get_slide_hierarchical_heatmaps(
+    slide_id: str,
+    patch_model,
+    region_model,
+    region_dir: Path,
+    output_dir: Path,
+    patch_size: int = 256,
+    mini_patch_size: int = 16,
+    scale: int = 1,
+    alpha: float = 0.5,
+    cmap = plt.get_cmap('coolwarm'),
+    threshold: Optional[float] = None,
+    region_fmt: str = "jpg",
+    save_to_disk: bool = False,
+    patch_device: torch.device = torch.device('cuda:0'),
+    region_device: torch.device = torch.device('cuda:0'),
+):
+    """
+    Creates slide-level hierarchical heatmaps (patch-level & region-level Transformer heatmaps blended together).
+
+    Args:
+    - slide_id (str): input slide id
+    - patch_model (torch.nn): patch-level Transformer
+    - region_model (torch.nn): region-level Transformer
+    - output_dir (str): save directory / subdirectory
+    - patch_size (int): size of patches used for unrolling region_model inputs
+    - mini_patch_size (int): size of mini-patches used for unrolling patch_model inputs
+    - scale (int): how much to scale the output image by
+    - alpha (float): image blending factor for cv2.addWeighted
+    - cmap (matplotlib.pyplot): colormap for creating heatmaps
+    """
+    hierarchical_output_dir = Path(output_dir, "hierarchical")
+    region_paths = [fp for fp in Path(region_dir, slide_id, "imgs").glob(f"*.{region_fmt}")]
+    nregions = len(region_paths)
+    
+    hierarchical_heatmaps, coords = defaultdict(dict), defaultdict(dict)
+    hm_dict, coord_dict = defaultdict(list), defaultdict(list)
+
+    with tqdm.tqdm(
+        region_paths,
+        desc=f"Processing {slide_id}",
+        unit=" region",
+        leave=True,
+        position=0,
+    ) as t1:
+
+        for k, fp in enumerate(t1):
+
+            region = Image.open(fp)
+            region_size = region.size[0]
+
+            hierarchical_hm_output_dir = Path(hierarchical_output_dir, f"{region_size}_{patch_size}")
+            hierarchical_hm_output_dir.mkdir(exist_ok=True, parents=True)
+
+            _, patch_att, region_att = get_region_attention_scores(
+                region,
+                patch_model,
+                region_model,
+                scale=scale,
+                patch_device=patch_device,
+                region_device=region_device,
+            )
+            s = region_size // scale
+            save_region = np.array(region.resize((s, s)))
+        
+            with tqdm.tqdm(
+                range(6),
+                desc=f"Processing region [{k+1}/{nregions}]",
+                unit=" head",
+                leave=True,
+            ) as t1:
+
+                for j in t1:
+
+                    region_att_scores = concat_region_scores(region_att[j], size=(s,) * 2)
+
+                    with tqdm.tqdm(
+                        range(6),
+                        desc="Iterating over patch-level heads",
+                        unit=" head",
+                        leave=False,
+                    ) as t2:
+
+                        for i in t2:
+
+                            x, y = int(fp.stem.split('_')[0]), int(fp.stem.split('_')[1])
+                            coord_dict[i].append((x,y))
+
+                            patch_att_scores = concat_patch_scores(
+                                patch_att[:, i, :, :], size=(s // mini_patch_size,) * 2
+                            )
+                            score = region_att_scores + patch_att_scores
+                            color_block = (cmap(score) * 255)[:, :, :3].astype(np.uint8)
+                            region_hm = cv2.addWeighted(
+                                color_block,
+                                alpha,
+                                save_region.copy(),
+                                1 - alpha,
+                                0,
+                                save_region.copy(),
+                            )
+                            hm_dict[i].append(region_hm)
+                            if save_to_disk:
+                                img = Image.fromarray(region_hm)
+                                img.save(
+                                    Path(
+                                        hierarchical_hm_output_dir,
+                                        f"rhead_{j}_phead_{i}.png",
+                                    )
+                                )
+
+                    hierarchical_heatmaps[j] = hm_dict
+                    coords[j] = coord_dict
+
+    return hierarchical_heatmaps, coords
+
+
+def stitch_slide_heatmaps(
+    slide_path: Path,
+    heatmaps: List[np.array],
+    coords: List[Tuple[(int, int)]],
+    output_dir: str,
+    fname: str,
+    downsample: int = 32,
+    scale: int = 1,
+    save_to_disk: bool = False,
+):
+    slide_output_dir = Path(output_dir, 'slide')
+    slide_output_dir.mkdir(exist_ok=True, parents=True)
+
+    wsi_object = WholeSlideImage(slide_path)
+    vis_level = wsi_object.get_best_level_for_downsample_custom(downsample)
+    (width, height) = wsi_object.level_dimensions[vis_level]
+    vis_spacing = wsi_object.spacings[vis_level]
+    canvas = wsi_object.wsi.get_patch(0, 0, width, height, spacing=wsi_object.spacing_mapping[vis_spacing], center=False)
+
+    for hm, (x,y) in zip(heatmaps, coords):
+
+        w, h, _ = hm.shape
+        downsample_factor = wsi_object.level_downsamples[vis_level]
+        x_downsampled = int(x * 1 / downsample_factor[0])
+        y_downsampled = int(y * 1 / downsample_factor[1])
+        w_downsampled = int(w * scale * 1 / downsample_factor[0])
+        h_downsampled = int(h * scale * 1 / downsample_factor[1])
+        hm_downsampled = np.array(Image.fromarray(hm).resize((w_downsampled, h_downsampled)))
+
+        canvas[y_downsampled:y_downsampled + h_downsampled, x_downsampled :x_downsampled + w_downsampled] = hm_downsampled
+
+    stitched_hm = Image.fromarray(canvas)
+    if save_to_disk:
+        stitched_hm_path = Path(slide_output_dir, f"{fname}.png")
+        stitched_hm.save(stitched_hm_path)
+
+    return stitched_hm
