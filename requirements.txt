@@ -13,6 +13,7 @@ lifelines
 scikit-learn
 scikit-survival
 tqdm
+wholeslidedata
 seaborn==0.12.0
 hydra-core==1.2.0
 opencv-python==4.4.0.46

@@ -28,7 +28,15 @@ from source.attention_visualization_utils import (
 )
 def main(cfg: DictConfig):
 
-    # patch = Image.open(cfg.patch_fp)
+    seed = 0
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+    patch = Image.open(cfg.patch_fp)
     # region = Image.open(cfg.region_fp)
 
     patch_device = torch.device("cuda:0")
@@ -39,7 +47,7 @@ def main(cfg: DictConfig):
 
     region_weights = Path(cfg.region_weights)
     region_model = get_region_model(
-        pretrained_weights=region_weights, device=region_device
+        pretrained_weights=region_weights, region_size=cfg.region_size, device=region_device
     )
 
     light_jet = cmap_map(lambda x: x / 2 + 0.5, matplotlib.cm.jet)
@@ -47,19 +55,19 @@ def main(cfg: DictConfig):
     output_dir = Path(cfg.output_dir)
     output_dir.mkdir(exist_ok=True, parents=True)
 
-    # print(f"Computing indiviudal patch-level attention heatmaps")
-    # output_dir_patch = Path(output_dir, "patch_indiv")
-    # output_dir_patch.mkdir(exist_ok=True, parents=True)
-    # create_patch_heatmaps_indiv(
-    #     patch,
-    #     patch_model,
-    #     output_dir_patch,
-    #     threshold=0.5,
-    #     alpha=0.5,
-    #     cmap=light_jet,
-    #     patch_device=patch_device,
-    # )
-    # print("done!")
+    print(f"Computing indiviudal patch-level attention heatmaps")
+    output_dir_patch = Path(output_dir, "patch_indiv")
+    output_dir_patch.mkdir(exist_ok=True, parents=True)
+    create_patch_heatmaps_indiv(
+        patch,
+        patch_model,
+        output_dir_patch,
+        threshold=0.5,
+        alpha=0.5,
+        cmap=light_jet,
+        patch_device=patch_device,
+    )
+    print("done!")
 
     # print(f"Computing concatenated patch-level attention heatmaps")
     # output_dir_patch_concat = Path(output_dir, "patch_concat")
@@ -108,19 +116,11 @@ def main(cfg: DictConfig):
     # )
     # print("done!")
 
-    seed = 0
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed(seed)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
+    # slide_path = Path(cfg.slide_fp)
+    # slide_id = slide_path.stem
+    # region_dir = Path(cfg.region_dir)
 
-    slide_path = Path(cfg.slide_fp)
-    slide_id = slide_path.stem
-    region_dir = Path(cfg.region_dir)
-
-    output_dir_slide = Path(output_dir, slide_id)
+    # output_dir_slide = Path(output_dir, slide_id)
 
     # hms, coords = get_slide_region_level_heatmaps(
     #     slide_id,
@@ -135,7 +135,7 @@ def main(cfg: DictConfig):
     #     region_device=torch.device("cuda:0"),
     # )
     # for head_num, heatmaps in hms.items():
-    #     stitched_hm = stitch_slide_heatmaps(
+    #     _ = stitch_slide_heatmaps(
     #         slide_path,
     #         heatmaps,
     #         coords[head_num],
@@ -143,7 +143,7 @@ def main(cfg: DictConfig):
     #         fname=f"region_head_{head_num}",
     #         downsample=32,
     #         scale=2,
-    #         save_to_disk=True,
+    #         save_to_disk=False,
     #     )
 
     # hms, coords = get_slide_patch_level_heatmaps(
@@ -160,7 +160,7 @@ def main(cfg: DictConfig):
     #     region_device=torch.device("cuda:0"),
     # )
     # for head_num, heatmaps in hms.items():
-    #     stitched_hm = stitch_slide_heatmaps(
+    #     _ = stitch_slide_heatmaps(
     #         slide_path,
     #         heatmaps,
     #         coords[head_num],
@@ -171,33 +171,33 @@ def main(cfg: DictConfig):
     #         save_to_disk=True,
     #     )
 
-    hms, coords = get_slide_hierarchical_heatmaps(
-        slide_id,
-        patch_model,
-        region_model,
-        region_dir,
-        output_dir_slide,
-        scale=2,
-        cmap=light_jet,
-        threshold=None,
-        save_to_disk=False,
-        patch_device=torch.device("cuda:0"),
-        region_device=torch.device("cuda:0"),
-    )
-    for rhead_num, hm_dict in hms.items():
-        coords_dict = coords[rhead_num]
-        for phead_num, heatmaps in hm_dict.items():
-            coordinates = coords_dict[phead_num]
-            _ = stitch_slide_heatmaps(
-                slide_path,
-                heatmaps,
-                coordinates,
-                output_dir_slide,
-                fname=f"hierarchcial_rhead_{rhead_num}_phead_{phead_num}",
-                downsample=32,
-                scale=2,
-                save_to_disk=True,
-            )
+    # hms, coords = get_slide_hierarchical_heatmaps(
+    #     slide_id,
+    #     patch_model,
+    #     region_model,
+    #     region_dir,
+    #     output_dir_slide,
+    #     scale=2,
+    #     cmap=light_jet,
+    #     threshold=None,
+    #     save_to_disk=False,
+    #     patch_device=torch.device("cuda:0"),
+    #     region_device=torch.device("cuda:0"),
+    # )
+    # for rhead_num, hm_dict in hms.items():
+    #     coords_dict = coords[rhead_num]
+    #     for phead_num, heatmaps in hm_dict.items():
+    #         coordinates = coords_dict[phead_num]
+    #         _ = stitch_slide_heatmaps(
+    #             slide_path,
+    #             heatmaps,
+    #             coordinates,
+    #             output_dir_slide,
+    #             fname=f"hierarchcial_rhead_{rhead_num}_phead_{phead_num}",
+    #             downsample=32,
+    #             scale=2,
+    #             save_to_disk=True,
+    #         )
 
 if __name__ == "__main__":
 

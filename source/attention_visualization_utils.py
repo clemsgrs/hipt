@@ -1,5 +1,6 @@
 import cv2
 import tqdm
+import h5py
 import matplotlib
 import matplotlib.pyplot as plt
 import torch
@@ -12,9 +13,9 @@ from PIL import ImageFont
 from PIL import ImageDraw
 from einops import rearrange
 from scipy.stats import rankdata
-from typing import Optional, List, Tuple
+from typing import Optional, List, Tuple, Dict
 from pathlib import Path
-from collections import defaultdict
+from collections import OrderedDict, defaultdict
 
 import source.vision_transformer as vits
 from source.wsi import WholeSlideImage
@@ -46,12 +47,12 @@ def get_patch_model(pretrained_weights, arch='vit_small', device: Optional[torch
     return patch_model
 
 
-def get_region_model(pretrained_weights, arch='vit4k_xs', device: Optional[torch.device] = None):
+def get_region_model(pretrained_weights, arch='vit4k_xs', region_size: int = 4096, device: Optional[torch.device] = None):
     
     checkpoint_key = 'teacher'
     if device is None:
         device = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
-    region_model = vits.__dict__[arch](num_classes=0)
+    region_model = vits.__dict__[arch](img_size=region_size, num_classes=0)
     for p in region_model.parameters():
         p.requires_grad = False
     region_model.eval()
@@ -191,47 +192,114 @@ def cmap_map(function, cmap):
     return matplotlib.colors.LinearSegmentedColormap("colormap", cdict, 1024)
 
 
+def DrawGrid(img, coord, shape, thickness=2, color=(0, 0, 0, 255)):
+    cv2.rectangle(
+        img,
+        tuple(np.maximum([0, 0], coord - thickness // 2)),
+        tuple(coord - thickness // 2 + np.array(shape)),
+        (0, 0, 0, 255),
+        thickness=thickness,
+    )
+    return img
+
+
+def DrawMapFromCoords(
+    canvas,
+    wsi_object,
+    coords,
+    patch_size,
+    vis_level: int,
+    indices: Optional[List[int]] = None,
+    draw_grid: bool = True,
+    thickness: int = 2,
+    verbose: bool = False,
+
+):
+
+    downsamples = wsi_object.level_downsamples[vis_level]
+    if indices is None:
+        indices = np.arange(len(coords))
+    total = len(indices)
+
+    patch_size = tuple(
+        np.ceil((np.array(patch_size) / np.array(downsamples))).astype(np.int32)
+    )
+    if verbose:
+        print(f"downscaled patch size: {patch_size}")
+
+    for idx in range(total):
+
+        patch_id = indices[idx]
+        coord = coords[patch_id]
+        x, y = coord
+        spacing = wsi_object.spacings[vis_level]
+
+        s = wsi_object.spacing_mapping[spacing]
+        width, height = patch_size
+        tile = wsi_object.wsi.get_patch(x, y, width, height, spacing=s, center=False)
+
+        coord = np.ceil(coord / downsamples).astype(np.int32)
+        canvas_crop_shape = canvas[
+            coord[1] : coord[1] + patch_size[1],
+            coord[0] : coord[0] + patch_size[0],
+            :3,
+        ].shape[:2]
+        canvas[
+            coord[1] : coord[1] + patch_size[1],
+            coord[0] : coord[0] + patch_size[0],
+            :3,
+        ] = tile[: canvas_crop_shape[0], : canvas_crop_shape[1], :]
+        if draw_grid:
+            DrawGrid(canvas, coord, patch_size, thickness=thickness)
+
+    return Image.fromarray(canvas)
+
+
 def get_patch_attention_scores(
     patch,
     patch_model,
-    scale=1,
-    patch_device=torch.device("cuda:0"),
+    mini_patch_size: int = 16,
+    downscale: int = 1,
+    patch_device: torch.device = torch.device("cuda:0"),
 ):
     """
     Forward pass in patch-level ViT model with attention scores saved.
 
     Args:
-    - patch (PIL.Image):  256x256 input patch
+    - patch (PIL.Image): input patch
     - patch_model (torch.nn): patch-level ViT
-    - scale (int): how much to scale the output image by (e.g. scale=4 will resize images to be 1024x1024)
+    - mini_patch_size (int): size of mini-patches used for unrolling input patch
+    - downscale (int): how much to downscale the output image by (e.g. downscale=4 will resize images to be 64x64)
 
     Returns:
-    - attention_256 (torch.Tensor): [1, 256/scale, 256/scale, 3] tensor of attention maps for 256-sized patches
+    - attention (torch.Tensor): [1, nhead, patch_size/downscale, patch_size/downscale] tensor of attention maps
     """
     t = transforms.Compose(
         [transforms.ToTensor(), transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5])]
     )
+    patch_size = patch.size[0]
+    n_minipatch = patch_size // mini_patch_size
 
     with torch.no_grad():
-        batch = t(patch).unsqueeze(0)
+        batch = t(patch).unsqueeze(0)   # (1, 3, patch_size, patch_size)
         batch = batch.to(patch_device, non_blocking=True)
-        features = patch_model(batch)
+        features = patch_model(batch)   # (1, 384)
 
-        attention = patch_model.get_last_selfattention(batch)
+        attention = patch_model.get_last_selfattention(batch)   # (1, 6, n_minipatch**2+1, n_minipatch**2+1)
         nh = attention.shape[1]  # number of head
-        attention = attention[:, :, 0, 1:].reshape(256, nh, -1)
-        attention = attention.reshape(1, nh, 16, 16)
+        attention = attention[:, :, 0, 1:].reshape(n_minipatch**2, nh, -1)  # (1, 6, 1, n_minipatch**2) -> (n_minipatch**2, 6, 1)
+        attention = attention.reshape(1, nh, n_minipatch, n_minipatch)  # (1, 6, n_minipatch, n_minipatch)
         attention = (
             nn.functional.interpolate(
-                attention, scale_factor=int(16 / scale), mode="nearest"
+                attention, scale_factor=int(mini_patch_size / downscale), mode="nearest"
             )
             .cpu()
             .numpy()
-        )
+        )   # (1, 6, patch_size, patch_size) when downscale = 1
 
-        if scale != 1:
+        if downscale != 1:
             batch = nn.functional.interpolate(
-                batch, scale_factor=(1 / scale), mode="nearest"
+                batch, scale_factor=(1 / downscale), mode="nearest"
             )
 
     return tensorbatch2im(batch), attention
@@ -242,11 +310,12 @@ def create_patch_heatmaps_indiv(
     patch_model,
     output_dir,
     patch_size: int = 256,
-    fname: str = "patch",
+    mini_patch_size: int = 16,
     threshold: float = 0.5,
     alpha: float = 0.5,
     cmap=plt.get_cmap("coolwarm"),
-    patch_device=torch.device("cuda:0"),
+    save_to_disk: bool = True,
+    patch_device: torch.device = torch.device("cuda:0"),
 ):
     """
     Creates patch heatmaps (saved individually).
@@ -256,12 +325,11 @@ def create_patch_heatmaps_indiv(
     - patch_model (torch.nn): patch-level ViT
     - output_dir (str): save directory
     - patch_size (int): size of input patch
-    - fname (str): naming structure of files
     - alpha (float): image blending factor for cv2.addWeighted
     - cmap (matplotlib.pyplot): colormap for creating heatmaps
     """
     patch1 = patch.copy()
-    _, att = get_patch_attention_scores(patch1, patch_model, patch_device=patch_device)
+    _, att = get_patch_attention_scores(patch1, patch_model, mini_patch_size=mini_patch_size, patch_device=patch_device)
     save_region = np.array(patch.copy())
 
     if threshold != None:
@@ -281,7 +349,7 @@ def create_patch_heatmaps_indiv(
                 att_mask[att_mask > threshold] = 0.95
 
                 color_block = (cmap(att_mask) * 255)[:, :, :3].astype(np.uint8)
-                region_hm = cv2.addWeighted(
+                patch_hm = cv2.addWeighted(
                     color_block,
                     alpha,
                     save_region.copy(),
@@ -289,13 +357,15 @@ def create_patch_heatmaps_indiv(
                     0,
                     save_region.copy(),
                 )
-                region_hm[att_mask == 0] = 0
+                patch_hm[att_mask == 0] = 0
                 img_inverse = save_region.copy()
                 img_inverse[att_mask == 0.95] = 0
-                img_thresh = Image.fromarray(region_hm + img_inverse)
-                img_thresh.save(
-                    Path(output_dir, f"{fname}_{patch_size}_head_{i}_thresh.png")
-                )
+                patch_hm = patch_hm + img_inverse
+                if save_to_disk:
+                    img_thresh = Image.fromarray(patch_hm)
+                    img_thresh.save(
+                        Path(output_dir, f"{patch_size}_head_{i}_thresh.png")
+                    )
 
     with tqdm.tqdm(
         range(6),
@@ -308,11 +378,12 @@ def create_patch_heatmaps_indiv(
 
             att_scores = get_patch_scores(att[:, i, :, :], size=(patch_size,) * 2)
             color_block = (cmap(att_scores) * 255)[:, :, :3].astype(np.uint8)
-            region_hm = cv2.addWeighted(
+            patch_hm = cv2.addWeighted(
                 color_block, alpha, save_region.copy(), 1 - alpha, 0, save_region.copy()
             )
-            img = Image.fromarray(region_hm)
-            img.save(Path(output_dir, f"{fname}_{patch_size}_head_{i}.png"))
+            if save_to_disk:
+                img = Image.fromarray(patch_hm)
+                img.save(Path(output_dir, f"{patch_size}_head_{i}.png"))
 
 
 def create_patch_heatmaps_concat(
@@ -320,6 +391,7 @@ def create_patch_heatmaps_concat(
     patch_model,
     output_dir,
     patch_size: int = 256,
+    mini_patch_size: int = 16,
     fname: str = "patch",
     threshold: float = 0.5,
     alpha: float = 0.5,
@@ -339,7 +411,7 @@ def create_patch_heatmaps_concat(
     - cmap (matplotlib.pyplot): colormap for creating heatmaps
     """
     patch1 = patch.copy()
-    _, att = get_patch_attention_scores(patch1, patch_model, patch_device=patch_device)
+    _, att = get_patch_attention_scores(patch1, patch_model, mini_patch_size=mini_patch_size, patch_device=patch_device)
     save_region = np.array(patch.copy())
 
     if threshold != None:
@@ -415,7 +487,7 @@ def get_region_attention_scores(
     region_model,
     patch_size: int = 256,
     mini_patch_size: int = 16,
-    scale: int = 1,
+    downscale: int = 1,
     patch_device=torch.device("cuda:0"),
     region_device=torch.device("cuda:1"),
 ):
@@ -428,12 +500,12 @@ def get_region_attention_scores(
     - region_model (torch.nn): region-level Transformer
     - patch_size (int): size of patches used for unrolling input region
     - mini_patch_size (int): size of mini-patches used for unrolling patch_model inputs
-    - scale (int): how much to scale the output image by (e.g. scale=4 will resize images to be 1024x1024)
+    - downscale (int): how much to downscale the output image by (e.g. downscale=4 will resize images to be 1024x1024)
 
     Returns:
-    - np.array: [256, 256/scale, 256/scale, 3] np.array sequence of image patches from the 4K x 4K region.
-    - patch_attention (torch.Tensor): [256, 256/scale, 256/scale, 3] torch.Tensor sequence of attention maps for 256-sized patches.
-    - region_attention (torch.Tensor): [1, 4096/scale, 4096/scale, 3] torch.Tensor sequence of attention maps for input region.
+    - np.array: [n_patch**2, patch_size/downscale, patch_size/downscale, 3] array sequence of image patch_size-sized patches from the input region.
+    - patch_attention (torch.Tensor): [n_patch**2, nhead, patch_size/downscale, patch_size/downscale] tensor sequence of attention maps for patch_size-sized patches.
+    - region_attention (torch.Tensor): [nhead, region_size/downscale, region_size/downscale] tensor sequence of attention maps for input region.
     """
     t = transforms.Compose(
         [transforms.ToTensor(), transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5])]
@@ -455,46 +527,46 @@ def get_region_attention_scores(
         patches = patches.to(patch_device, non_blocking=True)
         patch_features = patch_model(patches)  # (n_patch**2, 384)
 
-        patch_attention = patch_model.get_last_selfattention(patches)
+        patch_attention = patch_model.get_last_selfattention(patches)   # (n_patch**2, nhead, n_minipatch**2+1, n_minipatch**2+1)
         nh = patch_attention.shape[1]  # number of head
-        patch_attention = patch_attention[:, :, 0, 1:].reshape(n_minipatch**2, nh, -1)
+        patch_attention = patch_attention[:, :, 0, 1:].reshape(n_patch**2, nh, -1)  # (n_patch**2, nhead, n_minipatch**2)
         patch_attention = patch_attention.reshape(
-            n_minipatch**2, nh, mini_patch_size, mini_patch_size
-        )  # (n_minipatch**2, 6, 16, 16)
+            n_patch**2, nh, n_minipatch, n_minipatch
+        )  # (n_patch**2, nhead, n_minipatch, n_minipatch)
         patch_attention = (
             nn.functional.interpolate(
-                patch_attention, scale_factor=int(16 / scale), mode="nearest"
+                patch_attention, scale_factor=int(mini_patch_size / downscale), mode="nearest"
             )
             .cpu()
             .numpy()
-        )  # (n_minipatch**2, 6, 256, 256) when scale = 1
+        )  # (n_patch**2, nhead, patch_size, patch_size) when downscale = 1
 
         region_features = (
-            patch_features.unfold(0, mini_patch_size, mini_patch_size)
+            patch_features.unfold(0, n_patch, n_patch)
             .transpose(0, 1)
             .unsqueeze(dim=0)
-        )  # (n_minipatch**2, 384)
+        )  # (1, 384, n_patch, n_patch)
         region_attention = region_model.get_last_selfattention(
             region_features.detach().to(region_device)
-        )
+        ) # (1, nhead, n_patch**2+1, n_patch**2+1)
         nh = region_attention.shape[1]  # number of head
-        region_attention = region_attention[0, :, 0, 1:].reshape(nh, -1)
+        region_attention = region_attention[0, :, 0, 1:].reshape(nh, -1)    # (nhead, 1, n_patch**2) -> (nhead, n_patch**2)
         region_attention = region_attention.reshape(
-            nh, mini_patch_size, mini_patch_size
-        )
+            nh, n_patch, n_patch
+        ) # (nhead, n_patch, n_patch)
         region_attention = (
             nn.functional.interpolate(
                 region_attention.unsqueeze(0),
-                scale_factor=int(256 / scale),
+                scale_factor=int(patch_size / downscale),
                 mode="nearest",
             )[0]
             .cpu()
             .numpy()
-        )
+        ) # (nhead, region_size, region_size) when downscale = 1
 
-        if scale != 1:
+        if downscale != 1:
             patches = nn.functional.interpolate(
-                patches, scale_factor=(1 / scale), mode="nearest"
+                patches, scale_factor=(1 / downscale), mode="nearest"
             )
 
     return tensorbatch2im(patches), patch_attention, region_attention
@@ -505,9 +577,10 @@ def create_hierarchical_heatmaps_indiv(
     patch_model,
     region_model,
     output_dir,
+    patch_size: int = 256,
     mini_patch_size: int = 16,
     fname: str = "region",
-    scale: int = 4,
+    downscale: int = 1,
     alpha: float = 0.5,
     cmap=plt.get_cmap("coolwarm"),
     threshold: Optional[float] = None,
@@ -522,9 +595,10 @@ def create_hierarchical_heatmaps_indiv(
     - patch_model (torch.nn): patch-level ViT
     - region_model (torch.nn): region-level Transformer
     - output_dir (str): save directory / subdirectory
+    - patch_size (int): size of patches used for unrolling input region
     - mini_patch_size (int): size of mini-patches used for unrolling patch_model inputs
     - fname (str): naming structure of files
-    - scale (int): how much to scale the output image by
+    - downscale (int): how much to downscale the output image by
     - alpha (float): image blending factor for cv2.addWeighted
     - cmap (matplotlib.pyplot): colormap for creating heatmaps
     """
@@ -533,11 +607,13 @@ def create_hierarchical_heatmaps_indiv(
         region,
         patch_model,
         region_model,
-        scale=scale,
+        patch_size=patch_size,
+        mini_patch_size=mini_patch_size,
+        downscale=downscale,
         patch_device=patch_device,
         region_device=region_device,
     )
-    s = region_size // scale
+    s = region_size // downscale
     save_region = np.array(region.resize((s, s)))
 
     if threshold != None:
@@ -671,9 +747,10 @@ def create_hierarchical_heatmaps_concat(
     patch_model,
     region_model,
     output_dir,
+    patch_size: int = 256,
     mini_patch_size: int = 16,
     fname: str = "region",
-    scale: int = 4,
+    downscale: int = 1,
     alpha: float = 0.5,
     cmap=plt.get_cmap("coolwarm"),
     patch_device=torch.device("cuda:0"),
@@ -687,9 +764,10 @@ def create_hierarchical_heatmaps_concat(
     - patch_model (torch.nn): patch-level ViT
     - region_model (torch.nn): region-level Transformer
     - output_dir (str): save directory / subdirectory
+    - patch_size (int): size of patches used for unrolling input region
     - mini_patch_size (int): size of mini-patches used for unrolling patch_model inputs
     - fname (str): naming structure of files
-    - scale (int): how much to scale the output image by
+    - downscale (int): how much to downscale the output image by
     - alpha (float): image blending factor for cv2.addWeighted
     - cmap (matplotlib.pyplot): colormap for creating heatmaps
     """
@@ -698,14 +776,16 @@ def create_hierarchical_heatmaps_concat(
         region,
         patch_model,
         region_model,
-        scale=scale,
+        patch_size=patch_size,
+        mini_patch_size=mini_patch_size,
+        downscale=downscale,
         patch_device=patch_device,
         region_device=region_device,
-    )  # (256, 6, 128, 128), (6, 2048, 2048) when scale = 2
-    s = region_size // scale  # 2048 for scale = 2, region_size = 4096
+    )  # (256, 6, 128, 128), (6, 2048, 2048) when downscale = 2
+    s = region_size // downscale  # 2048 for downscale = 2, region_size = 4096
     save_region = np.array(
         region.resize((s, s))
-    )  # (2048, 2048) for scale = 2, region_size = 4096
+    )  # (2048, 2048) for downscale = 2, region_size = 4096
 
     with tqdm.tqdm(
         range(6),
@@ -718,7 +798,7 @@ def create_hierarchical_heatmaps_concat(
 
             region_att_scores = concat_region_scores(
                 region_att[j], size=(s,) * 2
-            )  # (2048, 2048) for scale = 2
+            )  # (2048, 2048) for downscale = 2
             region_color_block = (cmap(region_att_scores) * 255)[:, :, :3].astype(
                 np.uint8
             )
@@ -729,7 +809,7 @@ def create_hierarchical_heatmaps_concat(
                 1 - alpha,
                 0,
                 save_region.copy(),
-            )  # (2048, 2048) for scale = 2, region_size = 4096
+            )  # (2048, 2048) for downscale = 2, region_size = 4096
 
             with tqdm.tqdm(
                 range(6),
@@ -742,7 +822,7 @@ def create_hierarchical_heatmaps_concat(
 
                     patch_att_scores = concat_patch_scores(
                         patch_att[:, i, :, :], size=(s // mini_patch_size,) * 2
-                    )  # (2048, 2048) for scale = 2
+                    )  # (2048, 2048) for downscale = 2
                     patch_color_block = (cmap(patch_att_scores) * 255)[:, :, :3].astype(
                         np.uint8
                     )
@@ -753,7 +833,7 @@ def create_hierarchical_heatmaps_concat(
                         1 - alpha,
                         0,
                         save_region.copy(),
-                    )  # (2048, 2048) for scale = 2
+                    )  # (2048, 2048) for downscale = 2
 
                     score = region_att_scores + patch_att_scores
                     color_block = (cmap(score) * 255)[:, :, :3].astype(np.uint8)
@@ -764,12 +844,12 @@ def create_hierarchical_heatmaps_concat(
                         1 - alpha,
                         0,
                         save_region.copy(),
-                    )  # (2048, 2048) for scale = 2
+                    )  # (2048, 2048) for downscale = 2
 
                     pad = 100
                     canvas = Image.new(
                         "RGB", (s * 2 + pad * 3,) * 2, (255,) * 3
-                    )  # (2 * region_size // scale + 100, 2 * region_size // scale + 100, 3) ; (4096, 4096, 3) for scale = 2, region_size = 4096
+                    )  # (2 * region_size // downscale + 100, 2 * region_size // downscale + 100, 3) ; (4096, 4096, 3) for downscale = 2, region_size = 4096
                     draw = ImageDraw.Draw(canvas)
                     draw.text(
                         (s * 0.5 + pad, pad // 4),
@@ -785,17 +865,17 @@ def create_hierarchical_heatmaps_concat(
                     )
                     canvas.paste(
                         Image.fromarray(save_region), (pad, pad)
-                    )  # (2048, 2048) for scale = 2, region_size = 4096 ; (100, 100)
+                    )  # (2048, 2048) for downscale = 2, region_size = 4096 ; (100, 100)
                     canvas.paste(
                         Image.fromarray(region_hm), (s + 2 * pad, pad)
-                    )  # (2048, 2048) for scale = 2, region_size = 4096 ; (2048+100, 100)
+                    )  # (2048, 2048) for downscale = 2, region_size = 4096 ; (2048+100, 100)
                     canvas.paste(
                         Image.fromarray(patch_hm), (pad, s + 2 * pad)
-                    )  # (2048, 2048) for scale = 2, region_size = 4096 ; (100, 2048+100)
+                    )  # (2048, 2048) for downscale = 2, region_size = 4096 ; (100, 2048+100)
                     canvas.paste(
                         Image.fromarray(hierarchical_region_hm),
                         (s + 2 * pad, s + 2 * pad),
-                    )  # (2048, 2048) for scale = 2, region_size = 4096 ; (2048+100, 2048+100)
+                    )  # (2048, 2048) for downscale = 2, region_size = 4096 ; (2048+100, 2048+100)
                     canvas.save(Path(output_dir, f"{fname}_4k[{j}]_256[{i}].png"))
 
 
@@ -807,7 +887,7 @@ def get_slide_patch_level_heatmaps(
     output_dir: Path,
     patch_size: int = 256,
     mini_patch_size: int = 16,
-    scale: int = 1,
+    downscale: int = 1,
     alpha: float = 0.5,
     cmap = plt.get_cmap('coolwarm'),
     threshold: Optional[float] = None,
@@ -826,7 +906,7 @@ def get_slide_patch_level_heatmaps(
     - output_dir (str): save directory / subdirectory
     - patch_size (int): size of patches used for unrolling region_model inputs
     - mini_patch_size (int): size of mini-patches used for unrolling patch_model inputs
-    - scale (int): how much to scale the output image by
+    - downscale (int): how much to downscale the output image by
     - alpha (float): image blending factor for cv2.addWeighted
     - cmap (matplotlib.pyplot): colormap for creating heatmaps
     """
@@ -853,11 +933,13 @@ def get_slide_patch_level_heatmaps(
                 region,
                 patch_model,
                 region_model,
-                scale=scale,
+                patch_size=patch_size,
+                mini_patch_size=mini_patch_size,
+                downscale=downscale,
                 patch_device=patch_device,
                 region_device=region_device,
             )
-            s = region_size // scale
+            s = region_size // downscale
             save_region = np.array(region.resize((s, s)))
 
             if threshold != None:
@@ -948,8 +1030,9 @@ def get_slide_region_level_heatmaps(
     region_model,
     region_dir: Path,
     output_dir: Path,
+    patch_size: int = 256,
     mini_patch_size: int = 16,
-    scale: int = 1,
+    downscale: int = 1,
     alpha: float = 0.5,
     cmap = plt.get_cmap('coolwarm'),
     threshold: Optional[float] = None,
@@ -966,8 +1049,9 @@ def get_slide_region_level_heatmaps(
     - patch_model (torch.nn): patch-level Transformer
     - region_model (torch.nn): region-level Transformer
     - output_dir (str): save directory / subdirectory
+    - patch_size (int): size of patches used for unrolling region_model inputs
     - mini_patch_size (int): size of mini-patches used for unrolling patch_model inputs
-    - scale (int): how much to scale the output image by
+    - downscale (int): how much to downscale the output image by
     - alpha (float): image blending factor for cv2.addWeighted
     - cmap (matplotlib.pyplot): colormap for creating heatmaps
     """
@@ -998,11 +1082,13 @@ def get_slide_region_level_heatmaps(
                 region,
                 patch_model,
                 region_model,
-                scale=scale,
+                patch_size=patch_size,
+                mini_patch_size=mini_patch_size,
+                downscale=downscale,
                 patch_device=patch_device,
                 region_device=region_device,
             )
-            s = region_size // scale
+            s = region_size // downscale
             save_region = np.array(region.resize((s, s)))
 
             with tqdm.tqdm(
@@ -1046,7 +1132,7 @@ def get_slide_hierarchical_heatmaps(
     output_dir: Path,
     patch_size: int = 256,
     mini_patch_size: int = 16,
-    scale: int = 1,
+    downscale: int = 1,
     alpha: float = 0.5,
     cmap = plt.get_cmap('coolwarm'),
     threshold: Optional[float] = None,
@@ -1065,11 +1151,10 @@ def get_slide_hierarchical_heatmaps(
     - output_dir (str): save directory / subdirectory
     - patch_size (int): size of patches used for unrolling region_model inputs
     - mini_patch_size (int): size of mini-patches used for unrolling patch_model inputs
-    - scale (int): how much to scale the output image by
+    - downscale (int): how much to downscale the output image by
     - alpha (float): image blending factor for cv2.addWeighted
     - cmap (matplotlib.pyplot): colormap for creating heatmaps
     """
-    hierarchical_output_dir = Path(output_dir, "hierarchical")
     region_paths = [fp for fp in Path(region_dir, slide_id, "imgs").glob(f"*.{region_fmt}")]
     nregions = len(region_paths)
     
@@ -1089,18 +1174,20 @@ def get_slide_hierarchical_heatmaps(
             region = Image.open(fp)
             region_size = region.size[0]
 
-            hierarchical_hm_output_dir = Path(hierarchical_output_dir, f"{region_size}_{patch_size}")
+            hierarchical_hm_output_dir = Path(output_dir, f"hierarchical_{region_size}_{patch_size}")
             hierarchical_hm_output_dir.mkdir(exist_ok=True, parents=True)
 
             _, patch_att, region_att = get_region_attention_scores(
                 region,
                 patch_model,
                 region_model,
-                scale=scale,
+                patch_size=patch_size,
+                mini_patch_size=mini_patch_size,
+                downscale=downscale,
                 patch_device=patch_device,
                 region_device=region_device,
             )
-            s = region_size // scale
+            s = region_size // downscale
             save_region = np.array(region.resize((s, s)))
         
             with tqdm.tqdm(
@@ -1159,10 +1246,10 @@ def stitch_slide_heatmaps(
     slide_path: Path,
     heatmaps: List[np.array],
     coords: List[Tuple[(int, int)]],
-    output_dir: str,
+    output_dir: Path,
     fname: str,
     downsample: int = 32,
-    scale: int = 1,
+    downscale: int = 1,
     save_to_disk: bool = False,
 ):
     slide_output_dir = Path(output_dir, 'slide')
@@ -1180,8 +1267,8 @@ def stitch_slide_heatmaps(
         downsample_factor = wsi_object.level_downsamples[vis_level]
         x_downsampled = int(x * 1 / downsample_factor[0])
         y_downsampled = int(y * 1 / downsample_factor[1])
-        w_downsampled = int(w * scale * 1 / downsample_factor[0])
-        h_downsampled = int(h * scale * 1 / downsample_factor[1])
+        w_downsampled = int(w * downscale * 1 / downsample_factor[0])
+        h_downsampled = int(h * downscale * 1 / downsample_factor[1])
         hm_downsampled = np.array(Image.fromarray(hm).resize((w_downsampled, h_downsampled)))
 
         canvas[y_downsampled:y_downsampled + h_downsampled, x_downsampled :x_downsampled + w_downsampled] = hm_downsampled
@@ -1192,3 +1279,58 @@ def stitch_slide_heatmaps(
         stitched_hm.save(stitched_hm_path)
 
     return stitched_hm
+
+
+def display_stitched_heatmaps(
+    slide_path: Path,
+    heatmaps: Dict[str, Image.Image],
+    output_dir: Path,
+    display_patching: bool = False,
+    region_dir: Optional[Path] = None,
+    region_size: Optional[int] = None,
+    downsample: int = 32,
+    key: str = "coords",
+):
+    """
+    """
+    slide_id = slide_path.stem
+    slide_dir = Path(region_dir, slide_id)
+
+    if display_patching:
+
+        hdf5_file_path = Path(slide_dir, f"{slide_id}.h5")
+        h5_file = h5py.File(hdf5_file_path, "r")
+        dset = h5_file[key]
+        coords = dset[:]
+
+        wsi_object = WholeSlideImage(slide_path)
+        vis_level = wsi_object.get_best_level_for_downsample_custom(downsample)
+        (width, height) = wsi_object.level_dimensions[vis_level]
+        vis_spacing = wsi_object.spacings[vis_level]
+        slide_canvas = wsi_object.wsi.get_patch(0, 0, width, height, spacing=wsi_object.spacing_mapping[vis_spacing], center=False)
+
+        patching_im = DrawMapFromCoords(
+            slide_canvas,
+            wsi_object,
+            coords,
+            region_size,
+            vis_level,
+        )
+
+        data = [(f"{region_size}x{region_size} patching", patching_im)] + [(k, v) for k,v in heatmaps.items()] 
+        heatmaps = OrderedDict(data)
+
+    nhm = len(heatmaps)
+    w, h = heatmaps[0].size
+    pad = 20
+    canvas = Image.new(size=(w*nhm+pad*(nhm+1), h+2*pad), mode="RGB", color=(255,)*3)
+
+    for i, (fname, hm) in enumerate(heatmaps.items()):
+        x, y = w*i+pad*(i+1), pad
+        draw = ImageDraw.Draw(canvas)
+        draw.text(
+            (x//2, pad//2),
+            fname,
+            (0, 0, 0),
+        )
+        canvas.paste(hm, (x, y))
