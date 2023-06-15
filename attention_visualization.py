@@ -20,6 +20,7 @@ from source.attention_visualization_utils import (
     get_slide_region_level_heatmaps,
     get_slide_hierarchical_heatmaps,
     stitch_slide_heatmaps,
+    display_stitched_heatmaps,
 )
 
 
@@ -37,7 +38,7 @@ def main(cfg: DictConfig):
     torch.backends.cudnn.benchmark = False
 
     patch = Image.open(cfg.patch_fp)
-    # region = Image.open(cfg.region_fp)
+    region = Image.open(cfg.region_fp)
 
     patch_device = torch.device("cuda:0")
     region_device = torch.device("cuda:0")
@@ -55,19 +56,19 @@ def main(cfg: DictConfig):
     output_dir = Path(cfg.output_dir)
     output_dir.mkdir(exist_ok=True, parents=True)
 
-    print(f"Computing indiviudal patch-level attention heatmaps")
-    output_dir_patch = Path(output_dir, "patch_indiv")
-    output_dir_patch.mkdir(exist_ok=True, parents=True)
-    create_patch_heatmaps_indiv(
-        patch,
-        patch_model,
-        output_dir_patch,
-        threshold=0.5,
-        alpha=0.5,
-        cmap=light_jet,
-        patch_device=patch_device,
-    )
-    print("done!")
+    # print(f"Computing indiviudal patch-level attention heatmaps")
+    # output_dir_patch = Path(output_dir, "patch_indiv")
+    # output_dir_patch.mkdir(exist_ok=True, parents=True)
+    # create_patch_heatmaps_indiv(
+    #     patch,
+    #     patch_model,
+    #     output_dir_patch,
+    #     threshold=0.5,
+    #     alpha=0.5,
+    #     cmap=light_jet,
+    #     patch_device=patch_device,
+    # )
+    # print("done!")
 
     # print(f"Computing concatenated patch-level attention heatmaps")
     # output_dir_patch_concat = Path(output_dir, "patch_concat")
@@ -91,7 +92,7 @@ def main(cfg: DictConfig):
     #     patch_model,
     #     region_model,
     #     output_dir_region,
-    #     scale=2,
+    #     downscale=2,
     #     threshold=0.5,
     #     alpha=0.5,
     #     cmap=light_jet,
@@ -108,7 +109,7 @@ def main(cfg: DictConfig):
     #     patch_model,
     #     region_model,
     #     output_dir_region_concat,
-    #     scale=2,
+    #     downscale=2,
     #     alpha=0.5,
     #     cmap=light_jet,
     #     patch_device=patch_device,
@@ -116,35 +117,48 @@ def main(cfg: DictConfig):
     # )
     # print("done!")
 
-    # slide_path = Path(cfg.slide_fp)
-    # slide_id = slide_path.stem
-    # region_dir = Path(cfg.region_dir)
+    slide_path = Path(cfg.slide_fp)
+    slide_id = slide_path.stem
+    region_dir = Path(cfg.region_dir)
 
-    # output_dir_slide = Path(output_dir, slide_id)
+    output_dir_slide = Path(output_dir, slide_id)
 
-    # hms, coords = get_slide_region_level_heatmaps(
-    #     slide_id,
-    #     patch_model,
-    #     region_model,
-    #     region_dir,
-    #     output_dir_slide,
-    #     scale=2,
-    #     cmap=light_jet,
-    #     save_to_disk=False,
-    #     patch_device=torch.device("cuda:0"),
-    #     region_device=torch.device("cuda:0"),
-    # )
-    # for head_num, heatmaps in hms.items():
-    #     _ = stitch_slide_heatmaps(
-    #         slide_path,
-    #         heatmaps,
-    #         coords[head_num],
-    #         output_dir_slide,
-    #         fname=f"region_head_{head_num}",
-    #         downsample=32,
-    #         scale=2,
-    #         save_to_disk=False,
-    #     )
+    hms, coords = get_slide_region_level_heatmaps(
+        slide_id,
+        patch_model,
+        region_model,
+        region_dir,
+        output_dir_slide,
+        downscale=2,
+        cmap=light_jet,
+        save_to_disk=False,
+        patch_device=torch.device("cuda:0"),
+        region_device=torch.device("cuda:0"),
+    )
+
+    stitched_hms = {}
+    for head_num, heatmaps in hms.items():
+        stitched_hm = stitch_slide_heatmaps(
+            slide_path,
+            heatmaps,
+            coords[head_num],
+            output_dir_slide,
+            fname=f"region_head_{head_num}",
+            downsample=32,
+            downscale=2,
+            save_to_disk=True,
+        )
+        stitched_hms[f"Head {head_num}"] = stitched_hm
+
+    display_stitched_heatmaps(
+        slide_path,
+        stitched_hms,
+        output_dir_slide,
+        fname=f"region",
+        display_patching=True,
+        region_dir=region_dir,
+        region_size=cfg.region_size,
+    )
 
     # hms, coords = get_slide_patch_level_heatmaps(
     #     slide_id,
@@ -152,24 +166,37 @@ def main(cfg: DictConfig):
     #     region_model,
     #     region_dir,
     #     output_dir_slide,
-    #     scale=2,
+    #     downscale=2,
     #     cmap=light_jet,
     #     threshold=None,
     #     save_to_disk=False,
     #     patch_device=torch.device("cuda:0"),
     #     region_device=torch.device("cuda:0"),
     # )
+
+    stitched_hms = {}
     # for head_num, heatmaps in hms.items():
-    #     _ = stitch_slide_heatmaps(
+    #     stitched_hm = stitch_slide_heatmaps(
     #         slide_path,
     #         heatmaps,
     #         coords[head_num],
     #         output_dir_slide,
     #         fname=f"patch_head_{head_num}",
     #         downsample=32,
-    #         scale=2,
+    #         downscale=2,
     #         save_to_disk=True,
     #     )
+    #     stitched_hms[f"Head {head_num}"] = stitched_hm
+
+    # display_stitched_heatmaps(
+    #     slide_path,
+    #     stitched_hms,
+    #     output_dir_slide,
+    #     fname=f"patch",
+    #     display_patching=True,
+    #     region_dir=region_dir,
+    #     region_size=cfg.region_size,
+    # )
 
     # hms, coords = get_slide_hierarchical_heatmaps(
     #     slide_id,
@@ -177,27 +204,30 @@ def main(cfg: DictConfig):
     #     region_model,
     #     region_dir,
     #     output_dir_slide,
-    #     scale=2,
+    #     downscale=2,
     #     cmap=light_jet,
     #     threshold=None,
     #     save_to_disk=False,
     #     patch_device=torch.device("cuda:0"),
     #     region_device=torch.device("cuda:0"),
     # )
+
+    stitched_hms = {}
     # for rhead_num, hm_dict in hms.items():
     #     coords_dict = coords[rhead_num]
     #     for phead_num, heatmaps in hm_dict.items():
     #         coordinates = coords_dict[phead_num]
-    #         _ = stitch_slide_heatmaps(
+    #         stitched_hm = stitch_slide_heatmaps(
     #             slide_path,
     #             heatmaps,
     #             coordinates,
     #             output_dir_slide,
     #             fname=f"hierarchcial_rhead_{rhead_num}_phead_{phead_num}",
     #             downsample=32,
-    #             scale=2,
+    #             downscale=2,
     #             save_to_disk=True,
     #         )
+    #         hierarchical_hm.append(stitched_hm)
 
 if __name__ == "__main__":
 

@@ -603,6 +603,7 @@ def create_hierarchical_heatmaps_indiv(
     - cmap (matplotlib.pyplot): colormap for creating heatmaps
     """
     region_size = region.size[0]
+    n_patch = region_size // patch_size
     _, patch_att, region_att = get_region_attention_scores(
         region,
         patch_model,
@@ -628,7 +629,7 @@ def create_hierarchical_heatmaps_indiv(
             for i in t:
 
                 patch_att_scores = concat_patch_scores(
-                    patch_att[:, i, :, :], size=(s // mini_patch_size,) * 2
+                    patch_att[:, i, :, :], size=(s // n_patch,) * 2
                 )
 
                 att_mask = patch_att_scores.copy()
@@ -684,7 +685,7 @@ def create_hierarchical_heatmaps_indiv(
         for i in t:
 
             patch_att_scores = concat_patch_scores(
-                patch_att[:, i, :, :], size=(s // mini_patch_size,) * 2
+                patch_att[:, i, :, :], size=(s // n_patch,) * 2
             )
             patch_color_block = (cmap(patch_att_scores) * 255)[:, :, :3].astype(
                 np.uint8
@@ -721,7 +722,7 @@ def create_hierarchical_heatmaps_indiv(
                 for i in t2:
 
                     patch_att_scores = concat_patch_scores(
-                        patch_att[:, i, :, :], size=(s // mini_patch_size,) * 2
+                        patch_att[:, i, :, :], size=(s // n_patch,) * 2
                     )
                     score = region_att_scores + patch_att_scores
                     color_block = (cmap(score) * 255)[:, :, :3].astype(np.uint8)
@@ -772,6 +773,7 @@ def create_hierarchical_heatmaps_concat(
     - cmap (matplotlib.pyplot): colormap for creating heatmaps
     """
     region_size = region.size[0]
+    n_patch = region_size // patch_size
     _, patch_att, region_att = get_region_attention_scores(
         region,
         patch_model,
@@ -782,6 +784,7 @@ def create_hierarchical_heatmaps_concat(
         patch_device=patch_device,
         region_device=region_device,
     )  # (256, 6, 128, 128), (6, 2048, 2048) when downscale = 2
+
     s = region_size // downscale  # 2048 for downscale = 2, region_size = 4096
     save_region = np.array(
         region.resize((s, s))
@@ -821,7 +824,7 @@ def create_hierarchical_heatmaps_concat(
                 for i in t2:
 
                     patch_att_scores = concat_patch_scores(
-                        patch_att[:, i, :, :], size=(s // mini_patch_size,) * 2
+                        patch_att[:, i, :, :], size=(s // n_patch,) * 2
                     )  # (2048, 2048) for downscale = 2
                     patch_color_block = (cmap(patch_att_scores) * 255)[:, :, :3].astype(
                         np.uint8
@@ -929,6 +932,7 @@ def get_slide_patch_level_heatmaps(
 
             region = Image.open(fp)
             region_size = region.size[0]
+            n_patch = region_size // patch_size
             _, patch_att, _ = get_region_attention_scores(
                 region,
                 patch_model,
@@ -960,7 +964,7 @@ def get_slide_patch_level_heatmaps(
                         coords[i].append((x,y))
 
                         patch_att_scores = concat_patch_scores(
-                            patch_att[:, i, :, :], size=(s // mini_patch_size,) * 2
+                            patch_att[:, i, :, :], size=(s // n_patch,) * 2
                         )
 
                         att_mask = patch_att_scores.copy()
@@ -1003,7 +1007,7 @@ def get_slide_patch_level_heatmaps(
                         coords[i].append((x,y))
 
                         patch_att_scores = concat_patch_scores(
-                            patch_att[:, i, :, :], size=(s // mini_patch_size,) * 2
+                            patch_att[:, i, :, :], size=(s // n_patch,) * 2
                         )
                         patch_color_block = (cmap(patch_att_scores) * 255)[:, :, :3].astype(
                             np.uint8
@@ -1173,6 +1177,7 @@ def get_slide_hierarchical_heatmaps(
 
             region = Image.open(fp)
             region_size = region.size[0]
+            n_patch = region_size // patch_size
 
             hierarchical_hm_output_dir = Path(output_dir, f"hierarchical_{region_size}_{patch_size}")
             hierarchical_hm_output_dir.mkdir(exist_ok=True, parents=True)
@@ -1214,7 +1219,7 @@ def get_slide_hierarchical_heatmaps(
                             coord_dict[i].append((x,y))
 
                             patch_att_scores = concat_patch_scores(
-                                patch_att[:, i, :, :], size=(s // mini_patch_size,) * 2
+                                patch_att[:, i, :, :], size=(s // n_patch,) * 2
                             )
                             score = region_att_scores + patch_att_scores
                             color_block = (cmap(score) * 255)[:, :, :3].astype(np.uint8)
@@ -1285,6 +1290,7 @@ def display_stitched_heatmaps(
     slide_path: Path,
     heatmaps: Dict[str, Image.Image],
     output_dir: Path,
+    fname: str,
     display_patching: bool = False,
     region_dir: Optional[Path] = None,
     region_size: Optional[int] = None,
@@ -1295,6 +1301,8 @@ def display_stitched_heatmaps(
     """
     slide_id = slide_path.stem
     slide_dir = Path(region_dir, slide_id)
+
+    w, h = next(iter(heatmaps.values())).size
 
     if display_patching:
 
@@ -1321,16 +1329,18 @@ def display_stitched_heatmaps(
         heatmaps = OrderedDict(data)
 
     nhm = len(heatmaps)
-    w, h = heatmaps[0].size
     pad = 20
     canvas = Image.new(size=(w*nhm+pad*(nhm+1), h+2*pad), mode="RGB", color=(255,)*3)
 
-    for i, (fname, hm) in enumerate(heatmaps.items()):
+    for i, (name, hm) in enumerate(heatmaps.items()):
         x, y = w*i+pad*(i+1), pad
         draw = ImageDraw.Draw(canvas)
         draw.text(
-            (x//2, pad//2),
-            fname,
+            (1.5*x, pad//2),
+            name,
             (0, 0, 0),
         )
         canvas.paste(hm, (x, y))
+    
+    stitched_hm_path = Path(output_dir, f"{fname}.png")
+    canvas.save(stitched_hm_path)
