@@ -1,0 +1,31 @@
+output_dir: 'output/debug'
+experiment_name: 'attention_heatmaps'
+
+# patch_fp: 'data/image_256.png'
+patch_fp:
+region_fp: 'data/image_4k.png'
+slide_fp:
+
+region_dir:
+region_size: 4096
+
+patch_weights: '/data/pathology/projects/ais-cap/code/git/clemsgrs/hipt/checkpoints/vit_256_small_dino.pth'
+region_weights: '/data/pathology/projects/ais-cap/code/git/clemsgrs/hipt/checkpoints/vit4k_xs_dino.pth'
+
+display: False
+downsample: 32
+font_fp: 'data/arial.ttf'
+
+wandb:
+  enable: False
+  project: 'hipt'
+  username: 'clemsg'
+  exp_name: '${experiment_name}'
+  tags:
+  dir: '/home/user'
+  group:
+
+
+hydra:
+  run:
+    dir: /tmp/hydra_output
