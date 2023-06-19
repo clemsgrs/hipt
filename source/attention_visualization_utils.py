@@ -95,6 +95,18 @@ def get_region_model(
     return region_model
 
 
+def add_margin(pil_img, top, right, bottom, left, color):
+    """
+    Adds custom margin to PIL.Image.
+    """
+    width, height = pil_img.size
+    new_width = width + right + left
+    new_height = height + top + bottom
+    result = Image.new(pil_img.mode, (new_width, new_height), color)
+    result.paste(pil_img, (left, top))
+    return result
+
+
 def tensorbatch2im(input_image, imtype=np.uint8):
     """
     Converts a Tensor array into a numpy image array.
@@ -352,7 +364,9 @@ def create_patch_heatmaps_indiv(
     mini_patch_size: int = 16,
     threshold: float = 0.5,
     alpha: float = 0.5,
-    cmap=plt.get_cmap("coolwarm"),
+    cmap: matplotlib.colors.LinearSegmentedColormap = plt.get_cmap("coolwarm"),
+    granular: bool = False,
+    offset: int = 128,
     save_to_disk: bool = True,
     patch_device: torch.device = torch.device("cuda:0"),
 ):
@@ -371,13 +385,50 @@ def create_patch_heatmaps_indiv(
     _, att = get_patch_attention_scores(
         patch1, patch_model, mini_patch_size=mini_patch_size, patch_device=patch_device
     )
+
+    if granular:
+
+        offset = int(offset * 256 / patch_size)
+        patch2 = add_margin(patch.crop((offset,offset,patch_size,patch_size)), top=0, left=0, bottom=offset, right=offset, color=(255,255,255))
+        _, att_2 = get_patch_attention_scores(patch2, patch_model, mini_patch_size=mini_patch_size, patch_device=patch_device)
+
     save_region = np.array(patch.copy())
+    nhead_patch = patch_model.num_heads
+
+    with tqdm.tqdm(
+        range(nhead_patch),
+        desc="Patch-level Transformer heatmaps",
+        unit=" head",
+        leave=True,
+    ) as t:
+
+        for i in t:
+
+            att_scores = normalize_patch_scores(att[:, i, :, :], size=(patch_size,) * 2)
+
+            if granular:
+                att_scores_2 = normalize_patch_scores(att_2[:,i,:,:], size=(patch_size,) * 2)
+                att_scores *= 100
+                att_scores_2 *= 100
+                new_att_scores_2 = np.zeros_like(att_scores_2)
+                new_att_scores_2[offset:patch_size, offset:patch_size] = att_scores_2[:(patch_size-offset), :(patch_size-offset)]
+                patch_overlay = np.ones_like(att_scores_2)*100
+                patch_overlay[offset:patch_size, offset:patch_size] += 100
+                att_scores = (att_scores+new_att_scores_2) / patch_overlay
+
+            color_block = (cmap(att_scores) * 255)[:, :, :3].astype(np.uint8)
+            patch_hm = cv2.addWeighted(
+                color_block, alpha, save_region.copy(), 1 - alpha, 0, save_region.copy()
+            )
+            if save_to_disk:
+                img = Image.fromarray(patch_hm)
+                img.save(Path(output_dir, f"{patch_size}_head_{i}.png"))
 
     if threshold != None:
 
         with tqdm.tqdm(
-            range(6),
-            desc="Iterating over patch-level heads",
+            range(nhead_patch),
+            desc="Patch-level Transformer thresh. heatmaps",
             unit=" head",
             leave=True,
         ) as t:
@@ -385,6 +436,17 @@ def create_patch_heatmaps_indiv(
             for i in t:
 
                 att_scores = normalize_patch_scores(att[:, i, :, :], size=(patch_size,) * 2)
+
+                if granular:
+                    att_scores_2 = normalize_patch_scores(att_2[:,i,:,:], size=(patch_size,) * 2)
+                    att_scores *= 100
+                    att_scores_2 *= 100
+                    new_att_scores_2 = np.zeros_like(att_scores_2)
+                    new_att_scores_2[offset:patch_size, offset:patch_size] = att_scores_2[:(patch_size-offset), :(patch_size-offset)]
+                    patch_overlay = np.ones_like(att_scores_2)*100
+                    patch_overlay[offset:patch_size, offset:patch_size] += 100
+                    att_scores = (att_scores+new_att_scores_2) / patch_overlay
+
                 att_mask = att_scores.copy()
                 att_mask[att_mask < threshold] = 0
                 att_mask[att_mask > threshold] = 0.95
@@ -408,24 +470,6 @@ def create_patch_heatmaps_indiv(
                         Path(output_dir, f"{patch_size}_head_{i}_thresh.png")
                     )
 
-    with tqdm.tqdm(
-        range(6),
-        desc="Iterating over patch-level heads",
-        unit=" head",
-        leave=True,
-    ) as t:
-
-        for i in t:
-
-            att_scores = normalize_patch_scores(att[:, i, :, :], size=(patch_size,) * 2)
-            color_block = (cmap(att_scores) * 255)[:, :, :3].astype(np.uint8)
-            patch_hm = cv2.addWeighted(
-                color_block, alpha, save_region.copy(), 1 - alpha, 0, save_region.copy()
-            )
-            if save_to_disk:
-                img = Image.fromarray(patch_hm)
-                img.save(Path(output_dir, f"{patch_size}_head_{i}.png"))
-
 
 def create_patch_heatmaps_concat(
     patch,
@@ -436,7 +480,9 @@ def create_patch_heatmaps_concat(
     fname: str = "patch",
     threshold: float = 0.5,
     alpha: float = 0.5,
-    cmap=plt.get_cmap("coolwarm"),
+    cmap: matplotlib.colors.LinearSegmentedColormap = plt.get_cmap("coolwarm"),
+    granular: bool = False,
+    offset: int = 16,
     patch_device=torch.device("cuda:0"),
 ):
     """
@@ -455,15 +501,60 @@ def create_patch_heatmaps_concat(
     _, att = get_patch_attention_scores(
         patch1, patch_model, mini_patch_size=mini_patch_size, patch_device=patch_device
     )
+
+    if granular:
+
+        offset = int(offset * 256 / patch_size)
+        patch2 = add_margin(patch.crop((offset,offset,patch_size,patch_size)), top=0, left=0, bottom=offset, right=offset, color=(255,255,255))
+        _, att_2 = get_patch_attention_scores(patch2, patch_model, mini_patch_size=mini_patch_size, patch_device=patch_device)
+
     save_region = np.array(patch.copy())
+    nhead_patch = patch_model.num_heads
+
+    hms = []
+
+    with tqdm.tqdm(
+        range(nhead_patch),
+        desc="Patch-level Transformer heatmaps",
+        unit=" head",
+        leave=True,
+    ) as t:
+
+        for i in t:
+
+            att_scores = normalize_patch_scores(att[:, i, :, :], size=(patch_size,) * 2)
+
+            if granular:
+                att_scores_2 = normalize_patch_scores(att_2[:,i,:,:], size=(patch_size,) * 2)
+                att_scores *= 100
+                att_scores_2 *= 100
+                new_att_scores_2 = np.zeros_like(att_scores_2)
+                new_att_scores_2[offset:patch_size, offset:patch_size] = att_scores_2[:(patch_size-offset), :(patch_size-offset)]
+                patch_overlay = np.ones_like(att_scores_2)*100
+                patch_overlay[offset:patch_size, offset:patch_size] += 100
+                att_scores = (att_scores+new_att_scores_2) / patch_overlay
+
+            color_block = (cmap(att_scores) * 255)[:, :, :3].astype(np.uint8)
+            region_hm = cv2.addWeighted(
+                color_block, alpha, save_region.copy(), 1 - alpha, 0, save_region.copy()
+            )
+            hms.append(region_hm)
+
+    hms = [Image.fromarray(img) for img in hms]
+
+    concat_img = getConcatImage(
+        [getConcatImage(hms[0:3]), getConcatImage(hms[3:6])], how="vertical"
+    )
+
+    concat_img.save(Path(output_dir, f"{fname}_{patch_size}_hm.png"))
 
     if threshold != None:
 
         ths = []
 
         with tqdm.tqdm(
-            range(6),
-            desc="Iterating over patch-level heads",
+            range(nhead_patch),
+            desc="Patch-level Transformer thresh. heatmaps",
             unit=" head",
             leave=True,
         ) as t:
@@ -471,6 +562,16 @@ def create_patch_heatmaps_concat(
             for i in t:
 
                 att_scores = normalize_patch_scores(att[:, i, :, :], size=(patch_size,) * 2)
+
+                if granular:
+                    att_scores_2 = normalize_patch_scores(att_2[:,i,:,:], size=(patch_size,) * 2)
+                    att_scores *= 100
+                    att_scores_2 *= 100
+                    new_att_scores_2 = np.zeros_like(att_scores_2)
+                    new_att_scores_2[offset:patch_size, offset:patch_size] = att_scores_2[:(patch_size-offset), :(patch_size-offset)]
+                    patch_overlay = np.ones_like(att_scores_2)*100
+                    patch_overlay[offset:patch_size, offset:patch_size] += 100
+                    att_scores = (att_scores+new_att_scores_2) / patch_overlay
 
                 att_mask = att_scores.copy()
                 att_mask[att_mask < threshold] = 0
@@ -496,32 +597,6 @@ def create_patch_heatmaps_concat(
             [getConcatImage(ths[0:3]), getConcatImage(ths[3:6])], how="vertical"
         )
         concat_img_thresh.save(Path(output_dir, f"{fname}_{patch_size}_thresh.png"))
-
-    hms = []
-
-    with tqdm.tqdm(
-        range(6),
-        desc="Iterating over patch-level heads",
-        unit=" head",
-        leave=True,
-    ) as t:
-
-        for i in t:
-
-            att_scores = normalize_patch_scores(att[:, i, :, :], size=(patch_size,) * 2)
-            color_block = (cmap(att_scores) * 255)[:, :, :3].astype(np.uint8)
-            region_hm = cv2.addWeighted(
-                color_block, alpha, save_region.copy(), 1 - alpha, 0, save_region.copy()
-            )
-            hms.append(region_hm)
-
-    hms = [Image.fromarray(img) for img in hms]
-
-    concat_img = getConcatImage(
-        [getConcatImage(hms[0:3]), getConcatImage(hms[3:6])], how="vertical"
-    )
-
-    concat_img.save(Path(output_dir, f"{fname}_{patch_size}_hm.png"))
 
 
 def get_region_attention_scores(
@@ -631,8 +706,10 @@ def create_hierarchical_heatmaps_indiv(
     fname: str = "region",
     downscale: int = 1,
     alpha: float = 0.5,
-    cmap=plt.get_cmap("coolwarm"),
+    cmap: matplotlib.colors.LinearSegmentedColormap = plt.get_cmap("coolwarm"),
     threshold: Optional[float] = None,
+    granular: bool = False,
+    offset: int = 128,
     patch_device=torch.device("cuda:0"),
     region_device=torch.device("cuda:1"),
 ):
@@ -653,6 +730,10 @@ def create_hierarchical_heatmaps_indiv(
     """
     region_size = region.size[0]
     n_patch = region_size // patch_size
+
+    nhead_patch = patch_model.num_heads
+    nhead_region = region_model.num_heads
+
     _, patch_att, region_att = get_region_attention_scores(
         region,
         patch_model,
@@ -663,14 +744,81 @@ def create_hierarchical_heatmaps_indiv(
         patch_device=patch_device,
         region_device=region_device,
     )  # (n_patch**2, nhead, patch_size, patch_size) when downscale = 1
+
+    if granular:
+
+        offset = int(offset * 4096 / region_size)
+        region2 = add_margin(region.crop((offset,offset,region_size,region_size)), top=0, left=0, bottom=offset, right=offset, color=(255,255,255))
+        region3 = add_margin(region.crop((offset*2,offset*2,region_size,region_size)), top=0, left=0, bottom=offset*2, right=offset*2, color=(255,255,255))
+        region4 = add_margin(region.crop((offset*3,offset*3,region_size,region_size)), top=0, left=0, bottom=offset*3, right=offset*3, color=(255,255,255))
+
+        _, patch_att_2, region_att_2 = get_region_attention_scores(region2, patch_model, region_model, patch_size=patch_size, mini_patch_size=mini_patch_size,downscale=downscale,patch_device=patch_device,region_device=region_device)
+        _, _, region_att_3 = get_region_attention_scores(region3, patch_model, region_model, patch_size=patch_size, mini_patch_size=mini_patch_size,downscale=downscale,patch_device=patch_device,region_device=region_device)
+        _, _, region_att_4 = get_region_attention_scores(region4, patch_model, region_model, patch_size=patch_size, mini_patch_size=mini_patch_size,downscale=downscale,patch_device=patch_device,region_device=region_device)
+
+        offset_2 = offset // downscale
+        offset_3 = (offset*2) // downscale
+        offset_4 = (offset*3) // downscale
+
     s = region_size // downscale
     save_region = np.array(region.resize((s, s)))
 
+    patch_output_dir = Path(output_dir, f"{fname}_{patch_size}")
+    patch_output_dir.mkdir(exist_ok=True, parents=True)
+
+    with tqdm.tqdm(
+        range(nhead_patch),
+        desc="Patch-level Transformer heatmaps",
+        unit=" head",
+        leave=True,
+    ) as t:
+
+        for i in t:
+
+            patch_att_scores = concat_patch_scores(
+                patch_att[:, i, :, :],
+                region_size=region_size,
+                patch_size=patch_size,
+                size=(s // n_patch,) * 2,
+            )
+
+            if granular:
+                patch_att_scores_2 = concat_patch_scores(
+                    patch_att_2[:,i,:,:],
+                    region_size=region_size,
+                    patch_size=patch_size,
+                    size=(s // n_patch,) * 2,
+                )
+                patch_att_scores *= 100
+                patch_att_scores_2 *= 100
+                new_patch_att_scores_2 = np.zeros_like(patch_att_scores_2)
+                new_patch_att_scores_2[offset_2:s, offset_2:s] = patch_att_scores_2[:(s-offset_2), :(s-offset_2)]
+                patch_overlay = np.ones_like(patch_att_scores_2) * 100
+                patch_overlay[offset_2:s, offset_2:s] += 100
+                patch_att_scores = (patch_att_scores+new_patch_att_scores_2) / patch_overlay
+
+            patch_color_block = (cmap(patch_att_scores) * 255)[:, :, :3].astype(
+                np.uint8
+            )
+            patch_hm = cv2.addWeighted(
+                patch_color_block,
+                alpha,
+                save_region.copy(),
+                1 - alpha,
+                0,
+                save_region.copy(),
+            )
+            img = Image.fromarray(patch_hm)
+            img.save(Path(patch_output_dir, f"head_{i}.png"))
+
     if threshold != None:
 
+        thresh_output_dir = Path(output_dir, f"{fname}_{patch_size}_thresh")
+        thresh_output_dir.mkdir(exist_ok=True, parents=True)
+
         with tqdm.tqdm(
-            range(6),
-            desc="Iterating over patch-level heads",
+            range(nhead_patch),
+            desc="Patch-level Transformer thresh. heatmaps",
             unit=" head",
             leave=True,
         ) as t:
@@ -683,6 +831,21 @@ def create_hierarchical_heatmaps_indiv(
                     patch_size=patch_size,
                     size=(s // n_patch,) * 2,
                 )
+
+                if granular:
+                    patch_att_scores_2 = concat_patch_scores(
+                        patch_att_2[:,i,:,:],
+                        region_size=region_size,
+                        patch_size=patch_size,
+                        size=(s // n_patch,) * 2,
+                    )
+                    patch_att_scores *= 100
+                    patch_att_scores_2 *= 100
+                    new_patch_att_scores_2 = np.zeros_like(patch_att_scores_2)
+                    new_patch_att_scores_2[offset_2:s, offset_2:s] = patch_att_scores_2[:(s-offset_2), :(s-offset_2)]
+                    patch_overlay = np.ones_like(patch_att_scores_2) * 100
+                    patch_overlay[offset_2:s, offset_2:s] += 100
+                    patch_att_scores = (patch_att_scores+new_patch_att_scores_2) / patch_overlay
 
                 att_mask = patch_att_scores.copy()
                 att_mask[att_mask < threshold] = 0
@@ -701,11 +864,14 @@ def create_hierarchical_heatmaps_indiv(
                 img_inverse = save_region.copy()
                 img_inverse[att_mask == 0.95] = 0
                 img = Image.fromarray(patch_hm + img_inverse)
-                img.save(Path(output_dir, f"{fname}_256_head_{i}_thresh.png"))
+                img.save(Path(thresh_output_dir, f"head_{i}.png"))
+
+    region_output_dir = Path(output_dir, f"{fname}_{region_size}")
+    region_output_dir.mkdir(exist_ok=True, parents=True)
 
     with tqdm.tqdm(
-        range(6),
-        desc="Iterating over region-level heads",
+        range(nhead_region),
+        desc="Region-level Transformer heatmaps",
         unit=" head",
         leave=True,
     ) as t:
@@ -713,6 +879,27 @@ def create_hierarchical_heatmaps_indiv(
         for j in t:
 
             region_att_scores = concat_region_scores(region_att[j], size=(s,) * 2)
+
+            if granular:
+                region_att_scores_2 = concat_region_scores(region_att_2[j], size=(s,) * 2)
+                region_att_scores_3 = concat_region_scores(region_att_3[j], size=(s,) * 2)
+                region_att_scores_4 = concat_region_scores(region_att_4[j], size=(s,) * 2)
+                region_att_scores *= 100
+                region_att_scores_2 *= 100
+                region_att_scores_3 *= 100
+                region_att_scores_4 *= 100
+                new_region_att_scores_2 = np.zeros_like(region_att_scores_2)
+                new_region_att_scores_2[offset_2:s, offset_2:s] = region_att_scores_2[:(s-offset_2), :(s-offset_2)]
+                new_region_att_scores_3 = np.zeros_like(region_att_scores_3)
+                new_region_att_scores_3[offset_3:s, offset_3:s] = region_att_scores_3[:(s-offset_3), :(s-offset_3)]
+                new_region_att_scores_4 = np.zeros_like(region_att_scores_4)
+                new_region_att_scores_4[offset_4:s, offset_4:s] = region_att_scores_4[:(s-offset_4), :(s-offset_4)]
+                region_overlay = np.ones_like(new_region_att_scores_2)*100
+                region_overlay[offset_2:s, offset_2:s] += 100
+                region_overlay[offset_3:s, offset_3:s] += 100
+                region_overlay[offset_4:s, offset_4:s] += 100
+                region_att_scores = (region_att_scores+new_region_att_scores_2+new_region_att_scores_3+new_region_att_scores_4) / region_overlay
+
             region_color_block = (cmap(region_att_scores) * 255)[:, :, :3].astype(
                 np.uint8
             )
@@ -725,40 +912,14 @@ def create_hierarchical_heatmaps_indiv(
                 save_region.copy(),
             )
             img = Image.fromarray(region_hm)
-            img.save(Path(output_dir, f"{fname}_1024_head_{j}.png"))
+            img.save(Path(region_output_dir, f"head_{j}.png"))
+
+    hierarchical_output_dir = Path(output_dir, f"{fname}_{region_size}_{patch_size}")
+    hierarchical_output_dir.mkdir(exist_ok=True, parents=True)
 
     with tqdm.tqdm(
-        range(6),
-        desc="Iterating over patch-level heads",
-        unit=" head",
-        leave=True,
-    ) as t:
-
-        for i in t:
-
-            patch_att_scores = concat_patch_scores(
-                patch_att[:, i, :, :],
-                region_size=region_size,
-                patch_size=patch_size,
-                size=(s // n_patch,) * 2,
-            )
-            patch_color_block = (cmap(patch_att_scores) * 255)[:, :, :3].astype(
-                np.uint8
-            )
-            patch_hm = cv2.addWeighted(
-                patch_color_block,
-                alpha,
-                save_region.copy(),
-                1 - alpha,
-                0,
-                save_region.copy(),
-            )
-            img = Image.fromarray(patch_hm)
-            img.save(Path(output_dir, f"{fname}_256_head_{i}.png"))
-
-    with tqdm.tqdm(
-        range(6),
-        desc="Iterating over region-level heads",
+        range(nhead_region),
+        desc="Hierarchical heatmaps",
         unit=" head",
         leave=True,
     ) as t1:
@@ -767,9 +928,29 @@ def create_hierarchical_heatmaps_indiv(
 
             region_att_scores = concat_region_scores(region_att[j], size=(s,) * 2)
 
+            if granular:
+                region_att_scores_2 = concat_region_scores(region_att_2[j], size=(s,) * 2)
+                region_att_scores_3 = concat_region_scores(region_att_3[j], size=(s,) * 2)
+                region_att_scores_4 = concat_region_scores(region_att_4[j], size=(s,) * 2)
+                region_att_scores *= 100
+                region_att_scores_2 *= 100
+                region_att_scores_3 *= 100
+                region_att_scores_4 *= 100
+                new_region_att_scores_2 = np.zeros_like(region_att_scores_2)
+                new_region_att_scores_2[offset_2:s, offset_2:s] = region_att_scores_2[:(s-offset_2), :(s-offset_2)]
+                new_region_att_scores_3 = np.zeros_like(region_att_scores_3)
+                new_region_att_scores_3[offset_3:s, offset_3:s] = region_att_scores_3[:(s-offset_3), :(s-offset_3)]
+                new_region_att_scores_4 = np.zeros_like(region_att_scores_4)
+                new_region_att_scores_4[offset_4:s, offset_4:s] = region_att_scores_4[:(s-offset_4), :(s-offset_4)]
+                region_overlay = np.ones_like(new_region_att_scores_2)*100
+                region_overlay[offset_2:s, offset_2:s] += 100
+                region_overlay[offset_3:s, offset_3:s] += 100
+                region_overlay[offset_4:s, offset_4:s] += 100
+                region_att_scores = (region_att_scores+new_region_att_scores_2+new_region_att_scores_3+new_region_att_scores_4) / region_overlay
+
             with tqdm.tqdm(
-                range(6),
-                desc="Iterating over patch-level heads",
+                range(nhead_patch),
+                desc=f"Region head [{j+1}/{nhead_region}]",
                 unit=" head",
                 leave=False,
             ) as t2:
@@ -782,7 +963,27 @@ def create_hierarchical_heatmaps_indiv(
                         patch_size=patch_size,
                         size=(s // n_patch,) * 2,
                     )
-                    score = region_att_scores + patch_att_scores
+
+                    if granular:
+                        patch_att_scores_2 = concat_patch_scores(
+                            patch_att_2[:,i,:,:],
+                            region_size=region_size,
+                            patch_size=patch_size,
+                            size=(s // n_patch,) * 2,
+                        )
+                        patch_att_scores *= 100
+                        patch_att_scores_2 *= 100
+                        new_patch_att_scores_2 = np.zeros_like(patch_att_scores_2)
+                        new_patch_att_scores_2[offset_2:s, offset_2:s] = patch_att_scores_2[:(s-offset_2), :(s-offset_2)]
+                        patch_overlay = np.ones_like(patch_att_scores_2) * 100 * 2
+                        patch_overlay[offset_2:s, offset_2:s] += 100 * 2
+                        patch_att_scores = (patch_att_scores+new_patch_att_scores_2) * 2 / patch_overlay
+
+                    if granular:
+                        score = (region_att_scores*region_overlay+patch_att_scores*patch_overlay) / (region_overlay+patch_overlay)
+                    else:
+                        score = (region_att_scores + patch_att_scores) / 2
+
                     color_block = (cmap(score) * 255)[:, :, :3].astype(np.uint8)
                     region_hm = cv2.addWeighted(
                         color_block,
@@ -795,8 +996,8 @@ def create_hierarchical_heatmaps_indiv(
                     img = Image.fromarray(region_hm)
                     img.save(
                         Path(
-                            output_dir,
-                            f"{fname}_factorized_4k_head_{j}_256_head_{i}.png",
+                            hierarchical_output_dir,
+                            f"rhead_{j}_phead_{i}.png",
                         )
                     )
 
@@ -808,10 +1009,11 @@ def create_hierarchical_heatmaps_concat(
     output_dir,
     patch_size: int = 256,
     mini_patch_size: int = 16,
-    fname: str = "region",
     downscale: int = 1,
     alpha: float = 0.5,
-    cmap=plt.get_cmap("coolwarm"),
+    cmap: matplotlib.colors.LinearSegmentedColormap = plt.get_cmap("coolwarm"),
+    granular: bool = False,
+    offset: int = 128,
     patch_device=torch.device("cuda:0"),
     region_device=torch.device("cuda:1"),
 ):
@@ -825,13 +1027,16 @@ def create_hierarchical_heatmaps_concat(
     - output_dir (str): save directory / subdirectory
     - patch_size (int): size of patches used for unrolling input region
     - mini_patch_size (int): size of mini-patches used for unrolling patch_model inputs
-    - fname (str): naming structure of files
     - downscale (int): how much to downscale the output image by
     - alpha (float): image blending factor for cv2.addWeighted
     - cmap (matplotlib.pyplot): colormap for creating heatmaps
     """
     region_size = region.size[0]
     n_patch = region_size // patch_size
+
+    nhead_patch = patch_model.num_heads
+    nhead_region = region_model.num_heads
+
     _, patch_att, region_att = get_region_attention_scores(
         region,
         patch_model,
@@ -843,24 +1048,60 @@ def create_hierarchical_heatmaps_concat(
         region_device=region_device,
     )  # (256, 6, 128, 128), (6, 2048, 2048) when downscale = 2
 
+    if granular:
+
+        offset = int(offset * 4096 / region_size)
+        region2 = add_margin(region.crop((offset,offset,region_size,region_size)), top=0, left=0, bottom=offset, right=offset, color=(255,255,255))
+        region3 = add_margin(region.crop((offset*2,offset*2,region_size,region_size)), top=0, left=0, bottom=offset*2, right=offset*2, color=(255,255,255))
+        region4 = add_margin(region.crop((offset*3,offset*3,region_size,region_size)), top=0, left=0, bottom=offset*3, right=offset*3, color=(255,255,255))
+
+        _, patch_att_2, region_att_2 = get_region_attention_scores(region2, patch_model, region_model, patch_size=patch_size, mini_patch_size=mini_patch_size,downscale=downscale,patch_device=patch_device,region_device=region_device)
+        _, _, region_att_3 = get_region_attention_scores(region3, patch_model, region_model, patch_size=patch_size, mini_patch_size=mini_patch_size,downscale=downscale,patch_device=patch_device,region_device=region_device)
+        _, _, region_att_4 = get_region_attention_scores(region4, patch_model, region_model, patch_size=patch_size, mini_patch_size=mini_patch_size,downscale=downscale,patch_device=patch_device,region_device=region_device)
+
+        offset_2 = offset // downscale
+        offset_3 = (offset*2) // downscale
+        offset_4 = (offset*3) // downscale
+
     s = region_size // downscale  # 2048 for downscale = 2, region_size = 4096
     save_region = np.array(
         region.resize((s, s))
     )  # (2048, 2048) for downscale = 2, region_size = 4096
 
     with tqdm.tqdm(
-        range(6),
-        desc="Iterating over region-level heads",
+        range(nhead_region),
+        desc="Hierarchical heatmaps",
         unit=" head",
         leave=True,
     ) as t1:
 
         for j in t1:
 
-            region_att_scores = concat_region_scores(
+            region_att_scores_1 = concat_region_scores(
                 region_att[j], size=(s,) * 2
             )  # (2048, 2048) for downscale = 2
-            region_color_block = (cmap(region_att_scores) * 255)[:, :, :3].astype(
+
+            if granular:
+                region_att_scores_2 = concat_region_scores(region_att_2[j], size=(s,) * 2)
+                region_att_scores_3 = concat_region_scores(region_att_3[j], size=(s,) * 2)
+                region_att_scores_4 = concat_region_scores(region_att_4[j], size=(s,) * 2)
+                region_att_scores_1 *= 100
+                region_att_scores_2 *= 100
+                region_att_scores_3 *= 100
+                region_att_scores_4 *= 100
+                new_region_att_scores_2 = np.zeros_like(region_att_scores_2)
+                new_region_att_scores_2[offset_2:s, offset_2:s] = region_att_scores_2[:(s-offset_2), :(s-offset_2)]
+                new_region_att_scores_3 = np.zeros_like(region_att_scores_3)
+                new_region_att_scores_3[offset_3:s, offset_3:s] = region_att_scores_3[:(s-offset_3), :(s-offset_3)]
+                new_region_att_scores_4 = np.zeros_like(region_att_scores_4)
+                new_region_att_scores_4[offset_4:s, offset_4:s] = region_att_scores_4[:(s-offset_4), :(s-offset_4)]
+                region_overlay = np.ones_like(new_region_att_scores_2)*100
+                region_overlay[offset_2:s, offset_2:s] += 100
+                region_overlay[offset_3:s, offset_3:s] += 100
+                region_overlay[offset_4:s, offset_4:s] += 100
+                region_att_scores = (region_att_scores_1+new_region_att_scores_2+new_region_att_scores_3+new_region_att_scores_4) / region_overlay
+
+            region_color_block = (cmap(region_att_scores_1/100) * 255)[:, :, :3].astype(
                 np.uint8
             )
             region_hm = cv2.addWeighted(
@@ -873,8 +1114,8 @@ def create_hierarchical_heatmaps_concat(
             )  # (2048, 2048) for downscale = 2, region_size = 4096
 
             with tqdm.tqdm(
-                range(6),
-                desc="Iterating over patch-level heads",
+                range(nhead_patch),
+                desc=f"Region head [{j+1}/{nhead_region}]",
                 unit=" head",
                 leave=False,
             ) as t2:
@@ -887,6 +1128,22 @@ def create_hierarchical_heatmaps_concat(
                         patch_size=patch_size,
                         size=(s // n_patch,) * 2,
                     )  # (2048, 2048) for downscale = 2
+
+                    if granular:
+                        patch_att_scores_2 = concat_patch_scores(
+                            patch_att_2[:,i,:,:],
+                            region_size=region_size,
+                            patch_size=patch_size,
+                            size=(s // n_patch,) * 2,
+                        )
+                        patch_att_scores *= 100
+                        patch_att_scores_2 *= 100
+                        new_patch_att_scores_2 = np.zeros_like(patch_att_scores_2)
+                        new_patch_att_scores_2[offset_2:s, offset_2:s] = patch_att_scores_2[:(s-offset_2), :(s-offset_2)]
+                        patch_overlay = np.ones_like(patch_att_scores_2) * 100 * 2
+                        patch_overlay[offset_2:s, offset_2:s] += 100 * 2
+                        patch_att_scores = (patch_att_scores+new_patch_att_scores_2) * 2 / patch_overlay
+
                     patch_color_block = (cmap(patch_att_scores) * 255)[:, :, :3].astype(
                         np.uint8
                     )
@@ -899,7 +1156,11 @@ def create_hierarchical_heatmaps_concat(
                         save_region.copy(),
                     )  # (2048, 2048) for downscale = 2
 
-                    score = region_att_scores + patch_att_scores
+                    if granular:
+                        score = (region_att_scores*region_overlay+patch_att_scores*patch_overlay) / (region_overlay+patch_overlay)
+                    else:
+                        score = (region_att_scores + patch_att_scores) / 2
+
                     color_block = (cmap(score) * 255)[:, :, :3].astype(np.uint8)
                     hierarchical_region_hm = cv2.addWeighted(
                         color_block,
@@ -940,7 +1201,7 @@ def create_hierarchical_heatmaps_concat(
                         Image.fromarray(hierarchical_region_hm),
                         (s + 2 * pad, s + 2 * pad),
                     )  # (2048, 2048) for downscale = 2, region_size = 4096 ; (2048+100, 2048+100)
-                    canvas.save(Path(output_dir, f"{fname}_4k[{j}]_256[{i}].png"))
+                    canvas.save(Path(output_dir, f"rhead_{j}_phead_{i}.png"))
 
 
 def get_slide_patch_level_heatmaps(
@@ -953,7 +1214,7 @@ def get_slide_patch_level_heatmaps(
     mini_patch_size: int = 16,
     downscale: int = 1,
     alpha: float = 0.5,
-    cmap=plt.get_cmap("coolwarm"),
+    cmap: matplotlib.colors.LinearSegmentedColormap = plt.get_cmap("coolwarm"),
     threshold: Optional[float] = None,
     region_fmt: str = "jpg",
     save_to_disk: bool = False,
@@ -983,6 +1244,8 @@ def get_slide_patch_level_heatmaps(
     nregions = len(region_paths)
     patch_heatmaps, coords = defaultdict(list), defaultdict(list)
 
+    nhead_patch = patch_model.num_heads
+
     with tqdm.tqdm(
         region_paths,
         desc=f"Processing {slide_id}",
@@ -1011,17 +1274,17 @@ def get_slide_patch_level_heatmaps(
 
             if threshold != None:
 
-                patch_hm_output_dir = Path(patch_output_dir, f"{patch_size}_thresh")
-                patch_hm_output_dir.mkdir(exist_ok=True, parents=True)
-
                 with tqdm.tqdm(
-                    range(6),
+                    range(nhead_patch),
                     desc=f"Processing region [{k+1}/{nregions}]",
                     unit=" head",
                     leave=True,
                 ) as t2:
 
                     for i in t2:
+
+                        patch_hm_output_dir = Path(patch_output_dir, f"{patch_size}_thresh", f"head_{i}")
+                        patch_hm_output_dir.mkdir(exist_ok=True, parents=True)
 
                         x, y = int(fp.stem.split("_")[0]), int(fp.stem.split("_")[1])
                         coords[i].append((x, y))
@@ -1055,21 +1318,21 @@ def get_slide_patch_level_heatmaps(
                         patch_heatmaps[i].append(patch_hm)
                         if save_to_disk:
                             img = Image.fromarray(patch_hm)
-                            img.save(Path(patch_hm_output_dir, f"head_{i}.png"))
+                            img.save(Path(patch_hm_output_dir, f"{x}_{y}.png"))
 
             else:
 
-                patch_hm_output_dir = Path(patch_output_dir, f"{patch_size}")
-                patch_hm_output_dir.mkdir(exist_ok=True, parents=True)
-
                 with tqdm.tqdm(
-                    range(6),
+                    range(nhead_patch),
                     desc=f"Processing region [{k+1}/{nregions}]",
                     unit=" head",
                     leave=True,
                 ) as t2:
 
                     for i in t2:
+
+                        patch_hm_output_dir = Path(patch_output_dir, f"{patch_size}", f"head_{i}")
+                        patch_hm_output_dir.mkdir(exist_ok=True, parents=True)
 
                         x, y = int(fp.stem.split("_")[0]), int(fp.stem.split("_")[1])
                         coords[i].append((x, y))
@@ -1094,7 +1357,7 @@ def get_slide_patch_level_heatmaps(
                         patch_heatmaps[i].append(patch_hm)
                         if save_to_disk:
                             img = Image.fromarray(patch_hm)
-                            img.save(Path(patch_hm_output_dir, f"head_{i}.png"))
+                            img.save(Path(patch_hm_output_dir, f"{x}_{y}.png"))
 
     return patch_heatmaps, coords
 
@@ -1109,7 +1372,7 @@ def get_slide_region_level_heatmaps(
     mini_patch_size: int = 16,
     downscale: int = 1,
     alpha: float = 0.5,
-    cmap=plt.get_cmap("coolwarm"),
+    cmap: matplotlib.colors.LinearSegmentedColormap = plt.get_cmap("coolwarm"),
     threshold: Optional[float] = None,
     region_fmt: str = "jpg",
     save_to_disk: bool = None,
@@ -1139,6 +1402,8 @@ def get_slide_region_level_heatmaps(
     nregions = len(region_paths)
     region_heatmaps, coords = defaultdict(list), defaultdict(list)
 
+    nhead_region = region_model.num_heads
+
     with tqdm.tqdm(
         region_paths,
         desc=f"Processing {slide_id}",
@@ -1151,9 +1416,6 @@ def get_slide_region_level_heatmaps(
 
             region = Image.open(fp)
             region_size = region.size[0]
-
-            region_hm_output_dir = Path(region_output_dir, f"{region_size}")
-            region_hm_output_dir.mkdir(exist_ok=True, parents=True)
 
             _, _, region_att = get_region_attention_scores(
                 region,
@@ -1169,13 +1431,16 @@ def get_slide_region_level_heatmaps(
             save_region = np.array(region.resize((s, s)))
 
             with tqdm.tqdm(
-                range(6),
+                range(nhead_region),
                 desc=f"Processing region [{k+1}/{nregions}]",
                 unit=" head",
                 leave=True,
             ) as t2:
 
                 for j in t2:
+
+                    region_hm_output_dir = Path(region_output_dir, f"{region_size}", f"head_{j}")
+                    region_hm_output_dir.mkdir(exist_ok=True, parents=True)
 
                     x, y = int(fp.stem.split("_")[0]), int(fp.stem.split("_")[1])
                     coords[j].append((x, y))
@@ -1197,7 +1462,7 @@ def get_slide_region_level_heatmaps(
                     region_heatmaps[j].append(region_hm)
                     if save_to_disk:
                         img = Image.fromarray(region_hm)
-                        img.save(Path(region_hm_output_dir, f"head_{j}.png"))
+                        img.save(Path(region_hm_output_dir, f"{x}_{y}.png"))
 
     return region_heatmaps, coords
 
@@ -1212,7 +1477,7 @@ def get_slide_hierarchical_heatmaps(
     mini_patch_size: int = 16,
     downscale: int = 1,
     alpha: float = 0.5,
-    cmap=plt.get_cmap("coolwarm"),
+    cmap: matplotlib.colors.LinearSegmentedColormap = plt.get_cmap("coolwarm"),
     threshold: Optional[float] = None,
     region_fmt: str = "jpg",
     save_to_disk: bool = False,
@@ -1240,6 +1505,9 @@ def get_slide_hierarchical_heatmaps(
 
     hierarchical_heatmaps, coords = defaultdict(dict), defaultdict(dict)
     hm_dict, coord_dict = defaultdict(list), defaultdict(list)
+
+    nhead_patch = patch_model.num_heads
+    nhead_region = region_model.num_heads
 
     with tqdm.tqdm(
         region_paths,
@@ -1274,7 +1542,7 @@ def get_slide_hierarchical_heatmaps(
             save_region = np.array(region.resize((s, s)))
 
             with tqdm.tqdm(
-                range(6),
+                range(nhead_region),
                 desc=f"Processing region [{k+1}/{nregions}]",
                 unit=" head",
                 leave=True,
@@ -1287,8 +1555,8 @@ def get_slide_hierarchical_heatmaps(
                     )
 
                     with tqdm.tqdm(
-                        range(6),
-                        desc="Iterating over patch-level heads",
+                        range(nhead_patch),
+                        desc=f"Region head [{j}/{nhead_region}]",
                         unit=" head",
                         leave=False,
                     ) as t2:
