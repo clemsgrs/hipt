@@ -8,6 +8,8 @@ Re-implementation of original [HIPT](https://github.com/mahmoodlab/HIPT) code.
    <a href="https://github.com/PyCQA/pylint"><img alt="empty" src=https://img.shields.io/github/stars/clemsgrs/hipt?style=social></a>
 </p>
 
+<img src="heatmap_illu.png" width="1000px" align="center" />
+
 ## Requirements
 
 - python 3.9+
@@ -169,6 +171,74 @@ Then, run the following command to kick off model training on multiple folds:
 - classification: `python3 train/classification_multi.py --config-name <classification_multi_fold_config_filename>`
 - survival: `python3 train/survival_multi.py --config-name <survival_single_fold_config_filename>`
 
+## Interpretability via Attention Heatmaps
+
+Given HIPT consists in 3 Transformers stacked on one another, one can look at attention heatmaps for each Transformer independantly. Additionally, one can also blend these attention heatmaps together and generate **factorized** attention heatmaps.<br>
+<br>
+To generate attention heatmaps, create a configuration file under config/heatmaps`.<br>
+You can take inspiration from `default.yaml`, where all entried should be documented.<br>
+
+Then, run the following command to kick off attention heatmap generation:
+
+```bash
+python3 attention_visualization.py --config-name <heatmaps_config_filename>
+```
+
+Depending on which part of the code is not commented out, it will produce many `.png` files per slide and save them under `output/<experiment_name>/<experiment_id>`:
+
+<details>
+<summary>
+Heatmap output structure
+</summary>
+
+```bash
+hipt/
+├── output/<experiment_name>/<experiment_id>/
+│     ├── slide_1/
+│     │    ├── patch.png
+│     │    ├── region.png
+│     │    ├── patch/<patch_size>/
+│     │    │    ├── head_0/
+│     │    │    │    ├── x1_y1.png
+│     │    │    │    ├── x2_y2.png
+│     │    │    │    └── ...
+│     │    │    ├── head_1/
+│     │    │    └── ...
+│     │    ├── region/<region_size>/
+│     │    │    ├── head_0/
+│     │    │    │    ├── x1_y1.png
+│     │    │    │    ├── x2_y2.png
+│     │    │    │    └── ...
+│     │    │    ├── head_1/
+│     │    │    └── ...
+│     │    ├── hierarchical_<region_size>_<patch_size>/
+│     │    │    ├── rhead_0_phead_0/
+│     │    │    │    ├── x1_y1.png
+│     │    │    │    ├── x2_y2.png
+│     │    │    │    └── ...
+│     │    │    ├── rhead_0_phead_1/
+│     │    │    └── ...
+│     │    └── slide/
+│     │         ├── patch_head_0.png
+│     │         ├── region_head_0.png
+│     │         ├── rhead_0_phead_0.png
+│     │         └── ...
+│     ├── slide_2/
+│     │    └── ...
+│     ├── slide_3/
+│     └── ...
+```
+</details>
+
+where, for each slide:
+
+* `patch.png` stitches the patch-level Transformer attention heatmaps (one per attention head) at the slide-level
+* `region.png` stitches the region-level Transformer attention heatmaps (one per attention head) at the slide-level
+* `patch/` regroups the patch-level Transformer attention heatmaps for all extracted regions in a given slide (one per attention head)
+* `region/` regroups the region-level Transformer attention heatmaps for all extracted regions in a given slide (one per attention head)
+* `hierarchical_<region_size>_<patch_size>/` regroups the factorized patch-level & region-level attention heatmaps for all extracted regions in a given slide
+* `slide/` regroups all possible stitched attention heatmaps (patch-level, region-level, factorized) at the slide-level
+ 
 ## Hierarchical Pretraining
 
 <details>

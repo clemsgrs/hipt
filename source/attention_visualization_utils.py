@@ -1935,11 +1935,6 @@ def get_slide_hierarchical_heatmaps(
             region_size = region.size[0]
             n_patch = region_size // patch_size
 
-            hierarchical_hm_output_dir = Path(
-                output_dir, f"hierarchical_{region_size}_{patch_size}"
-            )
-            hierarchical_hm_output_dir.mkdir(exist_ok=True, parents=True)
-
             _, patch_att, region_att = get_region_attention_scores(
                 region,
                 patch_model,
@@ -2078,6 +2073,11 @@ def get_slide_hierarchical_heatmaps(
 
                         for i in t2:
 
+                            hierarchical_hm_output_dir = Path(
+                                output_dir, f"hierarchical_{region_size}_{patch_size}", f"rhead_{j}_phead_{i}"
+                            )
+                            hierarchical_hm_output_dir.mkdir(exist_ok=True, parents=True)
+
                             x, y = int(fp.stem.split("_")[0]), int(
                                 fp.stem.split("_")[1]
                             )
@@ -2140,7 +2140,7 @@ def get_slide_hierarchical_heatmaps(
                                 img.save(
                                     Path(
                                         hierarchical_hm_output_dir,
-                                        f"rhead_{j}_phead_{i}.png",
+                                        f"{x}_{y}.png",
                                     )
                                 )
 
