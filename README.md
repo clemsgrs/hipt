@@ -175,8 +175,8 @@ Then, run the following command to kick off model training on multiple folds:
 
 Given HIPT consists in 3 Transformers stacked on one another, one can look at attention heatmaps for each Transformer independantly. Additionally, one can also blend these attention heatmaps together and generate **factorized** attention heatmaps.<br>
 <br>
-To generate attention heatmaps, create a configuration file under config/heatmaps`.<br>
-You can take inspiration from `default.yaml`, where all entried should be documented.<br>
+To generate attention heatmaps, create a configuration file under `config/heatmaps`.<br>
+You can take inspiration from `default.yaml`, where all entries should be documented.<br>
 
 Then, run the following command to kick off attention heatmap generation:
 
@@ -230,15 +230,22 @@ hipt/
 ```
 </details>
 
-where, for each slide:
+where, for each slide (and for each attention head):
 
-* `patch.png` stitches the patch-level Transformer attention heatmaps (one per attention head) at the slide-level
-* `region.png` stitches the region-level Transformer attention heatmaps (one per attention head) at the slide-level
-* `patch/` regroups the patch-level Transformer attention heatmaps for all extracted regions in a given slide (one per attention head)
-* `region/` regroups the region-level Transformer attention heatmaps for all extracted regions in a given slide (one per attention head)
+* `patch.png` stitches the patch-level Transformer attention heatmaps  at the slide-level
+* `region.png` stitches the region-level Transformer attention heatmaps at the slide-level
+* `patch/` regroups the patch-level Transformer attention heatmaps for all extracted regions in a given slide
+* `region/` regroups the region-level Transformer attention heatmaps for all extracted regions in a given slide
 * `hierarchical_<region_size>_<patch_size>/` regroups the factorized patch-level & region-level attention heatmaps for all extracted regions in a given slide
 * `slide/` regroups all possible stitched attention heatmaps (patch-level, region-level, factorized) at the slide-level
  
+
+ **Distributed** heatmap generation across multiple gpus is supported via:
+
+```bash
+python3 -m torch.distributed.run --standalone --nproc_per_node=gpu attention_visualization.py --config-name <heatmaps_config_filename>
+```
+
 ## Hierarchical Pretraining
 
 <details>
