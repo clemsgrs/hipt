@@ -1,23 +1,24 @@
 output_dir: 'output/debug'
 experiment_name: 'attention_heatmaps'
 
-patch_fp:
-# patch_fp: 'data/image_256.png'
-# region_fp:
-region_fp: 'data/image_4k.png'
+patch_fp: # path to (256, 256) input patch
+# patch_fp: 'data/image_256.png'  # path to (256, 256) input patch
+# region_fp:  # path to input region
+region_fp: 'data/image_2k.png'  # path to input region
 
-slide_fp:
+slide_fp: # path to input slide
+slide_csv: # path to .csv file which contains a 'slide_path' column
 
-region_dir:
-region_size: 4096
+region_dir: # path to folder containing HS2P output (extracted regions)
+region_size: 2048 # if slide_fp is provided, must indicate the size of the regions extracted in region_dir
 
-patch_weights: '/data/pathology/projects/ais-cap/code/git/clemsgrs/hipt/checkpoints/vit_256_small_dino.pth'
-region_weights: '/data/pathology/projects/ais-cap/code/git/clemsgrs/hipt/checkpoints/vit4k_xs_dino.pth'
+patch_weights: '/data/pathology/projects/ais-cap/code/git/clemsgrs/hipt/checkpoints/vit_256_small_dino.pth' # patch-level Transformer weights
+region_weights: '/data/pathology/projects/ais-cap/code/git/clemsgrs/hipt/checkpoints/vit4k_xs_dino.pth' # region-level Transformer weights
 
-display: False
-downsample: 32
-granular: False
-font_fp: 'data/arial.ttf'
+display: False  # whether to display the heatmaps of multiple attention heads on a single image
+downsample: 32  # uses this value to find the closest downsample level in the WSI for heatmap visualization
+granular: True  # whether to compute attention scores using an overlapping stride to obtain more granular heatmaps 
+font_fp: 'data/arial.ttf' # if display = True, path to font used to display figure titles
 
 wandb:
   enable: False

@@ -1,17 +1,21 @@
 import os
+import tqdm
+import wandb
 import hydra
 import torch
-import matplotlib
 import random
-import numpy as np
 import datetime
+import matplotlib
+import numpy as np
+import pandas as pd
 
 from PIL import Image
 from pathlib import Path
 from omegaconf import DictConfig
 from collections import defaultdict
 
-from source.utils import initialize_wandb
+from source.dataset import SlideFilepathsDataset
+from source.utils import initialize_wandb, is_main_process
 from source.attention_visualization_utils import (
     cmap_map,
     get_patch_model,
@@ -28,21 +32,40 @@ from source.attention_visualization_utils import (
 )
 
 
-@hydra.main(
-    version_base="1.2.0", config_path="config/heatmaps", config_name="default"
-)
+@hydra.main(version_base="1.2.0", config_path="config/heatmaps", config_name="default")
 def main(cfg: DictConfig):
 
-    run_id = datetime.datetime.now().strftime("%Y-%m-%d_%H_%M")
-    # set up wandb
-    if cfg.wandb.enable:
-        key = os.environ.get("WANDB_API_KEY")
-        wandb_run = initialize_wandb(cfg, key=key)
-        wandb_run.define_metric("epoch", summary="max")
-        run_id = wandb_run.id
+    distributed = torch.cuda.device_count() > 1
+    if distributed:
+        torch.distributed.init_process_group(backend="nccl")
+        gpu_id = int(os.environ["LOCAL_RANK"])
+        if gpu_id == 0:
+            print(f"Distributed session successfully initialized")
+    else:
+        gpu_id = -1
+
+    if is_main_process():
+        print(f"torch.cuda.device_count(): {torch.cuda.device_count()}")
+        run_id = datetime.datetime.now().strftime("%Y-%m-%d_%H_%M")
+        # set up wandb
+        if cfg.wandb.enable:
+            key = os.environ.get("WANDB_API_KEY")
+            wandb_run = initialize_wandb(cfg, key=key)
+            wandb_run.define_metric("processed", summary="max")
+            run_id = wandb_run.id
+    else:
+        run_id = ""
+
+    if distributed:
+        obj = [run_id]
+        torch.distributed.broadcast_object_list(
+            obj, 0, device=torch.device(f"cuda:{gpu_id}")
+        )
+        run_id = obj[0]
 
     output_dir = Path(cfg.output_dir, cfg.experiment_name, run_id)
-    output_dir.mkdir(parents=True, exist_ok=True)
+    if is_main_process():
+        output_dir.mkdir(parents=True, exist_ok=True)
 
     # seed everything to ensure reproducible heatmaps
     seed = 0
@@ -53,20 +76,22 @@ def main(cfg: DictConfig):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
-    patch_device = torch.device("cuda:0")
-    region_device = torch.device("cuda:0")
+    if gpu_id == -1:
+        device = torch.device(f"cuda")
+    else:
+        device = torch.device(f"cuda:{gpu_id}")
 
     patch_weights = Path(cfg.patch_weights)
-    patch_model = get_patch_model(pretrained_weights=patch_weights, device=patch_device)
+    patch_model = get_patch_model(pretrained_weights=patch_weights, device=device)
 
     region_weights = Path(cfg.region_weights)
     region_model = get_region_model(
-        pretrained_weights=region_weights, region_size=cfg.region_size, device=region_device
+        pretrained_weights=region_weights, region_size=cfg.region_size, device=device
     )
 
     light_jet = cmap_map(lambda x: x / 2 + 0.5, matplotlib.cm.jet)
 
-    if cfg.patch_fp:
+    if cfg.patch_fp and is_main_process():
 
         patch = Image.open(cfg.patch_fp)
 
@@ -81,7 +106,7 @@ def main(cfg: DictConfig):
             alpha=0.5,
             cmap=light_jet,
             granular=cfg.granular,
-            patch_device=patch_device,
+            patch_device=device,
         )
         print("done!")
 
@@ -96,11 +121,11 @@ def main(cfg: DictConfig):
             alpha=0.5,
             cmap=light_jet,
             granular=cfg.granular,
-            patch_device=patch_device,
+            patch_device=device,
         )
         print("done!")
 
-    if cfg.region_fp:
+    if cfg.region_fp and is_main_process():
 
         region = Image.open(cfg.region_fp)
 
@@ -117,8 +142,8 @@ def main(cfg: DictConfig):
             alpha=0.5,
             cmap=light_jet,
             granular=cfg.granular,
-            patch_device=patch_device,
-            region_device=region_device,
+            patch_device=device,
+            region_device=device,
         )
         print("done!")
 
@@ -134,12 +159,12 @@ def main(cfg: DictConfig):
             alpha=0.5,
             cmap=light_jet,
             granular=cfg.granular,
-            patch_device=patch_device,
-            region_device=region_device,
+            patch_device=device,
+            region_device=device,
         )
         print("done!")
 
-    if cfg.slide_fp:
+    if cfg.slide_fp and is_main_process():
 
         slide_path = Path(cfg.slide_fp)
         slide_id = slide_path.stem
@@ -157,8 +182,8 @@ def main(cfg: DictConfig):
             cmap=light_jet,
             save_to_disk=True,
             granular=cfg.granular,
-            patch_device=torch.device("cuda:0"),
-            region_device=torch.device("cuda:0"),
+            patch_device=device,
+            region_device=device,
         )
 
         stitched_hms = {}
@@ -199,8 +224,8 @@ def main(cfg: DictConfig):
             threshold=None,
             save_to_disk=True,
             granular=cfg.granular,
-            patch_device=torch.device("cuda:0"),
-            region_device=torch.device("cuda:0"),
+            patch_device=device,
+            region_device=device,
         )
 
         stitched_hms = {}
@@ -241,8 +266,8 @@ def main(cfg: DictConfig):
             threshold=None,
             save_to_disk=False,
             granular=cfg.granular,
-            patch_device=torch.device("cuda:0"),
-            region_device=torch.device("cuda:0"),
+            patch_device=device,
+            region_device=device,
         )
 
         stitched_hms = defaultdict(list)
@@ -261,6 +286,165 @@ def main(cfg: DictConfig):
                     save_to_disk=True,
                 )
                 stitched_hms[rhead_num].append(stitched_hm)
+
+    if cfg.slide_csv:
+
+        df = pd.read_csv("cfg.slide_csv")
+        dataset = SlideFilepathsDataset(df)
+
+        if distributed:
+            sampler = torch.utils.data.DistributedSampler(dataset, shuffle=True)
+        else:
+            sampler = torch.utils.data.RandomSampler(dataset)
+
+        loader = torch.utils.data.DataLoader(
+            dataset,
+            sampler=sampler,
+            batch_size=1,
+            num_workers=cfg.num_workers,
+            shuffle=False,
+            drop_last=False,
+        )
+
+        with tqdm.tqdm(
+            loader,
+            desc="Attention Heatmap Generation",
+            unit=" slide",
+            ncols=80,
+            position=0,
+            leave=True,
+            disable=not is_main_process(),
+        ) as t1:
+
+            for i, fp in enumerate(t1):
+
+                slide_path = Path(fp)
+                slide_id = slide_path.stem
+                region_dir = Path(cfg.region_dir)
+
+                output_dir_slide = Path(output_dir, slide_id)
+
+                hms, coords = get_slide_region_level_heatmaps(
+                    slide_id,
+                    patch_model,
+                    region_model,
+                    region_dir,
+                    output_dir_slide,
+                    downscale=1,
+                    cmap=light_jet,
+                    save_to_disk=True,
+                    granular=cfg.granular,
+                    patch_device=device,
+                    region_device=device,
+                    main_process=is_main_process(),
+                )
+
+                stitched_hms = {}
+                for head_num, heatmaps in hms.items():
+                    stitched_hm = stitch_slide_heatmaps(
+                        slide_path,
+                        heatmaps,
+                        coords[head_num],
+                        output_dir_slide,
+                        fname=f"region_head_{head_num}",
+                        downsample=cfg.downsample,
+                        downscale=1,
+                        save_to_disk=True,
+                    )
+                    stitched_hms[f"Head {head_num}"] = stitched_hm
+
+                if cfg.display:
+                    display_stitched_heatmaps(
+                        slide_path,
+                        stitched_hms,
+                        output_dir_slide,
+                        fname=f"region",
+                        display_patching=True,
+                        region_dir=region_dir,
+                        region_size=cfg.region_size,
+                        downsample=cfg.downsample,
+                        font_fp=cfg.font_fp,
+                    )
+
+                hms, coords = get_slide_patch_level_heatmaps(
+                    slide_id,
+                    patch_model,
+                    region_model,
+                    region_dir,
+                    output_dir_slide,
+                    downscale=1,
+                    cmap=light_jet,
+                    threshold=None,
+                    save_to_disk=True,
+                    granular=cfg.granular,
+                    patch_device=device,
+                    region_device=device,
+                    main_process=is_main_process(),
+                )
+
+                stitched_hms = {}
+                for head_num, heatmaps in hms.items():
+                    stitched_hm = stitch_slide_heatmaps(
+                        slide_path,
+                        heatmaps,
+                        coords[head_num],
+                        output_dir_slide,
+                        fname=f"patch_head_{head_num}",
+                        downsample=cfg.downsample,
+                        downscale=1,
+                        save_to_disk=True,
+                    )
+                    stitched_hms[f"Head {head_num}"] = stitched_hm
+
+                if cfg.display:
+                    display_stitched_heatmaps(
+                        slide_path,
+                        stitched_hms,
+                        output_dir_slide,
+                        fname=f"patch",
+                        display_patching=True,
+                        region_dir=region_dir,
+                        region_size=cfg.region_size,
+                        downsample=cfg.downsample,
+                        font_fp=cfg.font_fp,
+                    )
+
+                hms, coords = get_slide_hierarchical_heatmaps(
+                    slide_id,
+                    patch_model,
+                    region_model,
+                    region_dir,
+                    output_dir_slide,
+                    downscale=1,
+                    cmap=light_jet,
+                    threshold=None,
+                    save_to_disk=False,
+                    granular=cfg.granular,
+                    patch_device=device,
+                    region_device=device,
+                    main_process=is_main_process(),
+                )
+
+                stitched_hms = defaultdict(list)
+                for rhead_num, hm_dict in hms.items():
+                    coords_dict = coords[rhead_num]
+                    for phead_num, heatmaps in hm_dict.items():
+                        coordinates = coords_dict[phead_num]
+                        stitched_hm = stitch_slide_heatmaps(
+                            slide_path,
+                            heatmaps,
+                            coordinates,
+                            output_dir_slide,
+                            fname=f"hierarchcial_rhead_{rhead_num}_phead_{phead_num}",
+                            downsample=cfg.downsample,
+                            downscale=1,
+                            save_to_disk=True,
+                        )
+                        stitched_hms[rhead_num].append(stitched_hm)
+
+                if cfg.wandb.enable and not distributed:
+                    wandb.log({"processed": i + 1})
+
 
 if __name__ == "__main__":
 
