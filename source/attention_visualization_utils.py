@@ -385,10 +385,11 @@ def create_patch_heatmaps_indiv(
     _, att = get_patch_attention_scores(
         patch1, patch_model, mini_patch_size=mini_patch_size, patch_device=patch_device
     )
+    offset_ = offset
 
     if granular:
 
-        offset = int(offset * 256 / patch_size)
+        offset = int(offset_ * patch_size / 256)
         patch2 = add_margin(patch.crop((offset,offset,patch_size,patch_size)), top=0, left=0, bottom=offset, right=offset, color=(255,255,255))
         _, att_2 = get_patch_attention_scores(patch2, patch_model, mini_patch_size=mini_patch_size, patch_device=patch_device)
 
@@ -501,10 +502,11 @@ def create_patch_heatmaps_concat(
     _, att = get_patch_attention_scores(
         patch1, patch_model, mini_patch_size=mini_patch_size, patch_device=patch_device
     )
+    offset_ = offset
 
     if granular:
 
-        offset = int(offset * 256 / patch_size)
+        offset = int(offset_ *  patch_size / 256)
         patch2 = add_margin(patch.crop((offset,offset,patch_size,patch_size)), top=0, left=0, bottom=offset, right=offset, color=(255,255,255))
         _, att_2 = get_patch_attention_scores(patch2, patch_model, mini_patch_size=mini_patch_size, patch_device=patch_device)
 
@@ -733,6 +735,7 @@ def create_hierarchical_heatmaps_indiv(
 
     nhead_patch = patch_model.num_heads
     nhead_region = region_model.num_heads
+    offset_ = offset
 
     _, patch_att, region_att = get_region_attention_scores(
         region,
@@ -747,7 +750,7 @@ def create_hierarchical_heatmaps_indiv(
 
     if granular:
 
-        offset = int(offset * 4096 / region_size)
+        offset = int(offset_ * region_size / 4096)
         region2 = add_margin(region.crop((offset,offset,region_size,region_size)), top=0, left=0, bottom=offset, right=offset, color=(255,255,255))
         region3 = add_margin(region.crop((offset*2,offset*2,region_size,region_size)), top=0, left=0, bottom=offset*2, right=offset*2, color=(255,255,255))
         region4 = add_margin(region.crop((offset*3,offset*3,region_size,region_size)), top=0, left=0, bottom=offset*3, right=offset*3, color=(255,255,255))
@@ -894,7 +897,7 @@ def create_hierarchical_heatmaps_indiv(
                 new_region_att_scores_3[offset_3:s, offset_3:s] = region_att_scores_3[:(s-offset_3), :(s-offset_3)]
                 new_region_att_scores_4 = np.zeros_like(region_att_scores_4)
                 new_region_att_scores_4[offset_4:s, offset_4:s] = region_att_scores_4[:(s-offset_4), :(s-offset_4)]
-                region_overlay = np.ones_like(new_region_att_scores_2)*100
+                region_overlay = np.ones_like(new_region_att_scores_2) * 100
                 region_overlay[offset_2:s, offset_2:s] += 100
                 region_overlay[offset_3:s, offset_3:s] += 100
                 region_overlay[offset_4:s, offset_4:s] += 100
@@ -1037,6 +1040,7 @@ def create_hierarchical_heatmaps_concat(
 
     nhead_patch = patch_model.num_heads
     nhead_region = region_model.num_heads
+    offset_ = offset
 
     _, patch_att, region_att = get_region_attention_scores(
         region,
@@ -1051,7 +1055,7 @@ def create_hierarchical_heatmaps_concat(
 
     if granular:
 
-        offset = int(offset * 4096 / region_size)
+        offset = int(offset_ *  region_size / 4096)
         region2 = add_margin(region.crop((offset,offset,region_size,region_size)), top=0, left=0, bottom=offset, right=offset, color=(255,255,255))
         region3 = add_margin(region.crop((offset*2,offset*2,region_size,region_size)), top=0, left=0, bottom=offset*2, right=offset*2, color=(255,255,255))
         region4 = add_margin(region.crop((offset*3,offset*3,region_size,region_size)), top=0, left=0, bottom=offset*3, right=offset*3, color=(255,255,255))
@@ -1096,7 +1100,7 @@ def create_hierarchical_heatmaps_concat(
                 new_region_att_scores_3[offset_3:s, offset_3:s] = region_att_scores_3[:(s-offset_3), :(s-offset_3)]
                 new_region_att_scores_4 = np.zeros_like(region_att_scores_4)
                 new_region_att_scores_4[offset_4:s, offset_4:s] = region_att_scores_4[:(s-offset_4), :(s-offset_4)]
-                region_overlay = np.ones_like(new_region_att_scores_2)*100
+                region_overlay = np.ones_like(new_region_att_scores_2) * 100
                 region_overlay[offset_2:s, offset_2:s] += 100
                 region_overlay[offset_3:s, offset_3:s] += 100
                 region_overlay[offset_4:s, offset_4:s] += 100
@@ -1250,6 +1254,7 @@ def get_slide_patch_level_heatmaps(
     patch_heatmaps, coords = defaultdict(list), defaultdict(list)
 
     nhead_patch = patch_model.num_heads
+    offset_ = offset
 
     with tqdm.tqdm(
         region_paths,
@@ -1278,7 +1283,7 @@ def get_slide_patch_level_heatmaps(
 
             if granular:
 
-                offset = int(offset * 4096 / region_size)
+                offset = int(offset_ * region_size / 4096)
                 region2 = add_margin(region.crop((offset,offset,region_size,region_size)), top=0, left=0, bottom=offset, right=offset, color=(255,255,255))
                 _, patch_att_2, _ = get_region_attention_scores(region2, patch_model, region_model, patch_size=patch_size, mini_patch_size=mini_patch_size,downscale=downscale,patch_device=patch_device,region_device=region_device)
                 offset_2 = offset // downscale
@@ -1450,6 +1455,7 @@ def get_slide_region_level_heatmaps(
     region_heatmaps, coords = defaultdict(list), defaultdict(list)
 
     nhead_region = region_model.num_heads
+    offset_ = offset
 
     with tqdm.tqdm(
         region_paths,
@@ -1477,7 +1483,7 @@ def get_slide_region_level_heatmaps(
 
             if granular:
 
-                offset = int(offset * 4096 / region_size)
+                offset = int(offset_ * region_size / 4096)
                 region2 = add_margin(region.crop((offset,offset,region_size,region_size)), top=0, left=0, bottom=offset, right=offset, color=(255,255,255))
                 region3 = add_margin(region.crop((offset*2,offset*2,region_size,region_size)), top=0, left=0, bottom=offset*2, right=offset*2, color=(255,255,255))
                 region4 = add_margin(region.crop((offset*3,offset*3,region_size,region_size)), top=0, left=0, bottom=offset*3, right=offset*3, color=(255,255,255))
@@ -1526,7 +1532,7 @@ def get_slide_region_level_heatmaps(
                         new_region_att_scores_3[offset_3:s, offset_3:s] = region_att_scores_3[:(s-offset_3), :(s-offset_3)]
                         new_region_att_scores_4 = np.zeros_like(region_att_scores_4)
                         new_region_att_scores_4[offset_4:s, offset_4:s] = region_att_scores_4[:(s-offset_4), :(s-offset_4)]
-                        region_overlay = np.ones_like(new_region_att_scores_2)*100
+                        region_overlay = np.ones_like(new_region_att_scores_2) * 100
                         region_overlay[offset_2:s, offset_2:s] += 100
                         region_overlay[offset_3:s, offset_3:s] += 100
                         region_overlay[offset_4:s, offset_4:s] += 100
@@ -1594,6 +1600,7 @@ def get_slide_hierarchical_heatmaps(
 
     nhead_patch = patch_model.num_heads
     nhead_region = region_model.num_heads
+    offset_ = offset
 
     with tqdm.tqdm(
         region_paths,
@@ -1627,7 +1634,7 @@ def get_slide_hierarchical_heatmaps(
 
             if granular:
 
-                offset = int(offset * 4096 / region_size)
+                offset = int(offset_ * region_size / 4096)
                 region2 = add_margin(region.crop((offset,offset,region_size,region_size)), top=0, left=0, bottom=offset, right=offset, color=(255,255,255))
                 region3 = add_margin(region.crop((offset*2,offset*2,region_size,region_size)), top=0, left=0, bottom=offset*2, right=offset*2, color=(255,255,255))
                 region4 = add_margin(region.crop((offset*3,offset*3,region_size,region_size)), top=0, left=0, bottom=offset*3, right=offset*3, color=(255,255,255))
