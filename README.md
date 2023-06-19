@@ -237,7 +237,7 @@ where, for each slide (and for each attention head):
 * `patch/` regroups the patch-level Transformer attention heatmaps for all extracted regions in a given slide
 * `region/` regroups the region-level Transformer attention heatmaps for all extracted regions in a given slide
 * `hierarchical_<region_size>_<patch_size>/` regroups the factorized patch-level & region-level attention heatmaps for all extracted regions in a given slide
-* `slide/` regroups all possible stitched attention heatmaps (patch-level, region-level, factorized) at the slide-level
+* `slide/` regroups all stitched attention heatmaps (patch-level, region-level, factorized) at the slide-level
  
 
  **Distributed** heatmap generation across multiple gpus is supported via:
