@@ -80,6 +80,7 @@ def main(cfg: DictConfig):
             threshold=0.5,
             alpha=0.5,
             cmap=light_jet,
+            granular=cfg.granular,
             patch_device=patch_device,
         )
         print("done!")
@@ -94,6 +95,7 @@ def main(cfg: DictConfig):
             threshold=0.5,
             alpha=0.5,
             cmap=light_jet,
+            granular=cfg.granular,
             patch_device=patch_device,
         )
         print("done!")
@@ -114,6 +116,7 @@ def main(cfg: DictConfig):
             threshold=0.5,
             alpha=0.5,
             cmap=light_jet,
+            granular=cfg.granular,
             patch_device=patch_device,
             region_device=region_device,
         )
@@ -130,6 +133,7 @@ def main(cfg: DictConfig):
             downscale=1,
             alpha=0.5,
             cmap=light_jet,
+            granular=cfg.granular,
             patch_device=patch_device,
             region_device=region_device,
         )
@@ -152,6 +156,7 @@ def main(cfg: DictConfig):
             downscale=1,
             cmap=light_jet,
             save_to_disk=True,
+            granular=cfg.granular,
             patch_device=torch.device("cuda:0"),
             region_device=torch.device("cuda:0"),
         )
@@ -193,6 +198,7 @@ def main(cfg: DictConfig):
             cmap=light_jet,
             threshold=None,
             save_to_disk=True,
+            granular=cfg.granular,
             patch_device=torch.device("cuda:0"),
             region_device=torch.device("cuda:0"),
         )
@@ -224,36 +230,37 @@ def main(cfg: DictConfig):
                 font_fp=cfg.font_fp,
             )
 
-        # hms, coords = get_slide_hierarchical_heatmaps(
-        #     slide_id,
-        #     patch_model,
-        #     region_model,
-        #     region_dir,
-        #     output_dir_slide,
-        #     downscale=1,
-        #     cmap=light_jet,
-        #     threshold=None,
-        #     save_to_disk=False,
-        #     patch_device=torch.device("cuda:0"),
-        #     region_device=torch.device("cuda:0"),
-        # )
+        hms, coords = get_slide_hierarchical_heatmaps(
+            slide_id,
+            patch_model,
+            region_model,
+            region_dir,
+            output_dir_slide,
+            downscale=1,
+            cmap=light_jet,
+            threshold=None,
+            save_to_disk=False,
+            granular=cfg.granular,
+            patch_device=torch.device("cuda:0"),
+            region_device=torch.device("cuda:0"),
+        )
 
-        # stitched_hms = defaultdict(list)
-        # for rhead_num, hm_dict in hms.items():
-        #     coords_dict = coords[rhead_num]
-        #     for phead_num, heatmaps in hm_dict.items():
-        #         coordinates = coords_dict[phead_num]
-        #         stitched_hm = stitch_slide_heatmaps(
-        #             slide_path,
-        #             heatmaps,
-        #             coordinates,
-        #             output_dir_slide,
-        #             fname=f"hierarchcial_rhead_{rhead_num}_phead_{phead_num}",
-        #             downsample=cfg.downsample,
-        #             downscale=1,
-        #             save_to_disk=True,
-        #         )
-        #         stitched_hms[rhead_num].append(stitched_hm)
+        stitched_hms = defaultdict(list)
+        for rhead_num, hm_dict in hms.items():
+            coords_dict = coords[rhead_num]
+            for phead_num, heatmaps in hm_dict.items():
+                coordinates = coords_dict[phead_num]
+                stitched_hm = stitch_slide_heatmaps(
+                    slide_path,
+                    heatmaps,
+                    coordinates,
+                    output_dir_slide,
+                    fname=f"hierarchcial_rhead_{rhead_num}_phead_{phead_num}",
+                    downsample=cfg.downsample,
+                    downscale=1,
+                    save_to_disk=True,
+                )
+                stitched_hms[rhead_num].append(stitched_hm)
 
 if __name__ == "__main__":
 

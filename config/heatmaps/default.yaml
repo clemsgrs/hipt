@@ -1,9 +1,11 @@
 output_dir: 'output/debug'
 experiment_name: 'attention_heatmaps'
 
-# patch_fp: 'data/image_256.png'
 patch_fp:
+# patch_fp: 'data/image_256.png'
+# region_fp:
 region_fp: 'data/image_4k.png'
+
 slide_fp:
 
 region_dir:
@@ -14,6 +16,7 @@ region_weights: '/data/pathology/projects/ais-cap/code/git/clemsgrs/hipt/checkpo
 
 display: False
 downsample: 32
+granular: False
 font_fp: 'data/arial.ttf'
 
 wandb:
@@ -24,6 +27,7 @@ wandb:
   tags:
   dir: '/home/user'
   group:
+  resume_id:
 
 
 hydra:

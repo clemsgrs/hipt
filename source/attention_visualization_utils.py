@@ -366,7 +366,7 @@ def create_patch_heatmaps_indiv(
     alpha: float = 0.5,
     cmap: matplotlib.colors.LinearSegmentedColormap = plt.get_cmap("coolwarm"),
     granular: bool = False,
-    offset: int = 128,
+    offset: int = 16,
     save_to_disk: bool = True,
     patch_device: torch.device = torch.device("cuda:0"),
 ):
@@ -975,6 +975,7 @@ def create_hierarchical_heatmaps_indiv(
                         patch_att_scores_2 *= 100
                         new_patch_att_scores_2 = np.zeros_like(patch_att_scores_2)
                         new_patch_att_scores_2[offset_2:s, offset_2:s] = patch_att_scores_2[:(s-offset_2), :(s-offset_2)]
+                        #TODO: why do they introduce a factor 2 here?
                         patch_overlay = np.ones_like(patch_att_scores_2) * 100 * 2
                         patch_overlay[offset_2:s, offset_2:s] += 100 * 2
                         patch_att_scores = (patch_att_scores+new_patch_att_scores_2) * 2 / patch_overlay
@@ -1101,6 +1102,7 @@ def create_hierarchical_heatmaps_concat(
                 region_overlay[offset_4:s, offset_4:s] += 100
                 region_att_scores = (region_att_scores_1+new_region_att_scores_2+new_region_att_scores_3+new_region_att_scores_4) / region_overlay
 
+            #TODO: why do they run cmap on region_att_scores_1/100 and not on region_att_scores?
             region_color_block = (cmap(region_att_scores_1/100) * 255)[:, :, :3].astype(
                 np.uint8
             )
@@ -1140,6 +1142,7 @@ def create_hierarchical_heatmaps_concat(
                         patch_att_scores_2 *= 100
                         new_patch_att_scores_2 = np.zeros_like(patch_att_scores_2)
                         new_patch_att_scores_2[offset_2:s, offset_2:s] = patch_att_scores_2[:(s-offset_2), :(s-offset_2)]
+                        #TODO: why do they introduce a factor 2 here?
                         patch_overlay = np.ones_like(patch_att_scores_2) * 100 * 2
                         patch_overlay[offset_2:s, offset_2:s] += 100 * 2
                         patch_att_scores = (patch_att_scores+new_patch_att_scores_2) * 2 / patch_overlay
@@ -1159,7 +1162,7 @@ def create_hierarchical_heatmaps_concat(
                     if granular:
                         score = (region_att_scores*region_overlay+patch_att_scores*patch_overlay) / (region_overlay+patch_overlay)
                     else:
-                        score = (region_att_scores + patch_att_scores) / 2
+                        score = (region_att_scores_1 + patch_att_scores) / 2
 
                     color_block = (cmap(score) * 255)[:, :, :3].astype(np.uint8)
                     hierarchical_region_hm = cv2.addWeighted(
@@ -1218,6 +1221,8 @@ def get_slide_patch_level_heatmaps(
     threshold: Optional[float] = None,
     region_fmt: str = "jpg",
     save_to_disk: bool = False,
+    granular: bool = False,
+    offset: int = 128,
     patch_device: torch.device = torch.device("cuda:0"),
     region_device: torch.device = torch.device("cuda:0"),
 ):
@@ -1259,6 +1264,7 @@ def get_slide_patch_level_heatmaps(
             region = Image.open(fp)
             region_size = region.size[0]
             n_patch = region_size // patch_size
+
             _, patch_att, _ = get_region_attention_scores(
                 region,
                 patch_model,
@@ -1269,6 +1275,14 @@ def get_slide_patch_level_heatmaps(
                 patch_device=patch_device,
                 region_device=region_device,
             )
+
+            if granular:
+
+                offset = int(offset * 4096 / region_size)
+                region2 = add_margin(region.crop((offset,offset,region_size,region_size)), top=0, left=0, bottom=offset, right=offset, color=(255,255,255))
+                _, patch_att_2, _ = get_region_attention_scores(region2, patch_model, region_model, patch_size=patch_size, mini_patch_size=mini_patch_size,downscale=downscale,patch_device=patch_device,region_device=region_device)
+                offset_2 = offset // downscale
+
             s = region_size // downscale
             save_region = np.array(region.resize((s, s)))
 
@@ -1295,6 +1309,21 @@ def get_slide_patch_level_heatmaps(
                             patch_size=patch_size,
                             size=(s // n_patch,) * 2,
                         )
+
+                        if granular:
+                            patch_att_scores_2 = concat_patch_scores(
+                                patch_att_2[:,i,:,:],
+                                region_size=region_size,
+                                patch_size=patch_size,
+                                size=(s // n_patch,) * 2,
+                            )
+                            patch_att_scores *= 100
+                            patch_att_scores_2 *= 100
+                            new_patch_att_scores_2 = np.zeros_like(patch_att_scores_2)
+                            new_patch_att_scores_2[offset_2:s, offset_2:s] = patch_att_scores_2[:(s-offset_2), :(s-offset_2)]
+                            patch_overlay = np.ones_like(patch_att_scores_2) * 100
+                            patch_overlay[offset_2:s, offset_2:s] += 100
+                            patch_att_scores = (patch_att_scores+new_patch_att_scores_2) / patch_overlay
 
                         att_mask = patch_att_scores.copy()
                         att_mask[att_mask < threshold] = 0
@@ -1343,6 +1372,22 @@ def get_slide_patch_level_heatmaps(
                             patch_size=patch_size,
                             size=(s // n_patch,) * 2,
                         )
+
+                        if granular:
+                            patch_att_scores_2 = concat_patch_scores(
+                                patch_att_2[:,i,:,:],
+                                region_size=region_size,
+                                patch_size=patch_size,
+                                size=(s // n_patch,) * 2,
+                            )
+                            patch_att_scores *= 100
+                            patch_att_scores_2 *= 100
+                            new_patch_att_scores_2 = np.zeros_like(patch_att_scores_2)
+                            new_patch_att_scores_2[offset_2:s, offset_2:s] = patch_att_scores_2[:(s-offset_2), :(s-offset_2)]
+                            patch_overlay = np.ones_like(patch_att_scores_2) * 100
+                            patch_overlay[offset_2:s, offset_2:s] += 100
+                            patch_att_scores = (patch_att_scores+new_patch_att_scores_2) / patch_overlay
+
                         patch_color_block = (cmap(patch_att_scores) * 255)[
                             :, :, :3
                         ].astype(np.uint8)
@@ -1376,6 +1421,8 @@ def get_slide_region_level_heatmaps(
     threshold: Optional[float] = None,
     region_fmt: str = "jpg",
     save_to_disk: bool = None,
+    granular: bool = False,
+    offset: int = 128,
     patch_device: torch.device = torch.device("cuda:0"),
     region_device: torch.device = torch.device("cuda:0"),
 ):
@@ -1427,6 +1474,22 @@ def get_slide_region_level_heatmaps(
                 patch_device=patch_device,
                 region_device=region_device,
             )
+
+            if granular:
+
+                offset = int(offset * 4096 / region_size)
+                region2 = add_margin(region.crop((offset,offset,region_size,region_size)), top=0, left=0, bottom=offset, right=offset, color=(255,255,255))
+                region3 = add_margin(region.crop((offset*2,offset*2,region_size,region_size)), top=0, left=0, bottom=offset*2, right=offset*2, color=(255,255,255))
+                region4 = add_margin(region.crop((offset*3,offset*3,region_size,region_size)), top=0, left=0, bottom=offset*3, right=offset*3, color=(255,255,255))
+
+                _, _, region_att_2 = get_region_attention_scores(region2, patch_model, region_model, patch_size=patch_size, mini_patch_size=mini_patch_size,downscale=downscale,patch_device=patch_device,region_device=region_device)
+                _, _, region_att_3 = get_region_attention_scores(region3, patch_model, region_model, patch_size=patch_size, mini_patch_size=mini_patch_size,downscale=downscale,patch_device=patch_device,region_device=region_device)
+                _, _, region_att_4 = get_region_attention_scores(region4, patch_model, region_model, patch_size=patch_size, mini_patch_size=mini_patch_size,downscale=downscale,patch_device=patch_device,region_device=region_device)
+
+                offset_2 = offset // downscale
+                offset_3 = (offset*2) // downscale
+                offset_4 = (offset*3) // downscale
+
             s = region_size // downscale
             save_region = np.array(region.resize((s, s)))
 
@@ -1448,6 +1511,27 @@ def get_slide_region_level_heatmaps(
                     region_att_scores = concat_region_scores(
                         region_att[j], size=(s,) * 2
                     )
+
+                    if granular:
+                        region_att_scores_2 = concat_region_scores(region_att_2[j], size=(s,) * 2)
+                        region_att_scores_3 = concat_region_scores(region_att_3[j], size=(s,) * 2)
+                        region_att_scores_4 = concat_region_scores(region_att_4[j], size=(s,) * 2)
+                        region_att_scores *= 100
+                        region_att_scores_2 *= 100
+                        region_att_scores_3 *= 100
+                        region_att_scores_4 *= 100
+                        new_region_att_scores_2 = np.zeros_like(region_att_scores_2)
+                        new_region_att_scores_2[offset_2:s, offset_2:s] = region_att_scores_2[:(s-offset_2), :(s-offset_2)]
+                        new_region_att_scores_3 = np.zeros_like(region_att_scores_3)
+                        new_region_att_scores_3[offset_3:s, offset_3:s] = region_att_scores_3[:(s-offset_3), :(s-offset_3)]
+                        new_region_att_scores_4 = np.zeros_like(region_att_scores_4)
+                        new_region_att_scores_4[offset_4:s, offset_4:s] = region_att_scores_4[:(s-offset_4), :(s-offset_4)]
+                        region_overlay = np.ones_like(new_region_att_scores_2)*100
+                        region_overlay[offset_2:s, offset_2:s] += 100
+                        region_overlay[offset_3:s, offset_3:s] += 100
+                        region_overlay[offset_4:s, offset_4:s] += 100
+                        region_att_scores = (region_att_scores+new_region_att_scores_2+new_region_att_scores_3+new_region_att_scores_4) / region_overlay
+
                     region_color_block = (cmap(region_att_scores) * 255)[
                         :, :, :3
                     ].astype(np.uint8)
@@ -1481,6 +1565,8 @@ def get_slide_hierarchical_heatmaps(
     threshold: Optional[float] = None,
     region_fmt: str = "jpg",
     save_to_disk: bool = False,
+    granular: bool = False,
+    offset: int = 128,
     patch_device: torch.device = torch.device("cuda:0"),
     region_device: torch.device = torch.device("cuda:0"),
 ):
@@ -1538,6 +1624,22 @@ def get_slide_hierarchical_heatmaps(
                 patch_device=patch_device,
                 region_device=region_device,
             )
+
+            if granular:
+
+                offset = int(offset * 4096 / region_size)
+                region2 = add_margin(region.crop((offset,offset,region_size,region_size)), top=0, left=0, bottom=offset, right=offset, color=(255,255,255))
+                region3 = add_margin(region.crop((offset*2,offset*2,region_size,region_size)), top=0, left=0, bottom=offset*2, right=offset*2, color=(255,255,255))
+                region4 = add_margin(region.crop((offset*3,offset*3,region_size,region_size)), top=0, left=0, bottom=offset*3, right=offset*3, color=(255,255,255))
+
+                _, patch_att_2, region_att_2 = get_region_attention_scores(region2, patch_model, region_model, patch_size=patch_size, mini_patch_size=mini_patch_size,downscale=downscale,patch_device=patch_device,region_device=region_device)
+                _, _, region_att_3 = get_region_attention_scores(region3, patch_model, region_model, patch_size=patch_size, mini_patch_size=mini_patch_size,downscale=downscale,patch_device=patch_device,region_device=region_device)
+                _, _, region_att_4 = get_region_attention_scores(region4, patch_model, region_model, patch_size=patch_size, mini_patch_size=mini_patch_size,downscale=downscale,patch_device=patch_device,region_device=region_device)
+
+                offset_2 = offset // downscale
+                offset_3 = (offset*2) // downscale
+                offset_4 = (offset*3) // downscale
+
             s = region_size // downscale
             save_region = np.array(region.resize((s, s)))
 
@@ -1553,6 +1655,26 @@ def get_slide_hierarchical_heatmaps(
                     region_att_scores = concat_region_scores(
                         region_att[j], size=(s,) * 2
                     )
+
+                    if granular:
+                        region_att_scores_2 = concat_region_scores(region_att_2[j], size=(s,) * 2)
+                        region_att_scores_3 = concat_region_scores(region_att_3[j], size=(s,) * 2)
+                        region_att_scores_4 = concat_region_scores(region_att_4[j], size=(s,) * 2)
+                        region_att_scores *= 100
+                        region_att_scores_2 *= 100
+                        region_att_scores_3 *= 100
+                        region_att_scores_4 *= 100
+                        new_region_att_scores_2 = np.zeros_like(region_att_scores_2)
+                        new_region_att_scores_2[offset_2:s, offset_2:s] = region_att_scores_2[:(s-offset_2), :(s-offset_2)]
+                        new_region_att_scores_3 = np.zeros_like(region_att_scores_3)
+                        new_region_att_scores_3[offset_3:s, offset_3:s] = region_att_scores_3[:(s-offset_3), :(s-offset_3)]
+                        new_region_att_scores_4 = np.zeros_like(region_att_scores_4)
+                        new_region_att_scores_4[offset_4:s, offset_4:s] = region_att_scores_4[:(s-offset_4), :(s-offset_4)]
+                        region_overlay = np.ones_like(new_region_att_scores_2)*100
+                        region_overlay[offset_2:s, offset_2:s] += 100
+                        region_overlay[offset_3:s, offset_3:s] += 100
+                        region_overlay[offset_4:s, offset_4:s] += 100
+                        region_att_scores = (region_att_scores+new_region_att_scores_2+new_region_att_scores_3+new_region_att_scores_4) / region_overlay
 
                     with tqdm.tqdm(
                         range(nhead_patch),
@@ -1574,7 +1696,27 @@ def get_slide_hierarchical_heatmaps(
                                 patch_size=patch_size,
                                 size=(s // n_patch,) * 2,
                             )
-                            score = region_att_scores + patch_att_scores
+
+                            if granular:
+                                patch_att_scores_2 = concat_patch_scores(
+                                    patch_att_2[:,i,:,:],
+                                    region_size=region_size,
+                                    patch_size=patch_size,
+                                    size=(s // n_patch,) * 2,
+                                )
+                                patch_att_scores *= 100
+                                patch_att_scores_2 *= 100
+                                new_patch_att_scores_2 = np.zeros_like(patch_att_scores_2)
+                                new_patch_att_scores_2[offset_2:s, offset_2:s] = patch_att_scores_2[:(s-offset_2), :(s-offset_2)]
+                                patch_overlay = np.ones_like(patch_att_scores_2) * 100 * 2
+                                patch_overlay[offset_2:s, offset_2:s] += 100 * 2
+                                patch_att_scores = (patch_att_scores+new_patch_att_scores_2) * 2 / patch_overlay
+
+                            if granular:
+                                score = (region_att_scores*region_overlay+patch_att_scores*patch_overlay) / (region_overlay+patch_overlay)
+                            else:
+                                score = (region_att_scores + patch_att_scores) / 2
+
                             color_block = (cmap(score) * 255)[:, :, :3].astype(np.uint8)
                             region_hm = cv2.addWeighted(
                                 color_block,
