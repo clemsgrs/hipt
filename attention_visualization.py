@@ -20,6 +20,7 @@ from source.attention_visualization_utils import (
     cmap_map,
     get_patch_model,
     get_region_model,
+    get_slide_model,
     create_patch_heatmaps_indiv,
     create_patch_heatmaps_concat,
     create_hierarchical_heatmaps_indiv,
@@ -27,6 +28,7 @@ from source.attention_visualization_utils import (
     get_slide_patch_level_heatmaps,
     get_slide_region_level_heatmaps,
     get_slide_hierarchical_heatmaps,
+    get_slide_level_heatmaps,
     stitch_slide_heatmaps,
     display_stitched_heatmaps,
 )
@@ -286,6 +288,71 @@ def main(cfg: DictConfig):
                     save_to_disk=True,
                 )
                 stitched_hms[rhead_num].append(stitched_hm)
+
+        slide_weights = Path(cfg.slide_weights)
+        sd = torch.load(slide_weights, map_location="cpu")
+        start_idx = list(sd.keys()).index('global_phi.0.weight')
+        end_idx = list(sd.keys()).index('global_rho.0.bias')
+        sd = {k: v for i, (k,v) in enumerate(sd.items()) if i >= start_idx and i <= end_idx}
+        print(f"Pretrained weights found at {slide_weights}")
+
+        slide_model = get_slide_model(sd, device=device)
+
+        hms, thresh_hms, coords = get_slide_level_heatmaps(
+            slide_id,
+            patch_model,
+            region_model,
+            slide_model,
+            region_dir,
+            region_size=cfg.region_size,
+            patch_size=256,
+            downscale=1,
+            threshold=0.5,
+            cmap=light_jet,
+            region_fmt="jpg",
+            device=torch.device("cuda:0"),
+        )
+
+        stitched_hms = {}
+        stitched_hm = stitch_slide_heatmaps(
+            slide_path,
+            hms,
+            coords,
+            output_dir_slide,
+            fname=f"wsi",
+            downsample=cfg.downsample,
+            downscale=1,
+            save_to_disk=True,
+        )
+        stitched_hms[f"Slide-level"] = stitched_hm
+
+        if len(thresh_hms) > 0:
+
+            stitched_thresh_hm = stitch_slide_heatmaps(
+                slide_path,
+                thresh_hms,
+                coords,
+                output_dir_slide,
+                fname=f"wsi",
+                downsample=cfg.downsample,
+                downscale=1,
+                save_to_disk=True,
+            )
+            stitched_hms[f"Thresholded"] = stitched_thresh_hm
+
+        if cfg.display:
+            display_stitched_heatmaps(
+                slide_path,
+                stitched_hms,
+                output_dir,
+                fname=f"wsi",
+                display_patching=True,
+                region_dir=region_dir,
+                region_size=cfg.region_size,
+                downsample=cfg.downsample,
+                font_fp=cfg.font_fp,
+            )
+
 
     if cfg.slide_csv:
 

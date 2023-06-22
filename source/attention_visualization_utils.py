@@ -20,6 +20,7 @@ from collections import OrderedDict, defaultdict
 import source.vision_transformer as vits
 from source.wsi import WholeSlideImage
 from source.utils import update_state_dict
+from source.model_utils import Attn_Net_Gated
 
 
 def get_patch_model(
@@ -61,6 +62,7 @@ def get_region_model(
     pretrained_weights: Path,
     arch: str = "vit4k_xs",
     region_size: int = 4096,
+    patch_size: int = 256,
     device: Optional[torch.device] = None,
 ):
 
@@ -69,7 +71,7 @@ def get_region_model(
         device = (
             torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
         )
-    region_model = vits.__dict__[arch](img_size=region_size, num_classes=0)
+    region_model = vits.__dict__[arch](img_size=region_size, patch_size=patch_size, num_classes=0)
     for p in region_model.parameters():
         p.requires_grad = False
     region_model.eval()
@@ -91,6 +93,74 @@ def get_region_model(
         print(msg)
 
     return region_model
+
+
+class SlideAgg(nn.Module):
+    def __init__(
+        self,
+        embed_dim_region: int = 192,
+        dropout: float = 0.25,
+    ):
+
+        super(SlideAgg, self).__init__()
+
+        # Global Aggregation
+        self.global_phi = nn.Sequential(
+            nn.Linear(embed_dim_region, 192), nn.ReLU(), nn.Dropout(dropout)
+        )
+
+        self.global_transformer = nn.TransformerEncoder(
+            nn.TransformerEncoderLayer(
+                d_model=192,
+                nhead=3,
+                dim_feedforward=192,
+                dropout=dropout,
+                activation="relu",
+            ),
+            num_layers=2,
+        )
+        self.global_attn_pool = Attn_Net_Gated(
+            L=192, D=192, dropout=dropout, num_classes=1
+        )
+        self.global_rho = nn.Sequential(
+            *[nn.Linear(192, 192), nn.ReLU(), nn.Dropout(dropout)]
+        )
+
+
+    def forward(self, x, return_attention: bool = False):
+
+        # x = [M, 192]
+        x = self.global_phi(x)
+
+        # in nn.TransformerEncoderLayer, batch_first defaults to False
+        # hence, input is expected to be of shape (seq_length, batch, emb_size)
+        x = self.global_transformer(x.unsqueeze(1)).squeeze(1)
+        att, x = self.global_attn_pool(x)
+        att = torch.transpose(att, 1, 0)
+        att = torch.nn.functional.softmax(att, dim=1)
+        if return_attention:
+            return att
+        x_att = torch.mm(att, x)
+        x_wsi = self.global_rho(x_att)
+        return x_wsi
+
+
+def get_slide_model(
+    state_dict,
+    device: Optional[torch.device] = None,
+):
+
+    slide_model = SlideAgg()
+    for p in slide_model.parameters():
+        p.requires_grad = False
+    slide_model.eval()
+    slide_model.to(device)
+
+    print("Loading weights for slide-level Transformer...")
+    msg = slide_model.load_state_dict(state_dict, strict=False)
+    print(msg)
+
+    return slide_model
 
 
 def add_margin(pil_img, top, right, bottom, left, color):
@@ -159,6 +229,15 @@ def concat_region_scores(
 ):
     rank = lambda v: rankdata(v) / len(v)
     color_hm = rank(attn.flatten()).reshape(size)  # (4096, 4096)
+    return color_hm
+
+
+def concat_slide_scores(
+    attn,
+    size: Optional[Tuple[int, int]] = None,
+):
+    rank = lambda v: rankdata(v) / len(v)
+    color_hm = rank(attn)
     return color_hm
 
 
@@ -2286,3 +2365,204 @@ def display_stitched_heatmaps(
 
     stitched_hm_path = Path(output_dir, f"{fname}.png")
     canvas.save(stitched_hm_path)
+
+
+def get_slide_attention_scores(
+    slide_id,
+    patch_model,
+    region_model,
+    slide_model,
+    region_dir,
+    region_fmt: str = "jpg",
+    patch_size: int = 256,
+    downscale: int = 1,
+    device=torch.device("cuda:0"),
+    main_process: bool = True,
+):
+    """
+    Forward pass in hierarchical model with attention scores saved.
+
+    Args:
+    - region (PIL.Image): input region
+    - patch_model (torch.nn): patch-level ViT
+    - region_model (torch.nn): region-level Transformer
+    - patch_size (int): size of patches used for unrolling input region
+    - mini_patch_size (int): size of mini-patches used for unrolling patch_model inputs
+    - downscale (int): how much to downscale the output image by (e.g. downscale=4 will resize images to be 1024x1024)
+
+    Returns:
+    - np.array: [n_patch**2, patch_size/downscale, patch_size/downscale, 3] array sequence of image patch_size-sized patches from the input region.
+    - patch_attention (torch.Tensor): [n_patch**2, nhead, patch_size/downscale, patch_size/downscale] tensor sequence of attention maps for patch_size-sized patches.
+    - region_attention (torch.Tensor): [nhead, region_size/downscale, region_size/downscale] tensor sequence of attention maps for input region.
+    """
+    t = transforms.Compose(
+        [transforms.ToTensor(), transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5])]
+    )
+
+    region_paths = [
+        fp for fp in Path(region_dir, slide_id, "imgs").glob(f"*.{region_fmt}")
+    ]
+
+    coords = []
+    features = []
+
+    with tqdm.tqdm(
+        region_paths,
+        desc=f"Processing {slide_id}",
+        unit=" region",
+        leave=True,
+        position=0,
+        disable=not main_process,
+    ) as t1:
+
+        for k, fp in enumerate(t1):
+
+            region = Image.open(fp)
+            region_size = region.size[0]
+            n_patch = region_size // patch_size
+
+            x, y = int(fp.stem.split("_")[0]), int(fp.stem.split("_")[1])
+            coords.append((x, y))
+
+            with torch.no_grad():
+                patches = (
+                    t(region)
+                    .unsqueeze(0)
+                    .unfold(2, patch_size, patch_size)
+                    .unfold(3, patch_size, patch_size)
+                )  # (1, 3, region_size, region_size) -> (1, 3, n_patch, n_patch, patch_size, patch_size)
+                patches = rearrange(
+                    patches, "b c p1 p2 w h -> (b p1 p2) c w h"
+                )  # (n_patch**2, 3, patch_size, patch_size)
+                patches = patches.to(device, non_blocking=True)
+                patch_features = patch_model(patches)  # (n_patch**2, 384)
+
+                regions = (
+                    patch_features.unfold(0, n_patch, n_patch).transpose(0, 1).unsqueeze(dim=0)
+                )  # (1, 384, n_patch, n_patch)
+                region_features = region_model(regions) # (1, 192)
+
+                features.append(region_features)
+
+    with torch.no_grad():
+        feature_seq = torch.stack(features, dim=0).squeeze(1)  # (M, 192)
+        slide_attention = slide_model(feature_seq, return_attention=True).squeeze(0) # (M)
+        slide_attention = concat_slide_scores(slide_attention.cpu().numpy()) # (M)
+        slide_attention = slide_attention.reshape(-1, 1, 1) # (M, 1, 1)
+        slide_attention = torch.from_numpy(slide_attention).to(device, non_blocking=True)
+
+        slide_attention = (
+            nn.functional.interpolate(
+                slide_attention.unsqueeze(0),
+                scale_factor=int(region_size / downscale),
+                mode="nearest",
+            )[0]
+            .cpu()
+            .numpy()
+        )  # (M, region_size, region_size) when downscale = 1
+
+    return slide_attention, coords
+
+
+def get_slide_level_heatmaps(
+    slide_id: str,
+    patch_model,
+    region_model,
+    slide_model,
+    region_dir: Path,
+    region_size: int = 4096,
+    patch_size: int = 256,
+    downscale: int = 1,
+    alpha: float = 0.5,
+    threshold: Optional[float] = None,
+    cmap: matplotlib.colors.LinearSegmentedColormap = plt.get_cmap("coolwarm"),
+    region_fmt: str = "jpg",
+    device=torch.device("cuda:0"),
+    main_process: bool = True,
+):
+    """
+    Creates slide-level heatmaps of region-level Transformer.
+
+    Args:
+    - slide_id (str): input slide id
+    - patch_model (torch.nn): patch-level Transformer
+    - region_model (torch.nn): region-level Transformer
+    - output_dir (str): save directory / subdirectory
+    - patch_size (int): size of patches used for unrolling region_model inputs
+    - mini_patch_size (int): size of mini-patches used for unrolling patch_model inputs
+    - downscale (int): how much to downscale the output image by
+    - alpha (float): image blending factor for cv2.addWeighted
+    - cmap (matplotlib.pyplot): colormap for creating heatmaps
+    """
+
+    att, coords = get_slide_attention_scores(
+        slide_id,
+        patch_model,
+        region_model,
+        slide_model,
+        region_dir,
+        region_fmt=region_fmt,
+        patch_size=patch_size,
+        downscale=downscale,
+        device=device,
+    )   # (M, region_size, region_size), (M)
+
+    region_paths = [
+        fp for fp in Path(region_dir, slide_id, "imgs").glob(f"*.{region_fmt}")
+    ]
+
+    heatmaps, thresh_heatmaps = [], []
+
+    with tqdm.tqdm(
+        region_paths,
+        desc=f"Processing {slide_id}",
+        unit=" region",
+        leave=True,
+        position=0,
+        disable=not main_process,
+    ) as t1:
+
+        for k, fp in enumerate(t1):
+
+            region = Image.open(fp)
+            region_size = region.size[0]
+            s = region_size // downscale
+
+            if threshold != None:
+
+                save_region = np.array(region.resize((s, s)))
+                att_mask = att[k].copy()
+                att_mask[att_mask < threshold] = 0
+                att_mask[att_mask > threshold] = 0.95
+
+                thresh_color_block = (cmap(att_mask) * 255)[:, :, :3].astype(np.uint8)
+                thresh_hm = cv2.addWeighted(
+                    thresh_color_block,
+                    alpha,
+                    save_region.copy(),
+                    1 - alpha,
+                    0,
+                    save_region.copy(),
+                )
+                thresh_hm[att_mask == 0] = 0
+                img_inverse = save_region.copy()
+                img_inverse[att_mask == 0.95] = 0
+                thresh_hm = thresh_hm + img_inverse
+                thresh_heatmaps.append(thresh_hm)
+
+            save_region = np.array(region.resize((s, s)))
+
+            color_block = (cmap(att[k]) * 255)[
+                :, :, :3
+            ].astype(np.uint8)
+            hm = cv2.addWeighted(
+                color_block,
+                alpha,
+                save_region.copy(),
+                1 - alpha,
+                0,
+                save_region.copy(),
+            )
+            heatmaps.append(hm)
+
+    return heatmaps, thresh_heatmaps, coords

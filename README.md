@@ -41,7 +41,7 @@ gdown 1A2eHTT0dedHgdCvy6t3d9HwluF8p5yjz
 **1. [Optional] Configure wandb**
 
 If you want to benefit from wandb logging, you need to follow these simple steps:
- - grab your wandb API key under your profile and export
+ - grab your wandb API key under your wandb profile
  - run the following command in your terminal: `export WANDB_API_KEY=<your_personal_key>`
  - update wandb parameters in the relevant `.yaml` config files (see next)
 
@@ -236,8 +236,8 @@ where, for each slide (and for each attention head):
 * `region.png` stitches the region-level Transformer attention heatmaps at the slide-level
 * `patch/` regroups the patch-level Transformer attention heatmaps for all extracted regions in a given slide
 * `region/` regroups the region-level Transformer attention heatmaps for all extracted regions in a given slide
-* `hierarchical_<region_size>_<patch_size>/` regroups the factorized patch-level & region-level attention heatmaps for all extracted regions in a given slide
 * `slide/` regroups all stitched attention heatmaps (patch-level, region-level, factorized) at the slide-level
+* `hierarchical_<region_size>_<patch_size>/` regroups the factorized patch-level & region-level attention heatmaps for all extracted regions in a given slide
  
 
  **Distributed** heatmap generation across multiple gpus is supported via:
