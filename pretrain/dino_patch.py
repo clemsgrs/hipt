@@ -251,7 +251,8 @@ def main(cfg: DictConfig):
     snapshot_path = Path(snapshot_dir, "latest.pt")
     if distributed:
         if snapshot_path.exists():
-            print("Loading snapshot")
+            if is_main_process():
+                print("Loading snapshot")
             loc = f"cuda:{gpu_id}"
             snapshot = torch.load(snapshot_path, map_location=loc)
             epochs_run = snapshot["epoch"]
@@ -261,18 +262,22 @@ def main(cfg: DictConfig):
             dino_loss.load_state_dict(snapshot["dino_loss"])
             if fp16_scaler is not None:
                 fp16_scaler.load_state_dict(snapshot["fp16_scaler"])
-            print(f"Resuming training from snapshot at Epoch {epochs_run}")
+            if is_main_process():
+                print(f"Resuming training from snapshot at epoch {epochs_run}")
+
     elif cfg.resume:
         ckpt_path = Path(cfg.resume_from_checkpoint)
         epochs_run = resume_from_checkpoint(
             ckpt_path,
+            verbose=(gpu_id in [-1, 0]),
             student=student,
             teacher=teacher,
             optimizer=optimizer,
             fp16_scaler=fp16_scaler,
             dino_loss=dino_loss,
         )
-        print(f"Resuming training from checkpoint at Epoch {epochs_run}")
+        if is_main_process():
+            print(f"Resuming training from checkpoint at epoch {epochs_run}")
 
     early_stopping = EarlyStoppingDINO(
         cfg.early_stopping.tracking,
@@ -423,7 +428,6 @@ def main(cfg: DictConfig):
 
 if __name__ == "__main__":
 
-    # python3 -m torch.distributed.run pretrain/dino_patch.py --config-name 'patch'
     # python3 -m torch.distributed.run --standalone --nproc_per_node=gpu pretrain/dino_patch.py --config-name 'debug'
 
     # ISSUE WITH TORCHRUN ON SOL2: USES PYTHON3.8 INSTEAD OF PYTHON3.9 FOR SOME REASON
