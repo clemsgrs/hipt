@@ -579,13 +579,14 @@ def start_from_checkpoint(ckpt_path, model):
     print(msg)
 
 
-def resume_from_checkpoint(ckpt_path, **kwargs):
+def resume_from_checkpoint(ckpt_path, verbose: bool = True, **kwargs):
     """
     Re-start from checkpoint
     """
     if not Path(ckpt_path).is_file():
         return
-    print(f"Found checkpoint at {ckpt_path}")
+    if verbose:
+        print(f"Found checkpoint at {ckpt_path}")
 
     # open checkpoint file
     checkpoint = torch.load(ckpt_path, map_location="cpu")
@@ -600,18 +601,21 @@ def resume_from_checkpoint(ckpt_path, **kwargs):
                 sd = checkpoint[key]
                 nn.modules.utils.consume_prefix_in_state_dict_if_present(sd, "module.")
                 msg = value.load_state_dict(sd, strict=False)
-                print(
-                    f"=> loaded '{key}' from checkpoint: '{ckpt_path}' with msg {msg}"
-                )
+                if verbose:
+                    print(
+                        f"=> loaded '{key}' from checkpoint: '{ckpt_path}' with msg {msg}"
+                    )
             except TypeError:
                 try:
                     sd = checkpoint[key]
                     nn.modules.utils.consume_prefix_in_state_dict_if_present(sd, "module.")
                     msg = value.load_state_dict(sd)
-                    print(f"=> loaded '{key}' from checkpoint: '{ckpt_path}'")
+                    if verbose:
+                        print(f"=> loaded '{key}' from checkpoint: '{ckpt_path}'")
                 except ValueError:
-                    print(f"=> failed to load '{key}' from checkpoint: '{ckpt_path}'")
-        else:
+                    if verbose:
+                        print(f"=> failed to load '{key}' from checkpoint: '{ckpt_path}'")
+        elif verbose:
             print(f"=> key '{key}' not found in checkpoint: '{ckpt_path}'")
     return epoch
 
