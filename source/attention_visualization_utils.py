@@ -2249,9 +2249,9 @@ def stitch_slide_heatmaps(
 
         # TODO: make sure (x,y) are inverted
         canvas[
-            y_downsampled : y_downsampled + h_downsampled,
-            x_downsampled : x_downsampled + w_downsampled,
-        ] = hm_downsampled
+            y_downsampled : min(y_downsampled + h_downsampled, height),
+            x_downsampled : min(x_downsampled + w_downsampled, width)
+        ] = hm_downsampled[:min(h_downsampled, height-y_downsampled), :min(w_downsampled, width-x_downsampled)]
 
     stitched_hm = Image.fromarray(canvas)
     if save_to_disk:
