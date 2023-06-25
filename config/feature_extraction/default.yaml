@@ -26,6 +26,7 @@ wandb:
   tags:
   dir: '/home/user/'
   group:
+  resume_id:
 
 hydra:
   run:

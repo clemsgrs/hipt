@@ -60,6 +60,7 @@ wandb:
   dir: '/home/user'
   group:
   to_log: ['loss']
+  resume_id:
 
 # hydra
 hydra:

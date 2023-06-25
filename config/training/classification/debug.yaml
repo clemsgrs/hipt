@@ -76,6 +76,7 @@ wandb:
   dir: '/home/user'
   to_log: ['loss', 'auc', 'kappa', 'roc_auc_curve']
   group:
+  resume_id:
 
 hydra:
   run:
