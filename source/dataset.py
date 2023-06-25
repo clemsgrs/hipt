@@ -282,12 +282,16 @@ class ExtractedFeaturesSurvivalDataset(torch.utils.data.Dataset):
         slide_df: pd.DataFrame,
         features_dir: Path,
         label_name: str = "label",
+        nfeats_max: Optional[int] = 1000,
     ):
 
         self.features_dir = features_dir
         self.label_name = label_name
         self.use_coords = False
         self.agg_level = "patient"
+        self.nfeats_max = nfeats_max
+
+        self.seed = 0
 
         self.slide_df, case_ids = self.filter_df(slide_df)
         self.df = patient_df[patient_df.case_id.isin(case_ids)].reset_index(drop=True)
@@ -327,6 +331,11 @@ class ExtractedFeaturesSurvivalDataset(torch.utils.data.Dataset):
 
         # when multiple slides, concatenate region features
         features = torch.cat(features, dim=0)
+
+        # if more than nfeats_max features, randomly sample nfeats_max features
+        if self.nfeats_max and len(features) > self.nfeats_max:
+            torch.manual_seed(self.seed)
+            features = features[torch.randperm(len(features))[:self.nfeats_max]]
 
         return idx, features, label, event_time, c
 
@@ -647,6 +656,22 @@ class RegionFilepathsDataset(torch.utils.data.Dataset):
         slide_dir = Path(self.region_dir, slide_id, "imgs")
         regions = [str(fp) for fp in slide_dir.glob(f"*.{self.format}")]
         return idx, regions, slide_id
+
+    def __len__(self):
+        return len(self.df)
+
+
+class SlideFilepathsDataset(torch.utils.data.Dataset):
+    def __init__(
+        self,
+        df: pd.DataFrame,
+    ):
+        self.df = df
+
+    def __getitem__(self, idx: int):
+        row = self.df.loc[idx]
+        slide_fp = row.slide_path
+        return idx, slide_fp
 
     def __len__(self):
         return len(self.df)
