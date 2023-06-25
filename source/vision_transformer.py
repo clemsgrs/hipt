@@ -221,6 +221,7 @@ class VisionTransformer(nn.Module):
 
         super().__init__()
         self.embed_dim = embed_dim
+        self.num_heads = num_heads
 
         num_patches = int(img_size * dino_max_crop_scale // patch_size) ** 2
 
@@ -431,6 +432,7 @@ class VisionTransformer4K(nn.Module):
 
         super().__init__()
         self.embed_dim = output_embed_dim
+        self.num_heads = num_heads
 
         self.phi = nn.Sequential(
             *[
@@ -523,21 +525,21 @@ class VisionTransformer4K(nn.Module):
 
         # x = [M, 384, 16, 16]
         B, embed_dim, w, h = x.shape
-        x = x.flatten(2, 3).transpose(1, 2)  # [M, 256, 384]
-        x = self.phi(x)  # [M, 256, 192]
+        x = x.flatten(2, 3).transpose(1, 2)  # [M, npatch**2, 384]
+        x = self.phi(x)  # [M, npatch**2, 192]
 
         # add the [CLS] token to the embed patch tokens
         cls_tokens = self.cls_token.expand(B, -1, -1)  # [M, 1, 192]
-        x = torch.cat((cls_tokens, x), dim=1)  # [M, 1+256, 192]
+        x = torch.cat((cls_tokens, x), dim=1)  # [M, npatch**2+1, 192]
 
         # add positional encoding to each token
-        x = x + self.interpolate_pos_encoding(x, w, h)  # [M, 1+256, 192]
+        x = x + self.interpolate_pos_encoding(x, w, h)  # [M, npatch**2+1, 192]
 
         return self.pos_drop(x)
 
     def forward(self, x):
-        # x = [M, 384, 16, 16]
-        x = self.prepare_tokens(x)  # [M, 1+256, 192]
+        # x = [M, 384, npatch, npatch]
+        x = self.prepare_tokens(x)  # [M, npatch**2+1, 192]
         for blk in self.blocks:
             x = blk(x)
         x = self.norm(x)
