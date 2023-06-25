@@ -108,15 +108,28 @@ def initialize_wandb(
     else:
         tags = cfg.wandb.tags
     config = OmegaConf.to_container(cfg, resolve=True, throw_on_missing=True)
-    run = wandb.init(
-        project=cfg.wandb.project,
-        entity=cfg.wandb.username,
-        name=cfg.wandb.exp_name,
-        group=cfg.wandb.group,
-        dir=cfg.wandb.dir,
-        config=config,
-        tags=tags,
-    )
+    if cfg.wandb.resume_id:
+        run = wandb.init(
+            project=cfg.wandb.project,
+            entity=cfg.wandb.username,
+            name=cfg.wandb.exp_name,
+            group=cfg.wandb.group,
+            dir=cfg.wandb.dir,
+            config=config,
+            tags=tags,
+            id=cfg.wandb.resume_id,
+            resume="must",
+        )
+    else:
+        run = wandb.init(
+            project=cfg.wandb.project,
+            entity=cfg.wandb.username,
+            name=cfg.wandb.exp_name,
+            group=cfg.wandb.group,
+            dir=cfg.wandb.dir,
+            config=config,
+            tags=tags,
+        )
     config_file_path = Path(run.dir, "run_config.yaml")
     d = OmegaConf.to_container(cfg, resolve=True)
     with open(config_file_path, "w+") as f:
@@ -344,8 +357,17 @@ def make_weights_for_balanced_classes(dataset):
 
 def get_preds_from_ordinal_logits(logits):
     with torch.no_grad():
-        pred = torch.sigmoid(logits)
-    return (pred > 0.5).cumprod(axis=1).sum(axis=1)
+        prob = torch.sigmoid(logits)
+    return prob, (prob > 0.5).cumprod(axis=1).sum(axis=1)
+
+
+def corn_label_from_logits(logits):
+    with torch.no_grad():
+        probs = torch.sigmoid(logits)
+        probs = torch.cumprod(probs, dim=1)
+        predict_levels = probs > 0.5
+        predicted_labels = torch.sum(predict_levels, dim=1)
+    return predicted_labels
 
 
 def get_label_from_ordinal_label(label):
@@ -1040,7 +1062,7 @@ def train_ordinal(
             loss.backward()
             optimizer.step()
 
-            pred = get_preds_from_ordinal_logits(logits)
+            prob, pred = get_preds_from_ordinal_logits(logits)
             preds.extend(pred.clone().tolist())
 
             label = get_label_from_ordinal_label(label)
@@ -1103,7 +1125,7 @@ def tune_ordinal(
                 logits = model(x)
                 loss = criterion(logits, label)
 
-                pred = get_preds_from_ordinal_logits(logits)
+                prob, pred = get_preds_from_ordinal_logits(logits)
                 preds.extend(pred.clone().tolist())
 
                 label = get_label_from_ordinal_label(label)
@@ -1131,6 +1153,7 @@ def test_ordinal(
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     model.eval()
+    probs = np.empty((0, dataset.num_classes-1))
     preds, labels = [], []
     idxs = []
 
@@ -1164,12 +1187,17 @@ def test_ordinal(
                 )
                 logits = model(x)
 
-                pred = get_preds_from_ordinal_logits(logits)
+                prob, pred = get_preds_from_ordinal_logits(logits)
+                probs = np.append(probs, prob.cpu().detach().numpy(), axis=0)
                 preds.extend(pred.clone().tolist())
 
                 label = get_label_from_ordinal_label(label)
                 labels.extend(label.clone().tolist())
-                idxs.extend(list(idx))
+                idxs.extend(idx.clone().tolist())
+
+    dataset.df.loc[idxs, f"pred"] = preds
+    for class_idx, p in enumerate(probs.T):
+        dataset.df.loc[idxs, f"prob_{class_idx}"] = p.tolist()
 
     metrics = get_metrics(preds, labels)
     results.update(metrics)
