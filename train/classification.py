@@ -70,7 +70,8 @@ def main(cfg: DictConfig):
     print(f"Loading data")
     train_df = pd.read_csv(cfg.data.train_csv)
     tune_df = pd.read_csv(cfg.data.tune_csv)
-    test_df = pd.read_csv(cfg.data.test_csv)
+    if cfg.data.test_csv:
+        test_df = pd.read_csv(cfg.data.test_csv)
 
     if cfg.training.pct:
         print(f"Training & Tuning on {cfg.training.pct*100}% of the data")
@@ -91,18 +92,20 @@ def main(cfg: DictConfig):
         label_mapping=cfg.label_mapping,
         label_encoding=cfg.label_encoding,
     )
-    test_dataset_options = ClassificationDatasetOptions(
-        df=test_df,
-        features_dir=features_dir,
-        label_name=cfg.label_name,
-        label_mapping=cfg.label_mapping,
-        label_encoding=cfg.label_encoding,
-    )
+    if cfg.data.test_csv:
+        test_dataset_options = ClassificationDatasetOptions(
+            df=test_df,
+            features_dir=features_dir,
+            label_name=cfg.label_name,
+            label_mapping=cfg.label_mapping,
+            label_encoding=cfg.label_encoding,
+        )
 
     print(f"Initializing datasets")
     train_dataset = DatasetFactory(cfg.task, train_dataset_options).get_dataset()
     tune_dataset = DatasetFactory(cfg.task, tune_dataset_options).get_dataset()
-    test_dataset = DatasetFactory(cfg.task, test_dataset_options).get_dataset()
+    if cfg.data.test_csv:
+        test_dataset = DatasetFactory(cfg.task, test_dataset_options).get_dataset()
 
     m, n = train_dataset.num_classes, tune_dataset.num_classes
     assert (
@@ -159,6 +162,7 @@ def main(cfg: DictConfig):
                     train_dataset,
                     optimizer,
                     criterion,
+                    cfg.loss,
                     batch_size=cfg.training.batch_size,
                     weighted_sampling=cfg.training.weighted_sampling,
                     gradient_accumulation=cfg.training.gradient_accumulation,
@@ -197,6 +201,7 @@ def main(cfg: DictConfig):
                         model,
                         tune_dataset,
                         criterion,
+                        cfg.loss,
                         batch_size=cfg.tuning.batch_size,
                     )
                 else:
@@ -252,31 +257,61 @@ def main(cfg: DictConfig):
     model.load_state_dict(best_model_sd)
 
     if cfg.task == "regression":
-        test_results = test_regression(
+        tune_results = test_regression(
             model,
-            test_dataset,
+            tune_dataset,
             batch_size=1,
         )
     elif cfg.label_encoding == "ordinal":
-        test_results = test_ordinal(
+        tune_results = test_ordinal(
             model,
-            test_dataset,
+            tune_dataset,
+            cfg.loss,
             batch_size=1,
         )
     else:
-        test_results = test(
+        tune_results = test(
             model,
-            test_dataset,
+            tune_dataset,
             collate_fn=partial(collate_features, label_type="int"),
             batch_size=1,
         )
-    test_dataset.df.to_csv(Path(result_dir, f"test.csv"), index=False)
+    tune_dataset.df.to_csv(Path(result_dir, f"tune_{cfg.testing.retrieve_checkpoint}.csv"), index=False)
 
-    for r, v in test_results.items():
+    for r, v in tune_results.items():
         if r == "auc":
             v = round(v, 3)
         if r in cfg.wandb.to_log and cfg.wandb.enable:
-            wandb.log({f"test/{r}": v})
+            wandb.log({f"tune/{r}_{cfg.testing.retrieve_checkpoint}": v})
+
+    if cfg.data.test_csv:
+        if cfg.task == "regression":
+            test_results = test_regression(
+                model,
+                test_dataset,
+                batch_size=1,
+            )
+        elif cfg.label_encoding == "ordinal":
+            test_results = test_ordinal(
+                model,
+                test_dataset,
+                cfg.loss,
+                batch_size=1,
+            )
+        else:
+            test_results = test(
+                model,
+                test_dataset,
+                collate_fn=partial(collate_features, label_type="int"),
+                batch_size=1,
+            )
+        test_dataset.df.to_csv(Path(result_dir, f"test.csv"), index=False)
+
+        for r, v in test_results.items():
+            if r == "auc":
+                v = round(v, 3)
+            if r in cfg.wandb.to_log and cfg.wandb.enable:
+                wandb.log({f"test/{r}": v})
 
     end_time = time.time()
     mins, secs = compute_time(start_time, end_time)

@@ -165,6 +165,7 @@ def main(cfg: DictConfig):
                         train_dataset,
                         optimizer,
                         criterion,
+                        cfg.loss,
                         batch_size=cfg.training.batch_size,
                         weighted_sampling=cfg.training.weighted_sampling,
                         gradient_accumulation=cfg.training.gradient_accumulation,
@@ -201,6 +202,7 @@ def main(cfg: DictConfig):
                             model,
                             tune_dataset,
                             criterion,
+                            cfg.loss,
                             batch_size=cfg.tuning.batch_size,
                         )
                     else:
@@ -265,7 +267,7 @@ def main(cfg: DictConfig):
         model.load_state_dict(best_model_sd)
 
         if cfg.label_encoding == "ordinal":
-            test_results = test_ordinal(model, test_dataset, batch_size=1)
+            test_results = test_ordinal(model, test_dataset, cfg.loss, batch_size=1)
         else:
             test_results = test(model, test_dataset, batch_size=1)
         test_dataset.df.to_csv(Path(result_dir, f"test.csv"), index=False)

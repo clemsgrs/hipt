@@ -5,11 +5,13 @@ import wandb
 import torch
 import torch.nn as nn
 import hydra
+import datetime
 import pandas as pd
 from pathlib import Path
 from omegaconf import DictConfig
 
 from source.models import ModelFactory
+from source.components import LossFactory
 from source.dataset import StackedRegionsDataset
 from source.utils import (
     initialize_wandb,
@@ -17,6 +19,7 @@ from source.utils import (
     tune,
     test,
     compute_time,
+    update_log_dict,
     EarlyStopping,
     OptimizerFactory,
     SchedulerFactory,
@@ -30,24 +33,27 @@ from source.utils import (
 )
 def main(cfg: DictConfig):
 
-    output_dir = Path(cfg.output_dir, cfg.experiment_name)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    checkpoint_dir = Path(output_dir, "checkpoints", cfg.level)
-    checkpoint_dir.mkdir(parents=True, exist_ok=True)
-
-    result_dir = Path(output_dir, "results", cfg.level)
-    result_dir.mkdir(parents=True, exist_ok=True)
-
-    region_dir = Path(cfg.region_dir)
-
+    run_id = datetime.datetime.now().strftime("%Y-%m-%d_%H_%M")
     # set up wandb
     if cfg.wandb.enable:
         key = os.environ.get("WANDB_API_KEY")
         wandb_run = initialize_wandb(cfg, key=key)
         wandb_run.define_metric("epoch", summary="max")
-        wandb_run.define_metric("lr", step_metric="epoch")
-        print()
+        run_id = wandb_run.id
+
+    output_dir = Path(cfg.output_dir, cfg.experiment_name, run_id)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    checkpoint_dir = Path(output_dir, "checkpoints")
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+
+    result_dir = Path(output_dir, "results")
+    result_dir.mkdir(parents=True, exist_ok=True)
+
+    region_dir = Path(cfg.region_dir)
+
+    assert (cfg.task != "classification" and cfg.label_encoding != "ordinal") or (cfg.task == "classification")
+    criterion = LossFactory(cfg.task, cfg.loss, cfg.label_encoding, cfg.loss_options).get_loss()
 
     model = ModelFactory(cfg.level, cfg.num_classes, cfg.task, cfg.loss, cfg.label_encoding, cfg.model).get_model()
     model.relocate()
@@ -56,7 +62,8 @@ def main(cfg: DictConfig):
     print(f"Loading data")
     train_df = pd.read_csv(cfg.data.train_csv)
     tune_df = pd.read_csv(cfg.data.tune_csv)
-    test_df = pd.read_csv(cfg.data.test_csv)
+    if cfg.data.test_csv:
+        test_df = pd.read_csv(cfg.data.test_csv)
 
     if cfg.training.pct:
         print(f"Training & Tuning on {cfg.training.pct*100}% of the data")
@@ -66,7 +73,7 @@ def main(cfg: DictConfig):
     train_dataset = StackedRegionsDataset(
         train_df,
         region_dir,
-        cfg.region_size,
+        cfg.model.region_size,
         cfg.region_fmt,
         cfg.label_name,
         cfg.label_mapping,
@@ -75,21 +82,22 @@ def main(cfg: DictConfig):
     tune_dataset = StackedRegionsDataset(
         tune_df,
         region_dir,
-        cfg.region_size,
+        cfg.model.region_size,
         cfg.region_fmt,
         cfg.label_name,
         cfg.label_mapping,
         M_max=cfg.M_max,
     )
-    test_dataset = StackedRegionsDataset(
-        test_df,
-        region_dir,
-        cfg.region_size,
-        cfg.region_fmt,
-        cfg.label_name,
-        cfg.label_mapping,
-        M_max=cfg.M_max,
-    )
+    if cfg.data.test_csv:
+        test_dataset = StackedRegionsDataset(
+            test_df,
+            region_dir,
+            cfg.model.region_size,
+            cfg.region_fmt,
+            cfg.label_name,
+            cfg.label_mapping,
+            M_max=cfg.M_max,
+        )
 
     m, n = train_dataset.num_classes, tune_dataset.num_classes
     assert (
@@ -115,81 +123,121 @@ def main(cfg: DictConfig):
 
     stop = False
     start_time = time.time()
-    for epoch in range(cfg.nepochs):
 
-        epoch_start_time = time.time()
-        if cfg.wandb.enable:
-            wandb.log({"epoch": epoch + 1})
+    with tqdm.tqdm(
+        range(cfg.nepochs),
+        desc=(f"HIPT Training"),
+        unit=" slide",
+        ncols=100,
+        leave=True,
+    ) as t:
 
-        train_results = train(
-            epoch + 1,
-            model,
-            train_dataset,
-            optimizer,
-            criterion,
-            batch_size=cfg.training.batch_size,
-            weighted_sampling=cfg.training.weighted_sampling,
-            gradient_accumulation=cfg.training.gradient_accumulation,
-        )
+        for epoch in t:
 
-        train_dataset.df.to_csv(Path(result_dir, f"train_{epoch}.csv"), index=False)
-        if cfg.wandb.enable:
-            for res, val in train_results.items():
-                wandb.define_metric(f"train/{res}", step_metric="epoch")
-                wandb.log({f"train/{res}": val})
+            epoch_start_time = time.time()
 
-        if epoch % cfg.tuning.tune_every == 0:
+            # set dataset seed
+            train_dataset.seed = epoch
+            tune_dataset.seed = epoch
 
-            tune_results = tune(
+            if cfg.wandb.enable:
+                log_dict = {"epoch": epoch + 1}
+
+            train_results = train(
                 epoch + 1,
                 model,
-                tune_dataset,
+                train_dataset,
+                optimizer,
                 criterion,
-                batch_size=cfg.tuning.batch_size,
+                batch_size=cfg.training.batch_size,
+                weighted_sampling=cfg.training.weighted_sampling,
+                gradient_accumulation=cfg.training.gradient_accumulation,
             )
 
-            tune_dataset.df.to_csv(Path(result_dir, f"tune_{epoch}.csv"), index=False)
             if cfg.wandb.enable:
-                for res, val in tune_results.items():
-                    wandb.define_metric(f"tune/{res}", step_metric="epoch")
-                    wandb.log({f"tune/{res}": val})
+                update_log_dict(
+                    "train", train_results, log_dict, to_log=cfg.wandb.to_log
+                )
+            train_dataset.df.to_csv(Path(result_dir, f"train_{epoch}.csv"), index=False)
 
-            early_stopping(epoch, model, tune_results)
-            if early_stopping.early_stop and cfg.early_stopping.enable:
-                stop = True
+            if epoch % cfg.tuning.tune_every == 0:
 
-        if scheduler:
-            lr = scheduler.get_last_lr()
+                tune_results = tune(
+                    epoch + 1,
+                    model,
+                    tune_dataset,
+                    criterion,
+                    batch_size=cfg.tuning.batch_size,
+                )
+
+                if cfg.wandb.enable:
+                    update_log_dict(
+                        "tune", tune_results, log_dict, to_log=cfg.wandb.to_log
+                    )
+                tune_dataset.df.to_csv(
+                    Path(result_dir, f"tune_{epoch}.csv"), index=False
+                )
+
+                early_stopping(epoch, model, tune_results)
+                if early_stopping.early_stop and cfg.early_stopping.enable:
+                    stop = True
+
+            lr = cfg.optim.lr
+            if scheduler:
+                lr = scheduler.get_last_lr()
+                scheduler.step()
             if cfg.wandb.enable:
-                wandb.log({"train/lr": lr})
-            scheduler.step()
-        elif cfg.wandb.enable:
-            wandb.log({"train/lr": cfg.optim.lr})
+                log_dict.update({"train/lr": lr})
 
-        epoch_end_time = time.time()
-        epoch_mins, epoch_secs = compute_time(epoch_start_time, epoch_end_time)
-        tqdm.tqdm.write(
-            f"End of epoch {epoch+1} / {cfg.nepochs} \t Time Taken:  {epoch_mins}m {epoch_secs}s"
-        )
+            # logging
+            if cfg.wandb.enable:
+                wandb.log(log_dict, step=epoch + 1)
 
-        if stop:
+            epoch_end_time = time.time()
+            epoch_mins, epoch_secs = compute_time(epoch_start_time, epoch_end_time)
             tqdm.tqdm.write(
-                f"Stopping early because best {cfg.early_stopping.tracking} was reached {cfg.early_stopping.patience} epochs ago"
+                f"End of epoch {epoch+1} / {cfg.nepochs} \t Time Taken:  {epoch_mins}m {epoch_secs}s"
             )
-            break
+
+            if stop:
+                tqdm.tqdm.write(
+                    f"Stopping early because best {cfg.early_stopping.tracking} was reached {cfg.early_stopping.patience} epochs ago"
+                )
+                break
 
     # load best model
-    best_model_sd = torch.load(
-        Path(checkpoint_dir, f"{cfg.testing.retrieve_checkpoint}_model.pt")
-    )
+    best_model_fp = Path(checkpoint_dir, f"{cfg.testing.retrieve_checkpoint}_model.pt")
+    if cfg.wandb.enable:
+        wandb.save(str(best_model_fp))
+    best_model_sd = torch.load(best_model_fp)
     model.load_state_dict(best_model_sd)
 
-    test_results = test(model, test_dataset, batch_size=1)
-    test_dataset.df.to_csv(Path(result_dir, f"test.csv"), index=False)
+    # best tune score
+    tune_dataset.seed = early_stopping.best_epoch
+    tune_results = test(
+            model,
+            tune_dataset,
+            batch_size=1,
+        )
+    tune_dataset.df.to_csv(Path(result_dir, f"tune_{cfg.testing.retrieve_checkpoint}.csv"), index=False)
 
-    test_auc = round(test_results["auc"], 2)
-    if cfg.wandb.enable:
-        wandb.log({f"test/auc": test_auc})
+    for r, v in tune_results.items():
+        if r == "auc":
+            v = round(v, 3)
+        if r in cfg.wandb.to_log and cfg.wandb.enable:
+            wandb.log({f"tune/{r}_{cfg.testing.retrieve_checkpoint}": v})
+
+    # testing
+    if cfg.data.test_csv:
+        test_dataset.seed = early_stopping.best_epoch
+        test_results = test(model, test_dataset, batch_size=1)
+        test_dataset.df.to_csv(Path(result_dir, f"test.csv"), index=False)
+
+        for r, v in test_results.items():
+            if r == "auc":
+                v = round(v, 3)
+            if r in cfg.wandb.to_log and cfg.wandb.enable:
+                wandb.log({f"test/{r}": v})
 
     end_time = time.time()
     mins, secs = compute_time(start_time, end_time)
