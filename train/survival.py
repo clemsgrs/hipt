@@ -146,6 +146,10 @@ def main(cfg: DictConfig):
 
         for epoch in t:
 
+            # set dataset seed
+            train_dataset.seed = epoch
+            tune_dataset.seed = epoch
+
             epoch_start_time = time.time()
             if cfg.wandb.enable:
                 log_dict = {"epoch": epoch + 1}
