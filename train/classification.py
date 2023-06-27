@@ -61,11 +61,6 @@ def main(cfg: DictConfig):
     features_dir = Path(cfg.features_dir)
 
     assert (cfg.task != "classification" and cfg.label_encoding != "ordinal") or (cfg.task == "classification")
-    criterion = LossFactory(cfg.task, cfg.loss, cfg.label_encoding, cfg.loss_options).get_loss()
-
-    model = ModelFactory(cfg.level, cfg.num_classes, cfg.task, cfg.loss, cfg.label_encoding, cfg.model).get_model()
-    model.relocate()
-    print(model)
 
     print(f"Loading data")
     train_df = pd.read_csv(cfg.data.train_csv)
@@ -74,9 +69,8 @@ def main(cfg: DictConfig):
         test_df = pd.read_csv(cfg.data.test_csv)
 
     if cfg.training.pct:
-        print(f"Training & Tuning on {cfg.training.pct*100}% of the data")
+        print(f"Training on {cfg.training.pct*100}% of the data")
         train_df = train_df.sample(frac=cfg.training.pct).reset_index(drop=True)
-        tune_df = tune_df.sample(frac=cfg.training.pct).reset_index(drop=True)
 
     train_dataset_options = ClassificationDatasetOptions(
         df=train_df,
@@ -111,6 +105,12 @@ def main(cfg: DictConfig):
     assert (
         m == n == cfg.num_classes
     ), f"Either train (C={m}) or tune (C={n}) sets doesnt cover full class spectrum (C={cfg.num_classes}"
+
+    criterion = LossFactory(cfg.task, cfg.loss, cfg.label_encoding, cfg.loss_options).get_loss()
+
+    model = ModelFactory(cfg.level, cfg.num_classes, cfg.task, cfg.loss, cfg.label_encoding, cfg.model).get_model()
+    model.relocate()
+    print(model)
 
     model_params = filter(lambda p: p.requires_grad, model.parameters())
     optimizer = OptimizerFactory(
