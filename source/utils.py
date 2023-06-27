@@ -2,6 +2,7 @@ import tqdm
 import math
 import wandb
 import torch
+import random
 import subprocess
 import numpy as np
 import pandas as pd
@@ -355,19 +356,12 @@ def make_weights_for_balanced_classes(dataset):
     return torch.DoubleTensor(weight)
 
 
-def get_preds_from_ordinal_logits(logits):
+def get_preds_from_ordinal_logits(logits, loss: str):
     with torch.no_grad():
         prob = torch.sigmoid(logits)
+        if loss == 'corn':
+            prob = torch.cumprod(prob, dim=1)
     return prob, (prob > 0.5).cumprod(axis=1).sum(axis=1)
-
-
-def corn_label_from_logits(logits):
-    with torch.no_grad():
-        probs = torch.sigmoid(logits)
-        probs = torch.cumprod(probs, dim=1)
-        predict_levels = probs > 0.5
-        predicted_labels = torch.sum(predict_levels, dim=1)
-    return predicted_labels
 
 
 def get_label_from_ordinal_label(label):
@@ -527,6 +521,7 @@ class EarlyStopping:
         self.verbose = verbose
 
         self.best_score = None
+        self.best_epoch = 0
         self.early_stop = False
 
     def __call__(self, epoch, model, results):
@@ -537,6 +532,7 @@ class EarlyStopping:
 
         if self.best_score is None or score >= self.best_score:
             self.best_score = score
+            self.best_epoch = epoch
             fname = f"best_model.pt"
             torch.save(model.state_dict(), Path(self.checkpoint_dir, fname))
             self.counter = 0
@@ -1004,6 +1000,7 @@ def train_ordinal(
     dataset: torch.utils.data.Dataset,
     optimizer: torch.optim.Optimizer,
     criterion: Callable,
+    loss: str,
     collate_fn: Callable = collate_ordinal_features,
     batch_size: Optional[int] = 1,
     weighted_sampling: Optional[bool] = False,
@@ -1062,7 +1059,7 @@ def train_ordinal(
             loss.backward()
             optimizer.step()
 
-            prob, pred = get_preds_from_ordinal_logits(logits)
+            prob, pred = get_preds_from_ordinal_logits(logits, loss)
             preds.extend(pred.clone().tolist())
 
             label = get_label_from_ordinal_label(label)
@@ -1083,6 +1080,7 @@ def tune_ordinal(
     model: nn.Module,
     dataset: torch.utils.data.Dataset,
     criterion: Callable,
+    loss: str,
     collate_fn: Callable = collate_ordinal_features,
     batch_size: Optional[int] = 1,
 ):
@@ -1125,7 +1123,7 @@ def tune_ordinal(
                 logits = model(x)
                 loss = criterion(logits, label)
 
-                prob, pred = get_preds_from_ordinal_logits(logits)
+                prob, pred = get_preds_from_ordinal_logits(logits, loss)
                 preds.extend(pred.clone().tolist())
 
                 label = get_label_from_ordinal_label(label)
@@ -1146,6 +1144,7 @@ def tune_ordinal(
 def test_ordinal(
     model: nn.Module,
     dataset: torch.utils.data.Dataset,
+    loss: str,
     collate_fn: Callable = collate_ordinal_features,
     batch_size: Optional[int] = 1,
 ):
@@ -1187,7 +1186,7 @@ def test_ordinal(
                 )
                 logits = model(x)
 
-                prob, pred = get_preds_from_ordinal_logits(logits)
+                prob, pred = get_preds_from_ordinal_logits(logits, loss)
                 probs = np.append(probs, prob.cpu().detach().numpy(), axis=0)
                 preds.extend(pred.clone().tolist())
 
