@@ -424,7 +424,8 @@ class HIPT(nn.Module):
         self.slide_pos_embed = slide_pos_embed
 
         self.split_across_gpus = split_across_gpus
-        #TODO: if split_across_gpus:
+        #TODO: becareful how this would interact with distributed training
+        if split_across_gpus:
             self.device_patch = torch.device("cuda:0")
             self.device_region = torch.device("cuda:1")
 
@@ -1100,7 +1101,7 @@ class GlobalCoralHIPT(GlobalHIPT):
 
         super().__init__(num_classes, embed_dim_region, d_model, dropout, slide_pos_embed)
         self.classifier = nn.Linear(192, 1, bias=False)
-        self.b = nn.Parameter(torch.zeros(num_classes-1).float()).cuda()
+        self.b = nn.Parameter(torch.zeros(self.num_classes-1, device='cuda').float())
 
     def forward(self, x):
 
@@ -1123,6 +1124,18 @@ class GlobalCoralHIPT(GlobalHIPT):
         logits = logits + self.b
 
         return logits
+
+    def relocate(self, gpu_id: int = -1):
+        device = get_device(gpu_id)
+        self.global_phi = self.global_phi.to(device)
+        if self.slide_pos_embed.use:
+            self.pos_encoder = self.pos_encoder.to(device)
+        self.global_transformer = self.global_transformer.to(device)
+        self.global_attn_pool = self.global_attn_pool.to(device)
+        self.global_rho = self.global_rho.to(device)
+
+        self.classifier = self.classifier.to(device)
+        self.b = nn.Parameter(torch.zeros(self.num_classes-1, device=device).float())
 
 
 class LocalGlobalOrdinalHIPT(LocalGlobalHIPT):
