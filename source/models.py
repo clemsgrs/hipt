@@ -412,6 +412,7 @@ class HIPT(nn.Module):
         embed_dim_region: int = 192,
         freeze_vit_patch_pos_embed: bool = True,
         freeze_vit_region_pos_embed: bool = True,
+        split_across_gpus: bool = False,
         dropout: float = 0.25,
         slide_pos_embed: Optional[DictConfig] = None,
     ):
@@ -422,6 +423,11 @@ class HIPT(nn.Module):
         self.ps = patch_size
         self.slide_pos_embed = slide_pos_embed
 
+        self.split_across_gpus = split_across_gpus
+        #TODO: if split_across_gpus:
+            self.device_patch = torch.device("cuda:0")
+            self.device_region = torch.device("cuda:1")
+
         checkpoint_key = "teacher"
 
         self.vit_patch = vit_small(
@@ -430,7 +436,7 @@ class HIPT(nn.Module):
             embed_dim=embed_dim_patch,
         )
 
-        if Path(pretrain_vit_patch).is_file():
+        if pretrain_vit_patch and Path(pretrain_vit_patch).is_file():
             print("Loading pretrained weights for patch-level Transformer...")
             state_dict = torch.load(pretrain_vit_patch, map_location="cpu")
             if checkpoint_key is not None and checkpoint_key in state_dict:
@@ -445,18 +451,24 @@ class HIPT(nn.Module):
             print(f"Pretrained weights found at {pretrain_vit_patch}")
             print(msg)
 
-        else:
+        elif pretrain_vit_patch:
             print(
                 f"{pretrain_vit_patch} doesnt exist ; please provide path to existing file"
             )
 
-        if freeze_vit_patch:
+        if pretrain_vit_patch and freeze_vit_patch:
             print("Freezing pretrained patch-level Transformer")
             for name, param in self.vit_patch.named_parameters():
                 param.requires_grad = False
                 if name == "pos_embed":
                     param.requires_grad = not (freeze_vit_patch_pos_embed)
+            print(
+                f"Patch-level Transformer positional embedding layer frozen: {freeze_vit_patch_pos_embed}"
+            )
             print("Done")
+
+        if self.split_across_gpus:
+            self.vit_patch.to(self.device_patch)
 
         self.vit_region = vit4k_xs(
             img_size=region_size,
@@ -465,7 +477,7 @@ class HIPT(nn.Module):
             output_embed_dim=embed_dim_region,
         )
 
-        if Path(pretrain_vit_region).is_file():
+        if pretrain_vit_region and Path(pretrain_vit_region).is_file():
             print("Loading pretrained weights for region-level Transformer...")
             state_dict = torch.load(pretrain_vit_region, map_location="cpu")
             if checkpoint_key is not None and checkpoint_key in state_dict:
@@ -482,18 +494,24 @@ class HIPT(nn.Module):
             print(f"Pretrained weights found at {pretrain_vit_region}")
             print(msg)
 
-        else:
+        elif pretrain_vit_region:
             print(
                 f"{pretrain_vit_region} doesnt exist ; please provide path to existing file"
             )
 
-        if freeze_vit_region:
+        if pretrain_vit_region and freeze_vit_region:
             print("Freezing pretrained region-level Transformer")
             for name, param in self.vit_region.named_parameters():
                 param.requires_grad = False
                 if name == "pos_embed":
                     param.requires_grad = not (freeze_vit_region_pos_embed)
+            print(
+                f"Region-level Transformer positional embedding layer frozen: {freeze_vit_region_pos_embed}"
+            )
             print("Done")
+
+        if self.split_across_gpus:
+            self.vit_region.to(self.device_region)
 
         # Global Aggregation
         self.global_phi = nn.Sequential(
@@ -544,7 +562,8 @@ class HIPT(nn.Module):
         x = rearrange(
             x, "b c p1 p2 w h -> (b p1 p2) c w h"
         )  # [M*npatch*npatch, 3, ps, ps]
-        x = x.to(self.device_patch, non_blocking=True)  # [M*num_patches, 3, ps, ps]
+        if self.split_across_gpus:
+            x = x.to(self.device_patch, non_blocking=True)  # [M*num_patches, 3, ps, ps]
 
         patch_features = []
         for mini_bs in range(0, x.shape[0], self.num_patches):
@@ -553,12 +572,12 @@ class HIPT(nn.Module):
             patch_features.append(f.unsqueeze(0))
 
         x = torch.vstack(patch_features)  # [M, num_patches, 384]
-        x = x.to(self.device_region, non_blocking=True)
+        if self.split_across_gpus:
+            x = x.to(self.device_region, non_blocking=True)
         x = self.vit_region(
             x.unfold(1, self.npatch, self.npatch).transpose(1, 2)
         )  # x = [M, npatch, npatch, 384] -> [M, 192]
 
-        x = x.to(self.device_patch, non_blocking=True)
         x = self.global_phi(x)
 
         if self.slide_pos_embed.use:
@@ -577,27 +596,20 @@ class HIPT(nn.Module):
 
         return logits
 
-    def relocate(self):
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        if device == torch.device("cuda"):
-            assert torch.cuda.device_count() >= 2
-            self.device_patch = torch.device("cuda:0")
-            self.device_region = torch.device("cuda:1")
-            device = self.device_patch
+    def relocate(self, gpu_id: int = -1):
+        device = get_device(gpu_id)
+        if self.split_across_gpus:
+            device = self.device_region
+            self.vit_patch = self.vit_patch.to(self.device_patch)
         else:
-            self.device_patch = device
-            self.device_region = device
-
-        self.vit_patch = self.vit_patch.to(self.device_patch)
-        self.vit_region = self.vit_region.to(self.device_region)
-
+            self.vit_patch = self.vit_patch.to(device)
+        self.vit_region = self.vit_region.to(device)
         self.global_phi = self.global_phi.to(device)
         if self.slide_pos_embed.use:
             self.pos_encoder = self.pos_encoder.to(device)
         self.global_transformer = self.global_transformer.to(device)
         self.global_attn_pool = self.global_attn_pool.to(device)
         self.global_rho = self.global_rho.to(device)
-
         self.classifier = self.classifier.to(device)
 
     def __repr__(self) -> str:
@@ -1149,7 +1161,8 @@ class LocalGlobalCoralHIPT(LocalGlobalHIPT):
 
         super().__init__(num_classes, region_size, patch_size, pretrain_vit_region, embed_dim_patch, embed_dim_region,freeze_vit_region, freeze_vit_region_pos_embed, dropout, slide_pos_embed)
         self.classifier = nn.Linear(192, 1, bias=False)
-        self.b = nn.Parameter(torch.zeros(num_classes-1).float()).cuda()
+        self.num_classes = num_classes
+        self.b = nn.Parameter(torch.zeros(self.num_classes-1, device='cuda').float())
 
     def forward(self, x):
 
@@ -1175,6 +1188,20 @@ class LocalGlobalCoralHIPT(LocalGlobalHIPT):
         logits = logits + self.b
 
         return logits
+
+    def relocate(self, gpu_id: int = -1):
+        device = get_device(gpu_id)
+        self.vit_region = self.vit_region.to(device)
+
+        self.global_phi = self.global_phi.to(device)
+        if self.slide_pos_embed.use:
+            self.pos_encoder = self.pos_encoder.to(device)
+        self.global_transformer = self.global_transformer.to(device)
+        self.global_attn_pool = self.global_attn_pool.to(device)
+        self.global_rho = self.global_rho.to(device)
+
+        self.classifier = self.classifier.to(device)
+        self.b = nn.Parameter(torch.zeros(self.num_classes-1, device=device).float())
 
 
 class LocalGlobalRegressionHIPT(LocalGlobalHIPT):

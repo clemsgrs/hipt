@@ -1,21 +1,23 @@
 data:
-  train_csv: '/home/user/code/git/clemsgrs/hs2p/data/toy/train.csv'
-  tune_csv: '/home/user/code/git/clemsgrs/hs2p/data/toy/train.csv'
-  test_csv: '/home/user/code/git/clemsgrs/hs2p/data/toy/train.csv'
+  train_csv: '/data/pathology/projects/ais-cap/code/git/clemsgrs/hipt/data/debug/classification/train.csv'
+  tune_csv: '/data/pathology/projects/ais-cap/code/git/clemsgrs/hipt/data/debug/classification/train.csv'
+  test_csv:
 
-features_dir:
+features_dir: '/data/pathology/projects/ais-cap/code/git/clemsgrs/hipt/output/panda/feature_extraction/rqvqzwur/slide'
 output_dir: 'output'
 experiment_name: 'debug'
 level: 'global'
 
-nepochs: 5
-num_classes: 2
-label_name: 'label'
-label_mapping:
-label_encoding:
-
 task: 'classification'
 loss: 'ce'
+loss_options:
+  num_classes: ${num_classes}
+
+nepochs: 2
+num_classes: 2
+label_name: 'isup_grade'
+label_mapping:
+label_encoding:
 
 training:
   batch_size: 1

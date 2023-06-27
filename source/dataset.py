@@ -211,7 +211,7 @@ class ExtractedFeaturesDataset(torch.utils.data.Dataset):
         self.label_name = label_name
         self.label_mapping = label_mapping
 
-        self.df = self.prepare_data(df)
+        self.df, _ = self.prepare_data(df)
 
         self.num_classes = len(self.df.label.value_counts(dropna=True))
         self.map_class_to_slide_ids()
@@ -225,12 +225,13 @@ class ExtractedFeaturesDataset(torch.utils.data.Dataset):
         for slide_id in df.slide_id:
             if Path(self.features_dir, f"{slide_id}.pt").is_file():
                 filtered_slide_ids.append(slide_id)
+        df_missing = df[~df.slide_id.isin(filtered_slide_ids)].reset_index(drop=True)
         df_filtered = df[df.slide_id.isin(filtered_slide_ids)].reset_index(drop=True)
         if len(df.slide_id) != len(df_filtered.slide_id):
             print(
                 f"WARNING: {len(df.slide_id)-len(df_filtered.slide_id)} slides dropped because .pt files missing"
             )
-        return df_filtered
+        return df_filtered, df_missing
 
     def map_class_to_slide_ids(self):
         # map each class to corresponding slide ids
@@ -578,12 +579,27 @@ class StackedRegionsDataset(torch.utils.data.Dataset):
         self.transform = transform
         self.M_max = M_max
 
+        self.seed = 0
+
         self.df = self.prepare_data(df)
 
         self.num_classes = len(self.df.label.value_counts(dropna=True))
         self.map_class_to_slide_ids()
 
+    def filter_df(self, df):
+        missing_slide_ids = []
+        for slide_id in df.slide_id:
+            if not Path(self.region_dir, f"{slide_id}").is_dir():
+                missing_slide_ids.append(slide_id)
+        if len(missing_slide_ids) > 0:
+            print(
+                f"WARNING: {len(missing_slide_ids)} slides dropped because 0 regions found on disk"
+            )
+        filtered_df = df[~df.slide_id.isin(missing_slide_ids)].reset_index(drop=True)
+        return filtered_df
+
     def prepare_data(self, df):
+        df = self.filter_df(df)
         if self.label_mapping:
             df["label"] = df[self.label_name].apply(lambda x: self.label_mapping[x])
         elif self.label_name != "label":
@@ -602,10 +618,12 @@ class StackedRegionsDataset(torch.utils.data.Dataset):
     def __getitem__(self, idx: int):
         row = self.df.loc[idx]
         slide_id = row.slide_id
-        region_dir = Path(self.region_dir, slide_id, str(self.region_size), self.format)
+        region_dir = Path(self.region_dir, slide_id, 'imgs')
         regions_fp = [fp for fp in region_dir.glob(f"*.{self.format}")]
         M = len(regions_fp)
+
         if self.M_max > -1 and M > self.M_max:
+            random.seed(self.seed)
             regions_fp = random.sample([x for x in regions_fp], self.M_max)
             M = self.M_max
 
