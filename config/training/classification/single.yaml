@@ -56,11 +56,11 @@ model:
 
 optim:
   name: 'adam'
-  lr: 2e-4
+  lr: 0.01
   wd: 1e-5
   lr_scheduler:
     name: 'step'
-    step_size: 50
+    step_size: 20
     gamma: 0.5
 
 early_stopping:
