@@ -6,6 +6,8 @@ import numpy as np
 from typing import Optional
 from omegaconf import DictConfig
 
+from source.utils import get_device
+
 
 def cantor_diagonal(p: int, q: int):
     return (p+q)*(1+p+q)/2+q
@@ -129,9 +131,10 @@ class ConcatPositionalEncoding2d(nn.Module):
 
 class PositionalEmbedding(nn.Module):
 
-    def __init__(self, dim: int, max_len: int = 3000):
+    def __init__(self, dim: int, max_len: int = 3000, gpu_id: int = -1):
         super().__init__()
-        self.pos_ids = torch.arange(max_len)
+        device = get_device(gpu_id)
+        self.pos_ids = torch.arange(max_len).to(device)
         self.embedder = nn.Embedding(max_len, dim)
 
     def forward(self, x):
@@ -165,9 +168,8 @@ class PositionalEmbedding2d(nn.Module):
             x: Tensor, shape [seq_len, embedding_dim]
             coords: Tensor, shape [seq_len, 3]
         """
-        _, coord = coords[:, 0], coords[:, 1:]
-        coord_x = self.get_grid_values(coord[:,0])
-        coord_y = self.get_grid_values(coord[:,1])
+        coord_x = self.get_grid_values(coords[:,1])
+        coord_y = self.get_grid_values(coords[:,2])
         embedding_x = self.embedder_x(coord_x)
         embedding_y = self.embedder_y(coord_y)
         position_embedding = torch.cat([embedding_x, embedding_y], dim=1)
