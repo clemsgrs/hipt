@@ -604,7 +604,7 @@ def train(
 
         for i, batch in enumerate(t):
 
-            optimizer.zero_grad()
+            # optimizer.zero_grad()
             idx, x, label = batch
             x, label = x.to(device, non_blocking=True), label.to(
                 device, non_blocking=True
@@ -619,7 +619,10 @@ def train(
                 loss = loss / gradient_accumulation
 
             loss.backward()
-            optimizer.step()
+
+            if (i + 1) % gradient_accumulation == 0:
+                optimizer.step()
+                optimizer.zero_grad()
 
             pred = torch.topk(logits, 1, dim=1)[1]
             preds.extend(pred[:, 0].clone().tolist())
@@ -843,7 +846,7 @@ def train_regression(
 
         for i, batch in enumerate(t):
 
-            optimizer.zero_grad()
+            # optimizer.zero_grad()
             idx, x, label = batch
             x, label = x.to(device, non_blocking=True), label.to(
                 device, non_blocking=True
@@ -858,7 +861,10 @@ def train_regression(
                 loss = loss / gradient_accumulation
 
             loss.backward()
-            optimizer.step()
+
+            if (i + 1) % gradient_accumulation == 0:
+                optimizer.step()
+                optimizer.zero_grad()
 
             pred = get_label_from_regression_logits(logits.cpu(), dataset.num_classes)
             preds.extend(pred[:, 0].clone().tolist())
@@ -1042,7 +1048,7 @@ def train_ordinal(
 
         for i, batch in enumerate(t):
 
-            optimizer.zero_grad()
+            # optimizer.zero_grad()
             idx, x, label = batch
             x, label = x.to(device, non_blocking=True), label.to(
                 device, non_blocking=True
@@ -1057,7 +1063,10 @@ def train_ordinal(
                 loss = loss / gradient_accumulation
 
             loss.backward()
-            optimizer.step()
+
+            if (i + 1) % gradient_accumulation == 0:
+                optimizer.step()
+                optimizer.zero_grad()
 
             prob, pred = get_preds_from_ordinal_logits(logits, loss)
             preds.extend(pred.clone().tolist())
@@ -1213,7 +1222,7 @@ def train_survival(
     agg_method: Optional[str] = "concat",
     batch_size: Optional[int] = 1,
     weighted_sampling: Optional[bool] = False,
-    gradient_accumulation: Optional[int] = 1,
+    gradient_accumulation: Optional[int] = None,
 ):
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
