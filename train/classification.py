@@ -142,11 +142,11 @@ def main(cfg: DictConfig):
 
             epoch_start_time = time.time()
             if cfg.wandb.enable:
-                log_dict = {"epoch": epoch + 1}
+                log_dict = {"epoch": epoch+1}
 
             if cfg.task == "regression":
                 train_results = train_regression(
-                    epoch + 1,
+                    epoch+1,
                     model,
                     train_dataset,
                     optimizer,
@@ -154,10 +154,11 @@ def main(cfg: DictConfig):
                     batch_size=cfg.training.batch_size,
                     weighted_sampling=cfg.training.weighted_sampling,
                     gradient_accumulation=cfg.training.gradient_accumulation,
+                    num_workers=cfg.speed.num_workers,
                 )
             elif cfg.label_encoding == "ordinal":
                 train_results = train_ordinal(
-                    epoch + 1,
+                    epoch+1,
                     model,
                     train_dataset,
                     optimizer,
@@ -166,10 +167,11 @@ def main(cfg: DictConfig):
                     batch_size=cfg.training.batch_size,
                     weighted_sampling=cfg.training.weighted_sampling,
                     gradient_accumulation=cfg.training.gradient_accumulation,
+                    num_workers=cfg.speed.num_workers,
                 )
             else:
                 train_results = train(
-                    epoch + 1,
+                    epoch+1,
                     model,
                     train_dataset,
                     optimizer,
@@ -178,40 +180,44 @@ def main(cfg: DictConfig):
                     batch_size=cfg.training.batch_size,
                     weighted_sampling=cfg.training.weighted_sampling,
                     gradient_accumulation=cfg.training.gradient_accumulation,
+                    num_workers=cfg.speed.num_workers,
                 )
 
             if cfg.wandb.enable:
                 update_log_dict(
                     "train", train_results, log_dict, to_log=cfg.wandb.to_log
                 )
-            train_dataset.df.to_csv(Path(result_dir, f"train_{epoch}.csv"), index=False)
+            train_dataset.df.to_csv(Path(result_dir, f"train_{epoch+1}.csv"), index=False)
 
             if epoch % cfg.tuning.tune_every == 0:
                 if cfg.task == "regression":
                     tune_results = tune_regression(
-                        epoch + 1,
+                        epoch+1,
                         model,
                         tune_dataset,
                         criterion,
                         batch_size=cfg.tuning.batch_size,
+                        num_workers=cfg.speed.num_workers,
                     )
                 elif cfg.label_encoding == "ordinal":
                     tune_results = tune_ordinal(
-                        epoch + 1,
+                        epoch+1,
                         model,
                         tune_dataset,
                         criterion,
                         cfg.loss,
                         batch_size=cfg.tuning.batch_size,
+                        num_workers=cfg.speed.num_workers,
                     )
                 else:
                     tune_results = tune(
-                        epoch + 1,
+                        epoch+1,
                         model,
                         tune_dataset,
                         criterion,
                         collate_fn=partial(collate_features, label_type="int"),
                         batch_size=cfg.tuning.batch_size,
+                        num_workers=cfg.speed.num_workers,
                     )
 
                 if cfg.wandb.enable:
@@ -219,7 +225,7 @@ def main(cfg: DictConfig):
                         "tune", tune_results, log_dict, to_log=cfg.wandb.to_log
                     )
                 tune_dataset.df.to_csv(
-                    Path(result_dir, f"tune_{epoch}.csv"), index=False
+                    Path(result_dir, f"tune_{epoch+1}.csv"), index=False
                 )
 
                 early_stopping(epoch, model, tune_results)
@@ -235,7 +241,7 @@ def main(cfg: DictConfig):
 
             # logging
             if cfg.wandb.enable:
-                wandb.log(log_dict, step=epoch + 1)
+                wandb.log(log_dict, step=epoch+1)
 
             epoch_end_time = time.time()
             epoch_mins, epoch_secs = compute_time(epoch_start_time, epoch_end_time)
@@ -250,7 +256,7 @@ def main(cfg: DictConfig):
                 break
 
     # load best model
-    best_model_fp = Path(checkpoint_dir, f"{cfg.testing.retrieve_checkpoint}_model.pt")
+    best_model_fp = Path(checkpoint_dir, f"{cfg.testing.retrieve_checkpoint}.pt")
     if cfg.wandb.enable:
         wandb.save(str(best_model_fp))
     best_model_sd = torch.load(best_model_fp)
@@ -261,6 +267,7 @@ def main(cfg: DictConfig):
             model,
             tune_dataset,
             batch_size=1,
+            num_workers=cfg.speed.num_workers,
         )
     elif cfg.label_encoding == "ordinal":
         tune_results = test_ordinal(
@@ -268,6 +275,7 @@ def main(cfg: DictConfig):
             tune_dataset,
             cfg.loss,
             batch_size=1,
+            num_workers=cfg.speed.num_workers,
         )
     else:
         tune_results = test(
@@ -275,6 +283,7 @@ def main(cfg: DictConfig):
             tune_dataset,
             collate_fn=partial(collate_features, label_type="int"),
             batch_size=1,
+            num_workers=cfg.speed.num_workers,
         )
     tune_dataset.df.to_csv(Path(result_dir, f"tune_{cfg.testing.retrieve_checkpoint}.csv"), index=False)
 
@@ -290,6 +299,7 @@ def main(cfg: DictConfig):
                 model,
                 test_dataset,
                 batch_size=1,
+                num_workers=cfg.speed.num_workers,
             )
         elif cfg.label_encoding == "ordinal":
             test_results = test_ordinal(
@@ -297,6 +307,7 @@ def main(cfg: DictConfig):
                 test_dataset,
                 cfg.loss,
                 batch_size=1,
+                num_workers=cfg.speed.num_workers,
             )
         else:
             test_results = test(
@@ -304,6 +315,7 @@ def main(cfg: DictConfig):
                 test_dataset,
                 collate_fn=partial(collate_features, label_type="int"),
                 batch_size=1,
+                num_workers=cfg.speed.num_workers,
             )
         test_dataset.df.to_csv(Path(result_dir, f"test.csv"), index=False)
 

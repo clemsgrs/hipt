@@ -533,7 +533,7 @@ class EarlyStopping:
         if self.best_score is None or score >= self.best_score:
             self.best_score = score
             self.best_epoch = epoch
-            fname = f"best_model.pt"
+            fname = f"best.pt"
             torch.save(model.state_dict(), Path(self.checkpoint_dir, fname))
             self.counter = 0
 
@@ -549,11 +549,11 @@ class EarlyStopping:
                 self.early_stop = True
 
         if self.save_all:
-            fname = f"epoch_{epoch}.pt"
+            fname = f"epoch_{epoch+1}.pt"
             torch.save(model.state_dict(), Path(self.checkpoint_dir, fname))
 
         # override latest
-        torch.save(model.state_dict(), Path(self.checkpoint_dir, "latest_model.pt"))
+        torch.save(model.state_dict(), Path(self.checkpoint_dir, "latest.pt"))
 
 
 def train(
@@ -566,6 +566,7 @@ def train(
     batch_size: Optional[int] = 1,
     weighted_sampling: Optional[bool] = False,
     gradient_accumulation: Optional[int] = None,
+    num_workers: int = 0,
 ):
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -589,6 +590,7 @@ def train(
         batch_size=batch_size,
         sampler=sampler,
         collate_fn=collate_fn,
+        num_workers=num_workers,
     )
 
     results = {}
@@ -659,6 +661,7 @@ def tune(
     criterion: Callable,
     collate_fn: Callable = partial(collate_features, label_type="int"),
     batch_size: Optional[int] = 1,
+    num_workers: int = 0,
 ):
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -676,6 +679,7 @@ def tune(
         batch_size=batch_size,
         sampler=sampler,
         collate_fn=collate_fn,
+        num_workers=num_workers,
     )
 
     results = {}
@@ -735,6 +739,7 @@ def test(
     dataset: torch.utils.data.Dataset,
     collate_fn: Callable = partial(collate_features, label_type="int"),
     batch_size: Optional[int] = 1,
+    num_workers: int = 0,
 ):
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -751,6 +756,7 @@ def test(
         batch_size=batch_size,
         sampler=sampler,
         collate_fn=collate_fn,
+        num_workers=num_workers,
     )
 
     results = {}
@@ -809,6 +815,7 @@ def train_regression(
     batch_size: Optional[int] = 1,
     weighted_sampling: Optional[bool] = False,
     gradient_accumulation: Optional[int] = None,
+    num_workers: int = 0,
 ):
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -831,6 +838,7 @@ def train_regression(
         batch_size=batch_size,
         sampler=sampler,
         collate_fn=collate_fn,
+        num_workers=num_workers,
     )
 
     results = {}
@@ -888,6 +896,7 @@ def tune_regression(
     criterion: Callable,
     collate_fn: Callable = partial(collate_features, label_type="float"),
     batch_size: Optional[int] = 1,
+    num_workers: int = 0,
 ):
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -904,6 +913,7 @@ def tune_regression(
         batch_size=batch_size,
         sampler=sampler,
         collate_fn=collate_fn,
+        num_workers=num_workers,
     )
 
     results = {}
@@ -950,6 +960,7 @@ def test_regression(
     dataset: torch.utils.data.Dataset,
     collate_fn: Callable = partial(collate_features, label_type="float"),
     batch_size: Optional[int] = 1,
+    num_workers: int = 0,
 ):
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -965,6 +976,7 @@ def test_regression(
         batch_size=batch_size,
         sampler=sampler,
         collate_fn=collate_fn,
+        num_workers=num_workers,
     )
 
     results = {}
@@ -1011,6 +1023,7 @@ def train_ordinal(
     batch_size: Optional[int] = 1,
     weighted_sampling: Optional[bool] = False,
     gradient_accumulation: Optional[int] = None,
+    num_workers: int = 0,
 ):
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -1033,6 +1046,7 @@ def train_ordinal(
         batch_size=batch_size,
         sampler=sampler,
         collate_fn=collate_fn,
+        num_workers=num_workers,
     )
 
     results = {}
@@ -1092,6 +1106,7 @@ def tune_ordinal(
     loss: str,
     collate_fn: Callable = collate_ordinal_features,
     batch_size: Optional[int] = 1,
+    num_workers: int = 0,
 ):
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -1108,6 +1123,7 @@ def tune_ordinal(
         batch_size=batch_size,
         sampler=sampler,
         collate_fn=collate_fn,
+        num_workers=num_workers,
     )
 
     results = {}
@@ -1156,6 +1172,7 @@ def test_ordinal(
     loss: str,
     collate_fn: Callable = collate_ordinal_features,
     batch_size: Optional[int] = 1,
+    num_workers: int = 0,
 ):
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -1172,6 +1189,7 @@ def test_ordinal(
         batch_size=batch_size,
         sampler=sampler,
         collate_fn=collate_fn,
+        num_workers=num_workers,
     )
 
     results = {}
@@ -1223,6 +1241,7 @@ def train_survival(
     batch_size: Optional[int] = 1,
     weighted_sampling: Optional[bool] = False,
     gradient_accumulation: Optional[int] = None,
+    num_workers: int = 0,
 ):
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -1255,6 +1274,7 @@ def train_survival(
         batch_size=batch_size,
         sampler=sampler,
         collate_fn=collate_fn,
+        num_workers=num_workers,
     )
 
     results = {}
@@ -1347,6 +1367,7 @@ def tune_survival(
     criterion: Callable,
     agg_method: Optional[str] = "concat",
     batch_size: Optional[int] = 1,
+    num_workers: int = 0,
 ):
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -1372,6 +1393,7 @@ def tune_survival(
         batch_size=batch_size,
         sampler=sampler,
         collate_fn=collate_fn,
+        num_workers=num_workers,
     )
 
     results = {}
@@ -1454,6 +1476,7 @@ def test_survival(
     dataset: torch.utils.data.Dataset,
     agg_method: Optional[str] = "concat",
     batch_size: Optional[int] = 1,
+    num_workers: int = 0,
 ):
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -1478,6 +1501,7 @@ def test_survival(
         batch_size=batch_size,
         sampler=sampler,
         collate_fn=collate_fn,
+        num_workers=num_workers,
     )
 
     results = {}

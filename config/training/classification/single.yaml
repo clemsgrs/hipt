@@ -56,7 +56,7 @@ model:
 
 optim:
   name: 'adam'
-  lr: 0.01
+  lr: 0.0002
   wd: 1e-5
   lr_scheduler:
     name: 'step'
@@ -70,6 +70,9 @@ early_stopping:
   patience: 10
   min_epoch: 30
   save_all: False
+
+speed:
+  num_workers: 8
 
 wandb:
   enable: True

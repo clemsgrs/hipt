@@ -173,10 +173,10 @@ def main(cfg: DictConfig):
 
                 epoch_start_time = time.time()
                 if cfg.wandb.enable:
-                    log_dict = {f"train/fold_{i}/epoch": epoch + 1}
+                    log_dict = {f"train/fold_{i}/epoch": epoch+1}
 
                 train_results = train_survival(
-                    epoch + 1,
+                    epoch+1,
                     model,
                     train_dataset,
                     optimizer,
@@ -185,6 +185,7 @@ def main(cfg: DictConfig):
                     batch_size=cfg.training.batch_size,
                     weighted_sampling=cfg.training.weighted_sampling,
                     gradient_accumulation=cfg.training.gradient_accumulation,
+                    num_workers=cfg.speed.num_workers,
                 )
 
                 if cfg.wandb.enable:
@@ -197,18 +198,19 @@ def main(cfg: DictConfig):
                     )
 
                 train_dataset.df.to_csv(
-                    Path(result_dir, f"train_{epoch}.csv"), index=False
+                    Path(result_dir, f"train_{epoch+1}.csv"), index=False
                 )
 
                 if epoch % cfg.tuning.tune_every == 0:
 
                     tune_results = tune_survival(
-                        epoch + 1,
+                        epoch+1,
                         model,
                         tune_dataset,
                         criterion,
                         agg_method=cfg.model.agg_method,
                         batch_size=cfg.tuning.batch_size,
+                        num_workers=cfg.speed.num_workers,
                     )
 
                     auc, mean_auc, times = None, None, None
@@ -240,7 +242,7 @@ def main(cfg: DictConfig):
                             plt.close(fig)
 
                     tune_dataset.df.to_csv(
-                        Path(result_dir, f"tune_{epoch}.csv"), index=False
+                        Path(result_dir, f"tune_{epoch+1}.csv"), index=False
                     )
 
                     early_stopping(epoch, model, tune_results)
@@ -279,7 +281,7 @@ def main(cfg: DictConfig):
 
         # load best model
         best_model_fp = Path(
-            checkpoint_dir, f"{cfg.testing.retrieve_checkpoint}_model.pt"
+            checkpoint_dir, f"{cfg.testing.retrieve_checkpoint}.pt"
         )
         if cfg.wandb.enable:
             wandb.save(str(best_model_fp))
@@ -291,6 +293,7 @@ def main(cfg: DictConfig):
             test_dataset,
             agg_method=cfg.model.agg_method,
             batch_size=1,
+            num_workers=cfg.speed.num_workers,
         )
         test_dataset.df.to_csv(
             Path(result_dir, f"test.csv"), index=False
