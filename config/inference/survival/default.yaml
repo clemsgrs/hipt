@@ -36,8 +36,12 @@ wandb:
   exp_name: '${experiment_name}'
   tags:
   dir: '/home/user'
-  to_log: ['loss', 'auc', 'kappa']
+  to_log:
+    - 'train': ['loss', 'c-index']
+    - 'tune': ['loss', 'c-index']
+    - 'test': ['c-index']
   group:
+  resume_id:
 
 hydra:
   run:

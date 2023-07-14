@@ -3,9 +3,11 @@ import math
 import wandb
 import torch
 import random
+import matplotlib
 import subprocess
 import numpy as np
 import pandas as pd
+import seaborn as sns
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
@@ -14,8 +16,9 @@ import matplotlib.pyplot as plt
 
 from pathlib import Path
 from functools import partial
+from collections import Counter
 from omegaconf import DictConfig, OmegaConf
-from typing import Optional, Callable, List
+from typing import Optional, Callable, List, Union
 from sklearn import metrics
 from sklearn.model_selection import train_test_split
 from sksurv.metrics import concordance_index_censored, cumulative_dynamic_auc
@@ -231,16 +234,33 @@ def get_metrics(
     labels: List[int],
     probs: Optional[np.array] = None,
     multi_class: str = "ovr",
+    class_names: Optional[List[str]] = None,
+    use_wandb: bool = False,
 ):
     labels = np.asarray(labels)
-    if probs is not None:
-        auc = metrics.roc_auc_score(labels, probs, multi_class=multi_class)
-    else:
-        auc = -1.
     quadratic_weighted_kappa = metrics.cohen_kappa_score(
         labels, preds, weights="quadratic"
     )
-    metrics_dict = {"auc": auc, "kappa": quadratic_weighted_kappa}
+    cm = plot_confusion_matrix(
+        labels,
+        preds,
+        show_pct=True,
+        cbar=False,
+        names=class_names,
+        normalize="true",
+        title="Confusion Matrix",
+    )
+    metrics_dict = {"kappa": quadratic_weighted_kappa, "cm": cm}
+    if use_wandb:
+        wandb_cm = wandb.plot.confusion_matrix(
+            y_true=labels,
+            preds=preds,
+            class_names=class_names,
+        )
+        metrics_dict.update({"wandb_cm": wandb_cm})
+    if probs is not None:
+        auc = metrics.roc_auc_score(labels, probs, multi_class=multi_class)
+        metrics_dict.update({"auc": auc})
     return metrics_dict
 
 
@@ -328,12 +348,135 @@ def get_roc_auc_curve(
     return fig
 
 
+def plot_confusion_matrix(
+    y_true: Union[List[float], np.array],
+    y_pred: Union[List[float], np.array],
+    show_pct: bool = False,
+    cbar: bool = False,
+    names: Optional[str] = None,
+    normalize: Optional[str] = None,
+    title: Optional[str] = None,
+    save_path: Optional[str] = None,
+    dpi: int = 300,
+):
+    """
+    Computes & plots confusion matrix
+
+    Args:
+        y_true (_type_): array-like of shape (n_samples,)
+            Ground truth (correct) target values.
+        y_pred (_type_): array-like of shape (n_samples,)
+            Estimated targets as returned by a classifier.
+        show_pct (bool, optional): _description_. Defaults to False.
+        cbar (bool, optional): _description_. Defaults to False.
+        names (Optional[str], optional): _description_. Defaults to None.
+        normalize (Optional[str], optional): _description_. Defaults to None.
+        title (Optional[str], optional): _description_. Defaults to None.
+        save_path (Optional[str], optional): _description_. Defaults to None.
+        dpi (int, optional): _description_. Defaults to 150.
+    """
+
+    cm = metrics.confusion_matrix(y_true, y_pred, normalize=normalize)
+    cm_unnorm = metrics.confusion_matrix(y_true, y_pred, normalize=None)
+
+    if not normalize:
+        cm_sum = np.sum(cm, axis=1, keepdims=True)
+        cm_perc = cm / cm_sum.astype(float) * 100
+        annot = np.empty_like(cm).astype(str)
+        annot2 = np.empty_like(cm).astype(str)
+        nrows, ncols = cm.shape
+        for i in range(nrows):
+            for j in range(ncols):
+                c = cm[i, j]
+                p = cm_perc[i, j]
+                if i == j:
+                    s = cm_sum[i][0]
+                    if show_pct:
+                        annot[i, j] = f"{c}/{s}"
+                        annot2[i, j]= f"\n\n{p:.2f}%"
+                    else:
+                        annot[i, j] = f"{c}/{s}"
+                elif c == 0:
+                    annot[i, j] = f"{c}"
+                    annot2[i, j]= ""
+                else:
+                    if show_pct:
+                        annot[i, j] = f"{c}"
+                        annot2[i, j]= f"\n\n{p:.2f}%"
+                    else:
+                        annot[i, j] = f"{c}"
+
+    else:
+        cm_sum = np.sum(cm_unnorm, axis=1, keepdims=True)
+        annot = np.empty_like(cm).astype(str)
+        annot2 = np.empty_like(cm).astype(str)
+        nrows, ncols = cm.shape
+        for i in range(nrows):
+            for j in range(ncols):
+                c = cm_unnorm[i, j]
+                p = cm[i, j] * 100
+                if i == j:
+                    s = cm_sum[i][0]
+                    if show_pct:
+                        annot[i, j] = f"{c}/{s}"
+                        annot2[i, j]= f"\n\n{p:.1f}%"
+                    else:
+                        annot[i, j] = f"{c}/{s}"
+                elif c == 0:
+                    annot[i, j] = f"{c}"
+                    annot2[i, j]= ""
+                else:
+                    if show_pct:
+                        annot[i, j] = f"{c}"
+                        annot2[i, j]= f"\n\n{p:.1f}%"
+                    else:
+                        annot[i, j] = f"{c}"
+
+    if names:
+        labels = [f"{str(n).upper()}" for n in names]
+    else:
+        labels = [f"{i}" for i in range(cm.shape[0])]
+
+    cm = pd.DataFrame(cm, index=labels, columns=labels)
+    fig, ax = plt.subplots(dpi=dpi)
+
+    sns.heatmap(cm, annot=annot, fmt="", ax=ax, cmap="Blues", cbar=cbar, annot_kws={"size": 'small'})
+
+    # Create a colormap with fully transparent colors
+    cmap = sns.color_palette("Blues", as_cmap=True)
+    cmap_colors = cmap(np.arange(cmap.N))
+    cmap_colors[:, -1] = 0.0
+    transparent_cmap = matplotlib.colors.ListedColormap(cmap_colors)
+    sns.heatmap(cm, annot=annot2, fmt="", cmap=transparent_cmap, cbar=False, annot_kws={"size": 'xx-small'})
+
+    ax.set_xlabel("Predicted", labelpad=10)
+    ax.set_ylabel("Groundtruth", labelpad=10)
+    if title is not None:
+        ax.set_title(title, pad=10)
+    if save_path is not None:
+        plt.savefig(save_path, bbox_inches="tight")
+
+    return fig
+
+
+def get_majority_vote(preds):
+    x = Counter(preds)
+    max_occ = x.most_common(1)[0][1]
+    ties = [p for p,occ in x.items() if occ == max_occ]
+    if len(ties) > 1:
+        i = random.randint(0, len(ties)-1)
+        maj_vote = ties[i]
+    else:
+        maj_vote = ties[0]
+    return maj_vote
+
+
 def update_log_dict(
     prefix,
     results,
     log_dict,
     step: Optional[str] = "step",
-    to_log: Optional[List["str"]] = None,
+    to_log: Optional[List[str]] = None,
 ):
     if not to_log:
         to_log = list(results.keys())
@@ -567,6 +710,7 @@ def train(
     weighted_sampling: Optional[bool] = False,
     gradient_accumulation: Optional[int] = None,
     num_workers: int = 0,
+    use_wandb: bool = False,
 ):
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -638,13 +782,14 @@ def train(
     # TODO: what happens if idxs is not made of unique index values?
     for class_idx, p in enumerate(probs.T):
         dataset.df.loc[idxs, f"prob_{class_idx}"] = p.tolist()
+    dataset.df.loc[idxs, f"pred"] = preds
 
     if dataset.num_classes == 2:
         metrics = get_binary_metrics(preds, labels, probs[:, 1])
         # roc_auc_curve = get_roc_auc_curve(probs[:, 1], labels)
         # results.update({"roc_auc_curve": roc_auc_curve})
     else:
-        metrics = get_metrics(preds, labels, probs)
+        metrics = get_metrics(preds, labels, probs, class_names=[f"isup_{i}" for i in range(dataset.num_classes)], use_wandb=use_wandb)
 
     results.update(metrics)
 
@@ -662,6 +807,7 @@ def tune(
     collate_fn: Callable = partial(collate_features, label_type="int"),
     batch_size: Optional[int] = 1,
     num_workers: int = 0,
+    use_wandb: bool = False,
 ):
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -718,13 +864,14 @@ def tune(
     # TODO: what happens if idxs is not made of unique index values?
     for class_idx, p in enumerate(probs.T):
         dataset.df.loc[idxs, f"prob_{class_idx}"] = p.tolist()
+    dataset.df.loc[idxs, f"pred"] = preds
 
     if dataset.num_classes == 2:
         metrics = get_binary_metrics(preds, labels, probs[:, 1])
         # roc_auc_curve = get_roc_auc_curve(probs[:, 1], labels)
         # results.update({"roc_auc_curve": roc_auc_curve})
     else:
-        metrics = get_metrics(preds, labels, probs)
+        metrics = get_metrics(preds, labels, probs, class_names=[f"isup_{i}" for i in range(dataset.num_classes)], use_wandb=use_wandb)
 
     results.update(metrics)
 
@@ -740,6 +887,7 @@ def test(
     collate_fn: Callable = partial(collate_features, label_type="int"),
     batch_size: Optional[int] = 1,
     num_workers: int = 0,
+    use_wandb: bool = False,
 ):
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -792,13 +940,14 @@ def test(
     # TODO: what happens if idxs is not made of unique index values?
     for class_idx, p in enumerate(probs.T):
         dataset.df.loc[idxs, f"prob_{class_idx}"] = p.tolist()
+    dataset.df.loc[idxs, f"pred"] = preds
 
     if dataset.num_classes == 2:
         metrics = get_binary_metrics(preds, labels, probs[:, 1])
         # roc_auc_curve = get_roc_auc_curve(probs[:, 1], labels)
         # results.update({"roc_auc_curve": roc_auc_curve})
     else:
-        metrics = get_metrics(preds, labels, probs)
+        metrics = get_metrics(preds, labels, probs, class_names=[f"isup_{i}" for i in range(dataset.num_classes)], use_wandb=use_wandb)
 
     results.update(metrics)
 
@@ -816,6 +965,7 @@ def train_regression(
     weighted_sampling: Optional[bool] = False,
     gradient_accumulation: Optional[int] = None,
     num_workers: int = 0,
+    use_wandb: bool = False,
 ):
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -880,7 +1030,9 @@ def train_regression(
             labels.extend(label.clone().tolist())
             idxs.extend(list(idx))
 
-    metrics = get_metrics(preds, labels)
+    dataset.df.loc[idxs, f"pred"] = preds
+
+    metrics = get_metrics(preds, labels, class_names=[f"isup_{i}" for i in range(dataset.num_classes)], use_wandb=use_wandb)
     results.update(metrics)
 
     train_loss = epoch_loss / len(loader)
@@ -897,6 +1049,7 @@ def tune_regression(
     collate_fn: Callable = partial(collate_features, label_type="float"),
     batch_size: Optional[int] = 1,
     num_workers: int = 0,
+    use_wandb: bool = False,
 ):
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -946,7 +1099,9 @@ def tune_regression(
 
                 epoch_loss += loss.item()
 
-    metrics = get_metrics(preds, labels)
+    dataset.df.loc[idxs, f"pred"] = preds
+
+    metrics = get_metrics(preds, labels, class_names=[f"isup_{i}" for i in range(dataset.num_classes)], use_wandb=use_wandb)
     results.update(metrics)
 
     tune_loss = epoch_loss / len(loader)
@@ -961,6 +1116,7 @@ def test_regression(
     collate_fn: Callable = partial(collate_features, label_type="float"),
     batch_size: Optional[int] = 1,
     num_workers: int = 0,
+    use_wandb: bool = False,
 ):
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -1006,7 +1162,9 @@ def test_regression(
                 labels.extend(label.clone().tolist())
                 idxs.extend(list(idx))
 
-    metrics = get_metrics(preds, labels)
+    dataset.df.loc[idxs, f"pred"] = preds
+
+    metrics = get_metrics(preds, labels, class_names=[f"isup_{i}" for i in range(dataset.num_classes)], use_wandb=use_wandb)
     results.update(metrics)
 
     return results
@@ -1024,6 +1182,7 @@ def train_ordinal(
     weighted_sampling: Optional[bool] = False,
     gradient_accumulation: Optional[int] = None,
     num_workers: int = 0,
+    use_wandb: bool = False,
 ):
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -1089,7 +1248,9 @@ def train_ordinal(
             labels.extend(label.clone().tolist())
             idxs.extend(list(idx))
 
-    metrics = get_metrics(preds, labels)
+    dataset.df.loc[idxs, f"pred"] = preds
+
+    metrics = get_metrics(preds, labels, class_names=[f"isup_{i}" for i in range(dataset.num_classes)], use_wandb=use_wandb)
     results.update(metrics)
 
     train_loss = epoch_loss / len(loader)
@@ -1107,6 +1268,7 @@ def tune_ordinal(
     collate_fn: Callable = collate_ordinal_features,
     batch_size: Optional[int] = 1,
     num_workers: int = 0,
+    use_wandb: bool = False,
 ):
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -1157,7 +1319,9 @@ def tune_ordinal(
 
                 epoch_loss += loss.item()
 
-    metrics = get_metrics(preds, labels)
+    dataset.df.loc[idxs, f"pred"] = preds
+
+    metrics = get_metrics(preds, labels, class_names=[f"isup_{i}" for i in range(dataset.num_classes)], use_wandb=use_wandb)
     results.update(metrics)
 
     tune_loss = epoch_loss / len(loader)
@@ -1173,6 +1337,7 @@ def test_ordinal(
     collate_fn: Callable = collate_ordinal_features,
     batch_size: Optional[int] = 1,
     num_workers: int = 0,
+    use_wandb: bool = False,
 ):
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -1225,7 +1390,7 @@ def test_ordinal(
     for class_idx, p in enumerate(probs.T):
         dataset.df.loc[idxs, f"prob_{class_idx}"] = p.tolist()
 
-    metrics = get_metrics(preds, labels)
+    metrics = get_metrics(preds, labels, class_names=[f"isup_{i}" for i in range(dataset.num_classes)], use_wandb=use_wandb)
     results.update(metrics)
 
     return results

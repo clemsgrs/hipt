@@ -34,6 +34,7 @@ def main(cfg: DictConfig):
         key = os.environ.get("WANDB_API_KEY")
         wandb_run = initialize_wandb(cfg, key=key)
         wandb_run.define_metric("epoch", summary="max")
+        log_to_wandb = {k: v for e in cfg.wandb.to_log for k, v in e.items()}
         run_id = wandb_run.id
 
     output_dir = Path(cfg.output_dir, cfg.experiment_name, run_id)
@@ -90,11 +91,11 @@ def main(cfg: DictConfig):
     test_dataset.df.to_csv(Path(result_dir, f"test.csv"), index=False)
 
     for r, v in test_results.items():
-        if r == "c-index":
+        if isinstance(v, float):
             v = round(v, 3)
-        if r in cfg.wandb.to_log and cfg.wandb.enable:
+        if r in log_to_wandb["test"] and cfg.wandb.enable:
             wandb.log({f"test/{r}": v})
-        else:
+        elif "cm" not in r:
             print(f"Test {r}: {v}")
 
     end_time = time.time()

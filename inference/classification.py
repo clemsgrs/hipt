@@ -35,6 +35,7 @@ def main(cfg: DictConfig):
         key = os.environ.get("WANDB_API_KEY")
         wandb_run = initialize_wandb(cfg, key=key)
         wandb_run.define_metric("epoch", summary="max")
+        log_to_wandb = {k: v for e in cfg.wandb.to_log for k, v in e.items()}
         run_id = wandb_run.id
 
     output_dir = Path(cfg.output_dir, cfg.experiment_name, run_id)
@@ -98,10 +99,16 @@ def main(cfg: DictConfig):
 
     for r, v in test_results.items():
         if r == "auc":
-            v = round(v, 3)
-        if r in cfg.wandb.to_log and cfg.wandb.enable:
-            wandb.log({f"test/{r}": v})
-        else:
+            v = round(v, 5)
+        if r == "cm":
+            save_path = Path(result_dir, f"test_cm.png")
+            v.savefig(save_path, bbox_inches="tight")
+        if r in log_to_wandb["test"] and cfg.wandb.enable:
+            if r == "cm":
+                wandb.log({f"test/{r}": wandb.Image(str(save_path))})
+            else:
+                wandb.log({f"test/{r}": v})
+        elif "cm" not in r:
             print(f"Test {r}: {v}")
 
     end_time = time.time()

@@ -76,7 +76,11 @@ wandb:
   tags:
   dir: '/home/user'
   group:
-  to_log: ['loss', 'c-index']
+  resume_id:
+  to_log:
+    - 'train': ['loss', 'c-index']
+    - 'tune': ['loss', 'c-index']
+    - 'test': ['c-index']
 
 hydra:
   run:

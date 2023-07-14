@@ -1101,6 +1101,7 @@ class GlobalCoralHIPT(GlobalHIPT):
 
         super().__init__(num_classes, embed_dim_region, d_model, dropout, slide_pos_embed)
         self.classifier = nn.Linear(192, 1, bias=False)
+        self.num_classes = num_classes
         self.b = nn.Parameter(torch.zeros(self.num_classes-1, device='cuda').float())
 
     def forward(self, x):

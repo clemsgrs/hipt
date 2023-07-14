@@ -47,6 +47,7 @@ def main(cfg: DictConfig):
     if cfg.wandb.enable:
         key = os.environ.get("WANDB_API_KEY")
         wandb_run = initialize_wandb(cfg, key=key)
+        log_to_wandb = {k: v for e in cfg.wandb.to_log for k, v in e.items()}
         run_id = wandb_run.id
 
     output_dir = Path(cfg.output_dir, cfg.experiment_name, run_id)
@@ -194,7 +195,7 @@ def main(cfg: DictConfig):
                         train_results,
                         log_dict,
                         step=f"train/fold_{i}/epoch",
-                        to_log=cfg.wandb.to_log,
+                        to_log=log_to_wandb["train"],
                     )
 
                 train_dataset.df.to_csv(
@@ -226,7 +227,7 @@ def main(cfg: DictConfig):
                             tune_results,
                             log_dict,
                             step=f"train/fold_{i}/epoch",
-                            to_log=cfg.wandb.to_log,
+                            to_log=log_to_wandb["tune"],
                         )
                         if auc is not None:
                             fig = plot_cumulative_dynamic_auc(
@@ -304,18 +305,18 @@ def main(cfg: DictConfig):
                 if test_dataset.agg_level == "slide":
                     v = aggregated_cindex(test_dataset.df, label_name=cfg.label_name)
                     test_metrics.append(v)
-                    v = round(v, 3)
+                    v = round(v, 5)
                 else:
                     test_metrics.append(v)
-                    v = round(v, 3)
-            if r in cfg.wandb.to_log and cfg.wandb.enable:
+                    v = round(v, 5)
+            if cfg.wandb.enable and r in log_to_wandb["test"]:
                 wandb.log({f"test/fold_{i}/{r}": v})
-            else:
-                print(f"Test {r}: {v}")
+            elif "cm" not in r:
+                print(f"test {r}: {v}")
 
-    mean_test_metric = round(np.mean(test_metrics), 3)
-    std_test_metric = round(statistics.stdev(test_metrics), 3)
-    if cfg.wandb.enable and "c-index" in cfg.wandb.to_log:
+    mean_test_metric = round(np.mean(test_metrics), 5)
+    std_test_metric = round(statistics.stdev(test_metrics), 5)
+    if cfg.wandb.enable and "c-index" in log_to_wandb["test"]:
         wandb.log({f"test/c-index_mean": mean_test_metric})
         wandb.log({f"test/c-index_std": std_test_metric})
 

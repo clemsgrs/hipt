@@ -47,6 +47,7 @@ def main(cfg: DictConfig):
         key = os.environ.get("WANDB_API_KEY")
         wandb_run = initialize_wandb(cfg, key=key)
         wandb_run.define_metric("epoch", summary="max")
+        log_to_wandb = {k: v for e in cfg.wandb.to_log for k, v in e.items()}
         run_id = wandb_run.id
 
     output_dir = Path(cfg.output_dir, cfg.experiment_name, run_id)
@@ -155,6 +156,7 @@ def main(cfg: DictConfig):
                     weighted_sampling=cfg.training.weighted_sampling,
                     gradient_accumulation=cfg.training.gradient_accumulation,
                     num_workers=cfg.speed.num_workers,
+                    use_wandb=cfg.wandb.enable,
                 )
             elif cfg.label_encoding == "ordinal":
                 train_results = train_ordinal(
@@ -168,6 +170,7 @@ def main(cfg: DictConfig):
                     weighted_sampling=cfg.training.weighted_sampling,
                     gradient_accumulation=cfg.training.gradient_accumulation,
                     num_workers=cfg.speed.num_workers,
+                    use_wandb=cfg.wandb.enable,
                 )
             else:
                 train_results = train(
@@ -181,11 +184,12 @@ def main(cfg: DictConfig):
                     weighted_sampling=cfg.training.weighted_sampling,
                     gradient_accumulation=cfg.training.gradient_accumulation,
                     num_workers=cfg.speed.num_workers,
+                    use_wandb=cfg.wandb.enable,
                 )
 
             if cfg.wandb.enable:
                 update_log_dict(
-                    "train", train_results, log_dict, to_log=cfg.wandb.to_log
+                    "train", train_results, log_dict, to_log=log_to_wandb["train"]
                 )
             train_dataset.df.to_csv(Path(result_dir, f"train_{epoch+1}.csv"), index=False)
 
@@ -198,6 +202,7 @@ def main(cfg: DictConfig):
                         criterion,
                         batch_size=cfg.tuning.batch_size,
                         num_workers=cfg.speed.num_workers,
+                        use_wandb=cfg.wandb.enable,
                     )
                 elif cfg.label_encoding == "ordinal":
                     tune_results = tune_ordinal(
@@ -208,6 +213,7 @@ def main(cfg: DictConfig):
                         cfg.loss,
                         batch_size=cfg.tuning.batch_size,
                         num_workers=cfg.speed.num_workers,
+                        use_wandb=cfg.wandb.enable,
                     )
                 else:
                     tune_results = tune(
@@ -218,11 +224,12 @@ def main(cfg: DictConfig):
                         collate_fn=partial(collate_features, label_type="int"),
                         batch_size=cfg.tuning.batch_size,
                         num_workers=cfg.speed.num_workers,
+                        use_wandb=cfg.wandb.enable,
                     )
 
                 if cfg.wandb.enable:
                     update_log_dict(
-                        "tune", tune_results, log_dict, to_log=cfg.wandb.to_log
+                        "tune", tune_results, log_dict, to_log=[e for e in log_to_wandb["tune"] if "cm" not in e],
                     )
                 tune_dataset.df.to_csv(
                     Path(result_dir, f"tune_{epoch+1}.csv"), index=False
@@ -268,6 +275,7 @@ def main(cfg: DictConfig):
             tune_dataset,
             batch_size=1,
             num_workers=cfg.speed.num_workers,
+            use_wandb=cfg.wandb.enable,
         )
     elif cfg.label_encoding == "ordinal":
         tune_results = test_ordinal(
@@ -276,6 +284,7 @@ def main(cfg: DictConfig):
             cfg.loss,
             batch_size=1,
             num_workers=cfg.speed.num_workers,
+            use_wandb=cfg.wandb.enable,
         )
     else:
         tune_results = test(
@@ -284,14 +293,23 @@ def main(cfg: DictConfig):
             collate_fn=partial(collate_features, label_type="int"),
             batch_size=1,
             num_workers=cfg.speed.num_workers,
+            use_wandb=cfg.wandb.enable,
         )
     tune_dataset.df.to_csv(Path(result_dir, f"tune_{cfg.testing.retrieve_checkpoint}.csv"), index=False)
 
     for r, v in tune_results.items():
-        if r == "auc":
-            v = round(v, 3)
-        if r in cfg.wandb.to_log and cfg.wandb.enable:
-            wandb.log({f"tune/{r}_{cfg.testing.retrieve_checkpoint}": v})
+        if isinstance(v, float):
+            v = round(v, 5)
+        if r == "cm":
+            save_path = Path(result_dir, f"tune_{cfg.testing.retrieve_checkpoint}_cm.png")
+            v.savefig(save_path, bbox_inches="tight")
+        if cfg.wandb.enable and r in log_to_wandb["tune"]:
+            if r == "cm":
+                wandb.log({f"tune/{r}_{cfg.testing.retrieve_checkpoint}": wandb.Image(str(save_path))})
+            else:
+                wandb.log({f"tune/{r}_{cfg.testing.retrieve_checkpoint}": v})
+        elif "cm" not in r:
+            print(f"tune {r}_{cfg.testing.retrieve_checkpoint}: {v}")
 
     if cfg.data.test_csv:
         if cfg.task == "regression":
@@ -300,6 +318,7 @@ def main(cfg: DictConfig):
                 test_dataset,
                 batch_size=1,
                 num_workers=cfg.speed.num_workers,
+                use_wandb=cfg.wandb.enable,
             )
         elif cfg.label_encoding == "ordinal":
             test_results = test_ordinal(
@@ -308,6 +327,7 @@ def main(cfg: DictConfig):
                 cfg.loss,
                 batch_size=1,
                 num_workers=cfg.speed.num_workers,
+                use_wandb=cfg.wandb.enable,
             )
         else:
             test_results = test(
@@ -316,14 +336,23 @@ def main(cfg: DictConfig):
                 collate_fn=partial(collate_features, label_type="int"),
                 batch_size=1,
                 num_workers=cfg.speed.num_workers,
+                use_wandb=cfg.wandb.enable,
             )
         test_dataset.df.to_csv(Path(result_dir, f"test.csv"), index=False)
 
         for r, v in test_results.items():
-            if r == "auc":
-                v = round(v, 3)
-            if r in cfg.wandb.to_log and cfg.wandb.enable:
-                wandb.log({f"test/{r}": v})
+            if isinstance(v, float):
+                v = round(v, 5)
+            if r == "cm":
+                save_path = Path(result_dir, f"test_cm.png")
+                v.savefig(save_path, bbox_inches="tight")
+            if cfg.wandb.enable and r in log_to_wandb["test"]:
+                if r == "cm":
+                    wandb.log({f"test/{r}": wandb.Image(str(save_path))})
+                else:
+                    wandb.log({f"test/{r}": v})
+            elif "cm" not in r:
+                print(f"test {r}: {v}")
 
     end_time = time.time()
     mins, secs = compute_time(start_time, end_time)

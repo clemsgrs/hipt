@@ -76,7 +76,10 @@ wandb:
   exp_name: '${experiment_name}'
   tags:
   dir: '/home/user'
-  to_log: ['loss', 'auc', 'kappa', 'roc_auc_curve']
+  to_log:
+    - 'train': ['loss', 'auc', 'kappa', 'cm']
+    - 'tune': ['loss', 'auc', 'kappa', 'cm']
+    - 'test': ['auc', 'kappa']
   group:
   resume_id:
 

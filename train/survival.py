@@ -45,6 +45,7 @@ def main(cfg: DictConfig):
         key = os.environ.get("WANDB_API_KEY")
         wandb_run = initialize_wandb(cfg, key=key)
         wandb_run.define_metric("epoch", summary="max")
+        log_to_wandb = {k: v for e in cfg.wandb.to_log for k, v in e.items()}
         run_id = wandb_run.id
 
     output_dir = Path(cfg.output_dir, cfg.experiment_name, run_id)
@@ -169,7 +170,7 @@ def main(cfg: DictConfig):
 
             if cfg.wandb.enable:
                 update_log_dict(
-                    "train", train_results, log_dict, to_log=cfg.wandb.to_log
+                    "train", train_results, log_dict, to_log=log_to_wandb["train"]
                 )
             train_dataset.df.to_csv(
                 Path(result_dir, f"train_{epoch+1}.csv"), index=False
@@ -195,7 +196,7 @@ def main(cfg: DictConfig):
                 )
                 if cfg.wandb.enable:
                     update_log_dict(
-                        "tune", tune_results, log_dict, to_log=cfg.wandb.to_log
+                        "tune", tune_results, log_dict, to_log=log_to_wandb["tune"]
                     )
                     if auc is not None:
                         fig = plot_cumulative_dynamic_auc(auc, mean_auc, times, epoch)
@@ -254,12 +255,12 @@ def main(cfg: DictConfig):
         test_dataset.df.to_csv(Path(result_dir, f"test.csv"), index=False)
 
         for r, v in test_results.items():
-            if r == "c-index":
-                v = round(v, 3)
-            if r in cfg.wandb.to_log and cfg.wandb.enable:
+            if isinstance(v, float):
+                v = round(v, 5)
+            if cfg.wandb.enable and r in log_to_wandb["test"]:
                 wandb.log({f"test/{r}": v})
-            else:
-                print(f"Test {r}: {v}")
+            elif "cm" not in r:
+                print(f"test {r}: {v}")
 
     end_time = time.time()
     mins, secs = compute_time(start_time, end_time)
