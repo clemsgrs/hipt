@@ -36,7 +36,6 @@ from source.attention_visualization_utils import (
 
 @hydra.main(version_base="1.2.0", config_path="config/heatmaps", config_name="default")
 def main(cfg: DictConfig):
-
     distributed = torch.cuda.device_count() > 1
     if distributed:
         torch.distributed.init_process_group(backend="nccl")
@@ -94,7 +93,6 @@ def main(cfg: DictConfig):
     light_jet = cmap_map(lambda x: x / 2 + 0.5, matplotlib.cm.jet)
 
     if cfg.patch_fp and is_main_process():
-
         patch = Image.open(cfg.patch_fp)
 
         print(f"Computing indiviudal patch-level attention heatmaps")
@@ -128,7 +126,6 @@ def main(cfg: DictConfig):
         print("done!")
 
     if cfg.region_fp and is_main_process():
-
         region = Image.open(cfg.region_fp)
 
         print(f"Computing individual region-level attention heatmaps")
@@ -167,7 +164,6 @@ def main(cfg: DictConfig):
         print("done!")
 
     if cfg.slide_fp and is_main_process():
-
         slide_path = Path(cfg.slide_fp)
         slide_id = slide_path.stem
         region_dir = Path(cfg.region_dir)
@@ -359,10 +355,13 @@ def main(cfg: DictConfig):
                     save_to_disk=True,
                 )
                 stitched_hms_thresh[rhead_num].append(stitched_hm)
-        
+
         if cfg.display:
             for rhead_num, hms in stitched_hms.items():
-                d = {f'Region Head {rhead_num} & Patch Head {phead}': hm for phead, hm in enumerate(hms)}
+                d = {
+                    f"Region Head {rhead_num} & Patch Head {phead}": hm
+                    for phead, hm in enumerate(hms)
+                }
                 display_stitched_heatmaps(
                     slide_path,
                     d,
@@ -376,12 +375,15 @@ def main(cfg: DictConfig):
                 )
 
         if cfg.slide_weights:
-
             slide_weights = Path(cfg.slide_weights)
             sd = torch.load(slide_weights, map_location="cpu")
-            start_idx = list(sd.keys()).index('global_phi.0.weight')
-            end_idx = list(sd.keys()).index('global_rho.0.bias')
-            sd = {k: v for i, (k,v) in enumerate(sd.items()) if i >= start_idx and i <= end_idx}
+            start_idx = list(sd.keys()).index("global_phi.0.weight")
+            end_idx = list(sd.keys()).index("global_rho.0.bias")
+            sd = {
+                k: v
+                for i, (k, v) in enumerate(sd.items())
+                if i >= start_idx and i <= end_idx
+            }
             print(f"Pretrained weights found at {slide_weights}")
 
             slide_model = get_slide_model(sd, device=device)
@@ -415,7 +417,6 @@ def main(cfg: DictConfig):
             stitched_hms[f"slide-level"] = stitched_hm
 
             if len(thresh_hms) > 0:
-
                 stitched_thresh_hm = stitch_slide_heatmaps(
                     slide_path,
                     thresh_hms,
@@ -441,9 +442,7 @@ def main(cfg: DictConfig):
                     font_fp=cfg.font_fp,
                 )
 
-
     if cfg.slide_csv:
-
         df = pd.read_csv("cfg.slide_csv")
         dataset = SlideFilepathsDataset(df)
 
@@ -470,9 +469,7 @@ def main(cfg: DictConfig):
             leave=True,
             disable=not is_main_process(),
         ) as t1:
-
             for i, fp in enumerate(t1):
-
                 slide_path = Path(fp)
                 slide_id = slide_path.stem
                 region_dir = Path(cfg.region_dir)
@@ -507,7 +504,7 @@ def main(cfg: DictConfig):
                         save_to_disk=True,
                     )
                     stitched_hms[f"Head {head_num}"] = stitched_hm
-                
+
                 stitched_hms_thresh = {}
                 if len(hms_thresh) > 0:
                     for head_num, heatmaps in hms_thresh.items():
@@ -650,7 +647,7 @@ def main(cfg: DictConfig):
                             save_to_disk=True,
                         )
                         stitched_hms[rhead_num].append(stitched_hm)
-                
+
                 stitched_hms_thresh = defaultdict(list)
                 for rhead_num, hm_dict in hms_thresh.items():
                     coords_dict = coords[rhead_num]
@@ -673,5 +670,4 @@ def main(cfg: DictConfig):
 
 
 if __name__ == "__main__":
-
     main()

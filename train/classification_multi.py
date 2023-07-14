@@ -43,7 +43,6 @@ from source.utils import (
     config_name="multi",
 )
 def main(cfg: DictConfig):
-
     run_id = datetime.datetime.now().strftime("%Y-%m-%d_%H_%M")
     # set up wandb
     if cfg.wandb.enable:
@@ -64,7 +63,9 @@ def main(cfg: DictConfig):
 
     features_root_dir = Path(cfg.features_dir)
 
-    assert (cfg.task != "classification" and cfg.label_encoding != "ordinal") or (cfg.task == "classification")
+    assert (cfg.task != "classification" and cfg.label_encoding != "ordinal") or (
+        cfg.task == "classification"
+    )
 
     fold_root_dir = Path(cfg.data.fold_dir)
     nfold = len([_ for _ in fold_root_dir.glob(f"fold_*")])
@@ -75,7 +76,6 @@ def main(cfg: DictConfig):
 
     start_time = time.time()
     for i in range(nfold):
-
         fold_dir = Path(fold_root_dir, f"fold_{i}")
         checkpoint_dir = Path(checkpoint_root_dir, f"fold_{i}")
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
@@ -132,9 +132,18 @@ def main(cfg: DictConfig):
             m == n == cfg.num_classes
         ), f"Either train (C={m}) or tune (C={n}) sets doesnt cover full class spectrum (C={cfg.num_classes}"
 
-        criterion = LossFactory(cfg.task, cfg.loss, cfg.label_encoding, cfg.loss_options).get_loss()
+        criterion = LossFactory(
+            cfg.task, cfg.loss, cfg.label_encoding, cfg.loss_options
+        ).get_loss()
 
-        model = ModelFactory(cfg.level, cfg.num_classes, cfg.task, cfg.loss, cfg.label_encoding, cfg.model).get_model()
+        model = ModelFactory(
+            cfg.level,
+            cfg.num_classes,
+            cfg.task,
+            cfg.loss,
+            cfg.label_encoding,
+            cfg.model,
+        ).get_model()
         model.relocate()
         print(model)
 
@@ -166,16 +175,14 @@ def main(cfg: DictConfig):
             ncols=100,
             leave=True,
         ) as t:
-
             for epoch in t:
-
                 epoch_start_time = time.time()
                 if cfg.wandb.enable:
-                    log_dict = {f"train/fold_{i}/epoch": epoch+1}
+                    log_dict = {f"train/fold_{i}/epoch": epoch + 1}
 
                 if cfg.task == "regression":
                     train_results = train_regression(
-                        epoch+1,
+                        epoch + 1,
                         model,
                         train_dataset,
                         optimizer,
@@ -188,7 +195,7 @@ def main(cfg: DictConfig):
                     )
                 elif cfg.label_encoding == "ordinal":
                     train_results = train_ordinal(
-                        epoch+1,
+                        epoch + 1,
                         model,
                         train_dataset,
                         optimizer,
@@ -202,7 +209,7 @@ def main(cfg: DictConfig):
                     )
                 else:
                     train_results = train(
-                        epoch+1,
+                        epoch + 1,
                         model,
                         train_dataset,
                         optimizer,
@@ -228,10 +235,9 @@ def main(cfg: DictConfig):
                 )
 
                 if epoch % cfg.tuning.tune_every == 0:
-
                     if cfg.task == "regression":
                         tune_results = tune_regression(
-                            epoch+1,
+                            epoch + 1,
                             model,
                             tune_dataset,
                             criterion,
@@ -241,7 +247,7 @@ def main(cfg: DictConfig):
                         )
                     elif cfg.label_encoding == "ordinal":
                         tune_results = tune_ordinal(
-                            epoch+1,
+                            epoch + 1,
                             model,
                             tune_dataset,
                             criterion,
@@ -252,7 +258,7 @@ def main(cfg: DictConfig):
                         )
                     else:
                         tune_results = tune(
-                            epoch+1,
+                            epoch + 1,
                             model,
                             tune_dataset,
                             criterion,
@@ -340,20 +346,32 @@ def main(cfg: DictConfig):
                 num_workers=cfg.speed.num_workers,
                 use_wandb=cfg.wandb.enable,
             )
-        tune_dataset.df.to_csv(Path(result_dir, f"tune_{cfg.testing.retrieve_checkpoint}.csv"), index=False)
+        tune_dataset.df.to_csv(
+            Path(result_dir, f"tune_{cfg.testing.retrieve_checkpoint}.csv"), index=False
+        )
 
         for r, v in tune_results.items():
             tune_metrics[f"fold_{i}"][r] = v
             if isinstance(v, float):
                 v = round(v, 5)
             if r == "cm":
-                save_path = Path(result_dir, f"tune_{cfg.testing.retrieve_checkpoint}_cm.png")
+                save_path = Path(
+                    result_dir, f"tune_{cfg.testing.retrieve_checkpoint}_cm.png"
+                )
                 v.savefig(save_path, bbox_inches="tight")
             if cfg.wandb.enable and r in log_to_wandb["tune"]:
                 if r == "cm":
-                    wandb.log({f"tune/fold_{i}/{r}_{cfg.testing.retrieve_checkpoint}": wandb.Image(str(save_path))})
+                    wandb.log(
+                        {
+                            f"tune/fold_{i}/{r}_{cfg.testing.retrieve_checkpoint}": wandb.Image(
+                                str(save_path)
+                            )
+                        }
+                    )
                 else:
-                    wandb.log({f"tune/fold_{i}/{r}_{cfg.testing.retrieve_checkpoint}": v})
+                    wandb.log(
+                        {f"tune/fold_{i}/{r}_{cfg.testing.retrieve_checkpoint}": v}
+                    )
             elif "cm" not in r:
                 print(f"tune {r}_{cfg.testing.retrieve_checkpoint}: {v}")
 
@@ -406,8 +424,14 @@ def main(cfg: DictConfig):
         for metric_name, metric_val in metric_dict.items():
             metrics[metric_name].append(metric_val)
 
-    mean_tune_metrics = {metric_name: round(np.mean(metric_values), 5) for metric_name, metric_values in metrics.items()}
-    std_tune_metrics = {metric_name: round(statistics.stdev(metric_values), 5) for metric_name, metric_values in metrics.items()}
+    mean_tune_metrics = {
+        metric_name: round(np.mean(metric_values), 5)
+        for metric_name, metric_values in metrics.items()
+    }
+    std_tune_metrics = {
+        metric_name: round(statistics.stdev(metric_values), 5)
+        for metric_name, metric_values in metrics.items()
+    }
     for name in metrics.keys():
         mean = mean_tune_metrics[name]
         std = std_tune_metrics[name]
@@ -422,8 +446,14 @@ def main(cfg: DictConfig):
         for metric_name, metric_val in metric_dict.items():
             metrics[metric_name].append(metric_val)
 
-    mean_test_metrics = {metric_name: round(np.mean(metric_values), 5) for metric_name, metric_values in metrics.items()}
-    std_test_metrics = {metric_name: round(statistics.stdev(metric_values), 5) for metric_name, metric_values in metrics.items()}
+    mean_test_metrics = {
+        metric_name: round(np.mean(metric_values), 5)
+        for metric_name, metric_values in metrics.items()
+    }
+    std_test_metrics = {
+        metric_name: round(statistics.stdev(metric_values), 5)
+        for metric_name, metric_values in metrics.items()
+    }
     for name in metrics.keys():
         mean = mean_test_metrics[name]
         std = std_test_metrics[name]
@@ -439,8 +469,8 @@ def main(cfg: DictConfig):
 
 
 if __name__ == "__main__":
-
     import torch.multiprocessing
-    torch.multiprocessing.set_sharing_strategy('file_system')
+
+    torch.multiprocessing.set_sharing_strategy("file_system")
 
     main()

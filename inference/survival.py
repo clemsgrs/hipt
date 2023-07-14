@@ -24,10 +24,11 @@ from source.utils import (
 
 
 @hydra.main(
-    version_base="1.2.0", config_path="../config/inference/survival", config_name="default"
+    version_base="1.2.0",
+    config_path="../config/inference/survival",
+    config_name="default",
 )
 def main(cfg: DictConfig):
-
     run_id = datetime.datetime.now().strftime("%Y-%m-%d_%H_%M")
     # set up wandb
     if cfg.wandb.enable:
@@ -49,26 +50,39 @@ def main(cfg: DictConfig):
     features_dir = Path(cfg.features_dir)
 
     tiles_df = None
-    if cfg.model.slide_pos_embed.type == "2d" and cfg.model.slide_pos_embed.use and cfg.model.agg_method:
+    if (
+        cfg.model.slide_pos_embed.type == "2d"
+        and cfg.model.slide_pos_embed.use
+        and cfg.model.agg_method
+    ):
         tiles_df = pd.read_csv(cfg.data.tiles_csv)
 
     print("Loading test data")
     test_df = pd.read_csv(cfg.test_csv)
-    patient_df, slide_df = ppcess_survival_data(test_df, cfg.label_name, nbins=cfg.nbins)
+    patient_df, slide_df = ppcess_survival_data(
+        test_df, cfg.label_name, nbins=cfg.nbins
+    )
 
     test_dataset_options = SurvivalDatasetOptions(
-        patient_df = patient_df,
-        slide_df = slide_df,
-        tiles_df = tiles_df,
-        features_dir = features_dir,
-        label_name = cfg.label_name,
+        patient_df=patient_df,
+        slide_df=slide_df,
+        tiles_df=tiles_df,
+        features_dir=features_dir,
+        label_name=cfg.label_name,
     )
 
     print(f"Initializing test dataset")
-    test_dataset = DatasetFactory("survival", test_dataset_options, cfg.model.agg_method).get_dataset()
+    test_dataset = DatasetFactory(
+        "survival", test_dataset_options, cfg.model.agg_method
+    ).get_dataset()
 
     model = ModelFactory(
-        cfg.level, num_classes=cfg.nbins, task="survival", loss=cfg.loss, label_encoding=cfg.label_encoding, model_options=cfg.model
+        cfg.level,
+        num_classes=cfg.nbins,
+        task="survival",
+        loss=cfg.loss,
+        label_encoding=cfg.label_encoding,
+        model_options=cfg.model,
     ).get_model()
     model.relocate()
     print(model)
@@ -104,5 +118,4 @@ def main(cfg: DictConfig):
 
 
 if __name__ == "__main__":
-
     main()

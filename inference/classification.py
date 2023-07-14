@@ -28,7 +28,6 @@ from source.utils import (
     config_name="default",
 )
 def main(cfg: DictConfig):
-
     run_id = datetime.datetime.now().strftime("%Y-%m-%d_%H_%M")
     # set up wandb
     if cfg.wandb.enable:
@@ -46,9 +45,13 @@ def main(cfg: DictConfig):
 
     features_dir = Path(cfg.features_dir)
 
-    assert (cfg.task != "classification" and cfg.label_encoding != "ordinal") or (cfg.task == "classification")
+    assert (cfg.task != "classification" and cfg.label_encoding != "ordinal") or (
+        cfg.task == "classification"
+    )
 
-    model = ModelFactory(cfg.level, cfg.num_classes, cfg.task, cfg.loss, cfg.label_encoding, cfg.model).get_model()
+    model = ModelFactory(
+        cfg.level, cfg.num_classes, cfg.task, cfg.loss, cfg.label_encoding, cfg.model
+    ).get_model()
     model.relocate()
     print(model)
 
@@ -117,5 +120,4 @@ def main(cfg: DictConfig):
 
 
 if __name__ == "__main__":
-
     main()

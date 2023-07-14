@@ -6,23 +6,24 @@ from source.utils import compute_time
 
 
 def main(output_dir: Path, fmt: str = "jpg"):
-
     processed = [fp for fp in Path(output_dir).glob(f"*.{fmt}")]
     nproc = len(processed)
     return nproc
 
 
 if __name__ == "__main__":
-
     import sys
     import argparse
 
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--log_to_wandb", action='store_true', help="whether logging to wandb should be enabled",
+        "--log_to_wandb",
+        action="store_true",
+        help="whether logging to wandb should be enabled",
     )
     parser.add_argument(
-        "--id", help="id of the corresponding main experiment",
+        "--id",
+        help="id of the corresponding main experiment",
     )
     parser.add_argument(
         "--output_dir",
@@ -49,7 +50,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--verbose",
-        action='store_true',
+        action="store_true",
         help="whether stdout printing should be enabled",
     )
     args = vars(parser.parse_args())

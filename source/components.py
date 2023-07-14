@@ -9,6 +9,7 @@ from omegaconf import DictConfig
 
 from source.utils import get_label_from_ordinal_label
 
+
 class LossFactory:
     def __init__(
         self,
@@ -17,7 +18,6 @@ class LossFactory:
         label_encoding: Optional[str] = None,
         loss_options: Optional[DictConfig] = None,
     ):
-
         if task == "classification":
             if label_encoding == "ordinal":
                 if loss == "ce":
@@ -94,7 +94,7 @@ class NLLSurvLoss(object):
             return nll_loss(hazards, S, label, c, alpha=alpha)
 
 
-def coral_loss(logits, ordinal_labels, importance_weights=None, reduction='mean'):
+def coral_loss(logits, ordinal_labels, importance_weights=None, reduction="mean"):
     """
     Computes the CORAL loss described in
 
@@ -130,28 +130,32 @@ def coral_loss(logits, ordinal_labels, importance_weights=None, reduction='mean'
     """
 
     if not logits.shape == ordinal_labels.shape:
-        raise ValueError(f"Please ensure that logits ({logits.shape}) has the same shape as levels ({ordinal_labels.shape}).")
+        raise ValueError(
+            f"Please ensure that logits ({logits.shape}) has the same shape as levels ({ordinal_labels.shape})."
+        )
 
     # original implementation
     # loss_term = F.logsigmoid(logits)*ordinal_labels + (F.logsigmoid(logits) - logits)*(1-ordinal_labels)
 
     # my implementation
-    criterion = nn.BCEWithLogitsLoss(reduction='none')
-    loss_term = - criterion(logits, ordinal_labels)
+    criterion = nn.BCEWithLogitsLoss(reduction="none")
+    loss_term = -criterion(logits, ordinal_labels)
 
     if importance_weights is not None:
         loss_term *= importance_weights
 
     val = -torch.sum(loss_term, dim=1)
 
-    if reduction == 'mean':
+    if reduction == "mean":
         loss = torch.mean(val)
-    elif reduction == 'sum':
+    elif reduction == "sum":
         loss = torch.sum(val)
     elif reduction is None:
         loss = val
     else:
-        raise ValueError(f'Invalid value for `reduction`. Should be "mean", "sum", or None. Got {reduction}')
+        raise ValueError(
+            f'Invalid value for `reduction`. Should be "mean", "sum", or None. Got {reduction}'
+        )
 
     return loss
 
@@ -173,7 +177,7 @@ class CoralLoss(torch.nn.Module):
         shape (num_examples,)
     """
 
-    def __init__(self, reduction='mean'):
+    def __init__(self, reduction="mean"):
         super().__init__()
         self.reduction = reduction
 
@@ -214,15 +218,15 @@ def corn_loss(logits, ordinal_labels, num_classes):
     class_labels = get_label_from_ordinal_label(ordinal_labels)
 
     sets = []
-    for i in range(num_classes-1):
+    for i in range(num_classes - 1):
         # identify the samples whose label is at least i
-        mask = class_labels > i-1
+        mask = class_labels > i - 1
         # among these samples, identify the ones whose label is at least i+1
         label_tensor = (class_labels[mask] > i).to(torch.int64)
         sets.append((mask, label_tensor))
 
     num_examples = 0
-    total_loss = 0.
+    total_loss = 0.0
     for class_idx, s in enumerate(sets):
         mask = s[0]
         labels = s[1]
@@ -238,7 +242,7 @@ def corn_loss(logits, ordinal_labels, num_classes):
         # loss = -torch.sum(loss_term, dim=1)
 
         # my implementation
-        criterion = nn.BCEWithLogitsLoss(reduction='sum')
+        criterion = nn.BCEWithLogitsLoss(reduction="sum")
         loss = criterion(pred, labels.float())
 
         total_loss += loss
@@ -258,6 +262,7 @@ class CornLoss(torch.nn.Module):
     num_classes : int
         Number of unique class labels (class labels should start at 0).
     """
+
     def __init__(self, num_classes):
         super().__init__()
         self.num_classes = num_classes

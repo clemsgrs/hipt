@@ -52,16 +52,21 @@ def prepare_data(
     num_workers,
     label_name: Optional[str] = None,
 ):
-
     # ============ preparing data ... ============
-    transform = transforms.Compose([
-        transforms.Resize(256, interpolation=transforms.InterpolationMode.BICUBIC),
-        transforms.CenterCrop(224),
-        transforms.ToTensor(),
-        transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
-    ])
-    dataset_train = ReturnIndexDataset(train_df, transform=transform, label_name=label_name)
-    dataset_test = ReturnIndexDataset(test_df, transform=transform, label_name=label_name)
+    transform = transforms.Compose(
+        [
+            transforms.Resize(256, interpolation=transforms.InterpolationMode.BICUBIC),
+            transforms.CenterCrop(224),
+            transforms.ToTensor(),
+            transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
+        ]
+    )
+    dataset_train = ReturnIndexDataset(
+        train_df, transform=transform, label_name=label_name
+    )
+    dataset_test = ReturnIndexDataset(
+        test_df, transform=transform, label_name=label_name
+    )
     if distributed:
         sampler = torch.utils.data.DistributedSampler(dataset_train, shuffle=False)
     else:
@@ -95,18 +100,24 @@ def load_pretrained_weights(model, pretrained_weights, checkpoint_key):
         # remove `backbone.` prefix induced by multicrop wrapper
         state_dict = {k.replace("backbone.", ""): v for k, v in state_dict.items()}
         msg = model.load_state_dict(state_dict, strict=False)
-        print('Pretrained weights found at {} and loaded with msg: {}'.format(pretrained_weights, msg))
+        print(
+            "Pretrained weights found at {} and loaded with msg: {}".format(
+                pretrained_weights, msg
+            )
+        )
     else:
         print("WARNING: provided weights don't exist, random weights will be used.")
 
 
 def multi_scale(samples, model):
     v = None
-    for s in [1, 1/2**(1/2), 1/2]:  # we use 3 different scales
+    for s in [1, 1 / 2 ** (1 / 2), 1 / 2]:  # we use 3 different scales
         if s == 1:
             inp = samples.clone()
         else:
-            inp = nn.functional.interpolate(samples, scale_factor=s, mode='bilinear', align_corners=False)
+            inp = nn.functional.interpolate(
+                samples, scale_factor=s, mode="bilinear", align_corners=False
+            )
         feats = model(inp).clone()
         if v is None:
             v = feats
@@ -132,7 +143,6 @@ def extract_feature_pipeline(
     num_workers: int = 10,
     label_name: Optional[str] = None,
 ):
-
     # ============ preparing data ... ============
     data_loader_train, data_loader_test = prepare_data(
         train_df,
@@ -142,7 +152,9 @@ def extract_feature_pipeline(
         num_workers,
         label_name,
     )
-    print(f"Data loaded with {len(data_loader_train.dataset)} train and {len(data_loader_test.dataset)} eval imgs.")
+    print(
+        f"Data loaded with {len(data_loader_train.dataset)} train and {len(data_loader_test.dataset)} eval imgs."
+    )
 
     # ============ building network ... ============
     model = vits.__dict__[arch](patch_size=patch_size, num_classes=0)
@@ -154,9 +166,13 @@ def extract_feature_pipeline(
 
     # ============ extract features ... ============
     print("Extracting features for train set...")
-    train_features, train_labels = extract_features(model, data_loader_train, distributed, use_cuda)
+    train_features, train_labels = extract_features(
+        model, data_loader_train, distributed, use_cuda
+    )
     print("Extracting features for test set...")
-    test_features, test_labels = extract_features(model, data_loader_test, distributed, use_cuda)
+    test_features, test_labels = extract_features(
+        model, data_loader_test, distributed, use_cuda
+    )
 
     if is_main_process():
         train_features = nn.functional.normalize(train_features, dim=1, p=2)
@@ -180,7 +196,6 @@ def extract_multiple_features(
     use_cuda=True,
     multiscale=False,
 ):
-
     student_features = None
     teacher_features = None
 
@@ -195,9 +210,7 @@ def extract_multiple_features(
         leave=True,
         file=sys.stdout,
     ) as t:
-
         for i, batch in enumerate(t):
-
             index, img, label = batch
             index = index.cuda(non_blocking=True)
             img = img.cuda(non_blocking=True)
@@ -210,17 +223,29 @@ def extract_multiple_features(
                 teacher_feats = teacher(img).clone()
 
             # init storage feature matrix
-            if is_main_process() and student_features is None and teacher_features is None:
-                student_features = torch.zeros(len(loader.dataset), student_feats.shape[-1])
-                teacher_features = torch.zeros(len(loader.dataset), teacher_feats.shape[-1])
+            if (
+                is_main_process()
+                and student_features is None
+                and teacher_features is None
+            ):
+                student_features = torch.zeros(
+                    len(loader.dataset), student_feats.shape[-1]
+                )
+                teacher_features = torch.zeros(
+                    len(loader.dataset), teacher_feats.shape[-1]
+                )
                 if use_cuda:
                     student_features = student_features.cuda(non_blocking=True)
                     teacher_features = teacher_features.cuda(non_blocking=True)
-                tqdm.tqdm.write(f"Storing features into tensor of shape {student_features.shape}")
+                tqdm.tqdm.write(
+                    f"Storing features into tensor of shape {student_features.shape}"
+                )
 
             if distributed:
                 ngpu = dist.get_world_size()
-                y_all = torch.empty(ngpu, index.size(0), dtype=index.dtype, device=index.device)
+                y_all = torch.empty(
+                    ngpu, index.size(0), dtype=index.dtype, device=index.device
+                )
                 y_l = list(y_all.unbind(0))
                 y_all_reduce = torch.distributed.all_gather(y_l, index, async_op=True)
                 y_all_reduce.wait()
@@ -243,9 +268,13 @@ def extract_multiple_features(
                 )
 
                 student_output_l = list(student_feats_all.unbind(0))
-                student_output_all_reduce = torch.distributed.all_gather(student_output_l, student_feats, async_op=True)
+                student_output_all_reduce = torch.distributed.all_gather(
+                    student_output_l, student_feats, async_op=True
+                )
                 teacher_output_l = list(teacher_feats_all.unbind(0))
-                teacher_output_all_reduce = torch.distributed.all_gather(teacher_output_l, teacher_feats, async_op=True)
+                teacher_output_all_reduce = torch.distributed.all_gather(
+                    teacher_output_l, teacher_feats, async_op=True
+                )
 
                 student_output_all_reduce.wait()
                 teacher_output_all_reduce.wait()
@@ -253,14 +282,22 @@ def extract_multiple_features(
                 # update storage feature matrix
                 if is_main_process():
                     if use_cuda:
-                        student_features.index_copy_(0, index_all, torch.cat(student_output_l))
-                        teacher_features.index_copy_(0, index_all, torch.cat(teacher_output_l))
+                        student_features.index_copy_(
+                            0, index_all, torch.cat(student_output_l)
+                        )
+                        teacher_features.index_copy_(
+                            0, index_all, torch.cat(teacher_output_l)
+                        )
                     else:
-                        student_features.index_copy_(0, index_all.cpu(), torch.cat(student_output_l).cpu())
-                        teacher_features.index_copy_(0, index_all.cpu(), torch.cat(teacher_output_l).cpu())
+                        student_features.index_copy_(
+                            0, index_all.cpu(), torch.cat(student_output_l).cpu()
+                        )
+                        teacher_features.index_copy_(
+                            0, index_all.cpu(), torch.cat(teacher_output_l).cpu()
+                        )
             else:
-                student_features[list(index),:] = student_feats
-                teacher_features[list(index),:] = teacher_feats
+                student_features[list(index), :] = student_feats
+                teacher_features[list(index), :] = teacher_feats
 
     if is_main_process():
         student_features = nn.functional.normalize(student_features, dim=1, p=2)
@@ -274,7 +311,6 @@ def extract_multiple_features(
 
 @torch.no_grad()
 def extract_features(model, loader, distributed, use_cuda=True, multiscale=False):
-
     features = None
     labels = []
 
@@ -286,9 +322,7 @@ def extract_features(model, loader, distributed, use_cuda=True, multiscale=False
         unit_scale=loader.batch_size,
         leave=True,
     ) as t:
-
         for i, batch in enumerate(t):
-
             index, img, label = batch
             img = img.cuda(non_blocking=True)
             index = index.cuda(non_blocking=True)
@@ -303,12 +337,16 @@ def extract_features(model, loader, distributed, use_cuda=True, multiscale=False
                 features = torch.zeros(len(loader.dataset), feats.shape[-1])
                 if use_cuda:
                     features = features.cuda(non_blocking=True)
-                t.display(f"Storing features into tensor of shape {features.shape}", pos=1)
+                t.display(
+                    f"Storing features into tensor of shape {features.shape}", pos=1
+                )
                 print()
 
             if distributed:
                 ngpu = dist.get_world_size()
-                y_all = torch.empty(ngpu, index.size(0), dtype=index.dtype, device=index.device)
+                y_all = torch.empty(
+                    ngpu, index.size(0), dtype=index.dtype, device=index.device
+                )
                 y_l = list(y_all.unbind(0))
                 y_all_reduce = torch.distributed.all_gather(y_l, index, async_op=True)
                 y_all_reduce.wait()
@@ -323,7 +361,9 @@ def extract_features(model, loader, distributed, use_cuda=True, multiscale=False
                     device=feats.device,
                 )
                 output_l = list(feats_all.unbind(0))
-                output_all_reduce = torch.distributed.all_gather(output_l, feats, async_op=True)
+                output_all_reduce = torch.distributed.all_gather(
+                    output_l, feats, async_op=True
+                )
                 output_all_reduce.wait()
 
                 # update storage feature matrix
@@ -331,9 +371,11 @@ def extract_features(model, loader, distributed, use_cuda=True, multiscale=False
                     if use_cuda:
                         features.index_copy_(0, index_all, torch.cat(output_l))
                     else:
-                        features.index_copy_(0, index_all.cpu(), torch.cat(output_l).cpu())
+                        features.index_copy_(
+                            0, index_all.cpu(), torch.cat(output_l).cpu()
+                        )
             else:
-                features[list(index),:] = feats
+                features[list(index), :] = feats
 
     labels = torch.tensor(labels).long()
 
@@ -341,7 +383,9 @@ def extract_features(model, loader, distributed, use_cuda=True, multiscale=False
 
 
 @torch.no_grad()
-def knn_classifier(train_features, train_labels, test_features, test_labels, k, T, num_classes):
+def knn_classifier(
+    train_features, train_labels, test_features, test_labels, k, T, num_classes
+):
     acc, total = 0.0, 0
     test_probs = np.empty((0, num_classes))
     train_features = train_features.t()
@@ -351,9 +395,7 @@ def knn_classifier(train_features, train_labels, test_features, test_labels, k, 
     for idx in range(0, num_test_images, imgs_per_chunk):
         # get the features for test images
         # the use of min ensures we don't compute features more than once if num_test_images is not divisible by num_chunks
-        features = test_features[
-            idx : min((idx + imgs_per_chunk), num_test_images), :
-        ]
+        features = test_features[idx : min((idx + imgs_per_chunk), num_test_images), :]
         targets = test_labels[idx : min((idx + imgs_per_chunk), num_test_images)]
         batch_size = targets.shape[0]
 
@@ -386,7 +428,7 @@ def knn_classifier(train_features, train_labels, test_features, test_labels, k, 
     if num_classes == 2:
         auc = metrics.roc_auc_score(test_labels.cpu(), test_probs[:, 1])
     else:
-        auc = metrics.roc_auc_score(test_labels.cpu(), test_probs, multi_class='ovr')
+        auc = metrics.roc_auc_score(test_labels.cpu(), test_probs, multi_class="ovr")
 
     return acc, auc
 
@@ -397,7 +439,6 @@ def knn_classifier(train_features, train_labels, test_features, test_labels, k, 
     config_name="knn",
 )
 def main(cfg: DictConfig):
-
     distributed = torch.cuda.device_count() > 1
     if distributed:
         torch.distributed.init_process_group(backend="nccl")
@@ -420,7 +461,12 @@ def main(cfg: DictConfig):
         # need to extract features !
         train_df = pd.read_csv(cfg.train_csv)
         test_df = pd.read_csv(cfg.test_csv)
-        train_features, test_features, train_labels, test_labels = extract_feature_pipeline(
+        (
+            train_features,
+            test_features,
+            train_labels,
+            test_labels,
+        ) = extract_feature_pipeline(
             train_df,
             test_df,
             cfg.features_dir,
@@ -437,7 +483,9 @@ def main(cfg: DictConfig):
         )
 
     if is_main_process():
-        assert len(torch.unique(train_labels)) == len(torch.unique(test_labels)), "train & test dataset have different number of classes!"
+        assert len(torch.unique(train_labels)) == len(
+            torch.unique(test_labels)
+        ), "train & test dataset have different number of classes!"
         num_classes = len(torch.unique(train_labels))
         if cfg.speed.use_cuda:
             train_features, train_labels = train_features.cuda(), train_labels.cuda()
@@ -445,7 +493,15 @@ def main(cfg: DictConfig):
 
         print("Features are ready!\nStarting kNN classification.")
         for k in cfg.nb_knn:
-            acc, auc = knn_classifier(train_features, train_labels, test_features, test_labels, k, cfg.temperature, num_classes)
+            acc, auc = knn_classifier(
+                train_features,
+                train_labels,
+                test_features,
+                test_labels,
+                k,
+                cfg.temperature,
+                num_classes,
+            )
             print(f"{k}-NN classifier result:")
             print(f"- auc: {auc}")
             print(f"- accuracy: {acc:.2f}%")
@@ -453,6 +509,6 @@ def main(cfg: DictConfig):
     if distributed:
         torch.distributed.destroy_process_group()
 
-if __name__ == '__main__':
 
+if __name__ == "__main__":
     main()

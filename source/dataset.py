@@ -12,6 +12,7 @@ from omegaconf import DictConfig
 from dataclasses import dataclass, field
 from torchvision.datasets.folder import default_loader
 
+
 def read_image(image_fp: str) -> Image:
     return Image.open(image_fp)
 
@@ -135,8 +136,7 @@ class DatasetFactory:
         options: DictConfig,
         agg_method: str = "concat",
     ):
-
-        if task in["classification", "regression"]:
+        if task in ["classification", "regression"]:
             if options.label_encoding == "ordinal":
                 self.dataset = ExtractedFeaturesOrdinalDataset(
                     options.df,
@@ -191,9 +191,7 @@ class DatasetFactory:
                         options.label_name,
                     )
         else:
-            raise ValueError(
-                f"task ({task}) not supported"
-            )
+            raise ValueError(f"task ({task}) not supported")
 
     def get_dataset(self):
         return self.dataset
@@ -271,8 +269,8 @@ class ExtractedFeaturesOrdinalDataset(ExtractedFeaturesDataset):
         slide_id = row.slide_id
         fp = Path(self.features_dir, f"{slide_id}.pt")
         features = torch.load(fp)
-        label = np.zeros(self.num_classes-1).astype(np.float32)
-        label[:row.label] = 1.
+        label = np.zeros(self.num_classes - 1).astype(np.float32)
+        label[: row.label] = 1.0
         return idx, features, label
 
 
@@ -285,7 +283,6 @@ class ExtractedFeaturesSurvivalDataset(torch.utils.data.Dataset):
         label_name: str = "label",
         nfeats_max: Optional[int] = 1000,
     ):
-
         self.features_dir = features_dir
         self.label_name = label_name
         self.use_coords = False
@@ -311,7 +308,6 @@ class ExtractedFeaturesSurvivalDataset(torch.utils.data.Dataset):
         return filtered_df, remaining_case_ids
 
     def __getitem__(self, idx: int):
-
         row = self.df.loc[idx]
         case_id = row.case_id
         slide_ids = self.slide_df[
@@ -336,7 +332,7 @@ class ExtractedFeaturesSurvivalDataset(torch.utils.data.Dataset):
         # if more than nfeats_max features, randomly sample nfeats_max features
         if self.nfeats_max and len(features) > self.nfeats_max:
             torch.manual_seed(self.seed)
-            features = features[torch.randperm(len(features))[:self.nfeats_max]]
+            features = features[torch.randperm(len(features))[: self.nfeats_max]]
 
         return idx, features, label, event_time, c
 
@@ -352,11 +348,9 @@ class ExtractedFeaturesPatientLevelSurvivalDataset(ExtractedFeaturesSurvivalData
         features_dir: Path,
         label_name: str = "label",
     ):
-
         super().__init__(patient_df, slide_df, features_dir, label_name)
 
     def __getitem__(self, idx: int):
-
         row = self.df.loc[idx]
         case_id = row.case_id
         slide_ids = self.slide_df[
@@ -387,7 +381,6 @@ class ExtractedFeaturesCoordsSurvivalDataset(torch.utils.data.Dataset):
         features_dir: Path,
         label_name: str = "label",
     ):
-
         self.features_dir = features_dir
         self.label_name = label_name
         self.use_coords = True
@@ -431,10 +424,11 @@ class ExtractedFeaturesCoordsSurvivalDataset(torch.utils.data.Dataset):
         return max_id[0]
 
     def __getitem__(self, idx: int):
-
         row = self.df.loc[idx]
         case_id = row.case_id
-        slide_ids = self.slide_df[self.slide_df.case_id == case_id].slide_id.values.tolist()
+        slide_ids = self.slide_df[
+            self.slide_df.case_id == case_id
+        ].slide_id.values.tolist()
 
         label = row.disc_label
         event_time = row[self.label_name]
@@ -443,12 +437,14 @@ class ExtractedFeaturesCoordsSurvivalDataset(torch.utils.data.Dataset):
         features = []
         coordinates = []
         for i, slide_id in enumerate(slide_ids):
-            coords = self.tiles_df[self.tiles_df.slide_id == slide_id][['x','y']].values
-            for x,y in coords:
+            coords = self.tiles_df[self.tiles_df.slide_id == slide_id][
+                ["x", "y"]
+            ].values
+            for x, y in coords:
                 fp = Path(self.features_dir, f"{slide_id}_{x}_{y}.pt")
                 f = torch.load(fp)
                 features.append(f)
-                coordinates.append((i,x,y))
+                coordinates.append((i, x, y))
         coordinates = np.array(coordinates)
 
         # slide_id = self.get_slide_id_with_max_ntile(case_id)
@@ -479,11 +475,9 @@ class ExtractedFeaturesPatientLevelCoordsSurvivalDataset(
         features_dir: Path,
         label_name: str = "label",
     ):
-
         super().__init__(patient_df, slide_df, tiles_df, features_dir, label_name)
 
     def __getitem__(self, idx: int):
-
         row = self.df.loc[idx]
         case_id = row.case_id
         slide_ids = self.slide_df[
@@ -521,7 +515,6 @@ class ExtractedFeaturesSlideLevelSurvivalDataset(torch.utils.data.Dataset):
         features_dir: Path,
         label_name: str = "label",
     ):
-
         self.features_dir = features_dir
         self.label_name = label_name
         self.use_coords = False
@@ -542,7 +535,6 @@ class ExtractedFeaturesSlideLevelSurvivalDataset(torch.utils.data.Dataset):
         return filtered_df
 
     def __getitem__(self, idx: int):
-
         row = self.df.loc[idx]
         slide_id = row.slide_id
 
@@ -618,7 +610,7 @@ class StackedRegionsDataset(torch.utils.data.Dataset):
     def __getitem__(self, idx: int):
         row = self.df.loc[idx]
         slide_id = row.slide_id
-        region_dir = Path(self.region_dir, slide_id, 'imgs')
+        region_dir = Path(self.region_dir, slide_id, "imgs")
         regions_fp = [fp for fp in region_dir.glob(f"*.{self.format}")]
         M = len(regions_fp)
 
@@ -638,9 +630,7 @@ class StackedRegionsDataset(torch.utils.data.Dataset):
             leave=False,
             disable=True,
         ) as t:
-
             for i, fp in enumerate(t):
-
                 img = Image.open(fp)
                 if self.transform:
                     img = self.transform(img)

@@ -10,8 +10,9 @@ Image.MAX_IMAGE_PIXELS = 933120000
 
 
 class WholeSlideImage(object):
-    def __init__(self, path: Path, spacing: Optional[float] = None, backend: str = 'asap'):
-
+    def __init__(
+        self, path: Path, spacing: Optional[float] = None, backend: str = "asap"
+    ):
         """
         Args:
             path (Path): fullpath to WSI file
@@ -42,16 +43,37 @@ class WholeSlideImage(object):
 
     def get_spacings(self):
         if self.spacing is None:
-            common_spacings = [0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0, 128.0, 256.0, 512.0, 1024.0]
-            spacings = [common_spacings[np.argmin([abs(cs - s) for cs in common_spacings])] for s in self.wsi.spacings]
+            common_spacings = [
+                0.25,
+                0.5,
+                1.0,
+                2.0,
+                4.0,
+                8.0,
+                16.0,
+                32.0,
+                64.0,
+                128.0,
+                256.0,
+                512.0,
+                1024.0,
+            ]
+            spacings = [
+                common_spacings[np.argmin([abs(cs - s) for cs in common_spacings])]
+                for s in self.wsi.spacings
+            ]
         else:
-            spacings = [self.spacing * s / self.wsi.spacings[0] for s in self.wsi.spacings]
+            spacings = [
+                self.spacing * s / self.wsi.spacings[0] for s in self.wsi.spacings
+            ]
         return spacings
 
     def get_level_spacing(self, level: int = 0):
         return self.spacings[level]
 
-    def get_best_level_for_spacing(self, target_spacing: float, ignore_warning: bool = False):
+    def get_best_level_for_spacing(
+        self, target_spacing: float, ignore_warning: bool = False
+    ):
         spacing = self.get_level_spacing(0)
         downsample = target_spacing / spacing
         level, above_tol = self.get_best_level_for_downsample_custom(
@@ -66,13 +88,9 @@ class WholeSlideImage(object):
     def get_best_level_for_downsample_custom(
         self, downsample, tol: float = 0.2, return_tol_status: bool = False
     ):
-        level = int(
-            np.argmin([abs(x - downsample) for x,_ in self.level_downsamples])
-        )
+        level = int(np.argmin([abs(x - downsample) for x, _ in self.level_downsamples]))
         above_tol = abs(self.level_downsamples[level][0] / downsample - 1) > tol
         if return_tol_status:
             return level, above_tol
         else:
             return level
-
-    

@@ -31,7 +31,6 @@ from source.utils import (
     config_name="ensemble",
 )
 def main(cfg: DictConfig):
-
     run_id = datetime.datetime.now().strftime("%Y-%m-%d_%H_%M")
     # set up wandb
     if cfg.wandb.enable:
@@ -49,19 +48,30 @@ def main(cfg: DictConfig):
 
     features_root_dir = Path(cfg.features_dir)
 
-    assert (cfg.task != "classification" and cfg.label_encoding != "ordinal") or (cfg.task == "classification")
+    assert (cfg.task != "classification" and cfg.label_encoding != "ordinal") or (
+        cfg.task == "classification"
+    )
 
     test_csvs = {k: v for e in cfg.test_csv for k, v in e.items()}
 
     checkpoint_root_dir = Path(cfg.model.checkpoints)
     nfold = len([_ for _ in checkpoint_root_dir.glob(f"fold_*")])
     print(f"Found {nfold} models")
-    checkpoints = {p.name: Path(p, 'best.pt') for p in sorted(list(checkpoint_root_dir.glob(f"fold_*")))}
+    checkpoints = {
+        p.name: Path(p, "best.pt")
+        for p in sorted(list(checkpoint_root_dir.glob(f"fold_*")))
+    }
 
     start_time = time.time()
     for i, (model_name, checkpoint_path) in enumerate(checkpoints.items()):
-
-        model = ModelFactory(cfg.level, cfg.num_classes, cfg.task, cfg.loss, cfg.label_encoding, cfg.model).get_model()
+        model = ModelFactory(
+            cfg.level,
+            cfg.num_classes,
+            cfg.task,
+            cfg.loss,
+            cfg.label_encoding,
+            cfg.model,
+        ).get_model()
         model.relocate()
         if i == 0:
             print(model)
@@ -77,7 +87,6 @@ def main(cfg: DictConfig):
 
         model_start_time = time.time()
         for test_name, csv_path in test_csvs.items():
-
             print(f"Loading {test_name} data")
             test_df = pd.read_csv(csv_path)
 
@@ -120,7 +129,9 @@ def main(cfg: DictConfig):
                     num_workers=cfg.speed.num_workers,
                     use_wandb=cfg.wandb.enable,
                 )
-            test_dataset.df.to_csv(Path(result_dir, f"{model_name}_{test_name}.csv"), index=False)
+            test_dataset.df.to_csv(
+                Path(result_dir, f"{model_name}_{test_name}.csv"), index=False
+            )
 
             for r, v in test_results.items():
                 if r == "auc":
@@ -130,7 +141,13 @@ def main(cfg: DictConfig):
                     v.savefig(save_path, bbox_inches="tight")
                 if cfg.wandb.enable and r in log_to_wandb["test"]:
                     if r == "cm":
-                        wandb.log({f"{test_name}/{model_name}/{r}": wandb.Image(str(save_path))})
+                        wandb.log(
+                            {
+                                f"{test_name}/{model_name}/{r}": wandb.Image(
+                                    str(save_path)
+                                )
+                            }
+                        )
                     else:
                         wandb.log({f"{test_name}/{model_name}/{r}": v})
                 elif "cm" not in r:
@@ -146,23 +163,42 @@ def main(cfg: DictConfig):
         cols = ["slide_id", "label", "pred"]
         for model_name in checkpoints:
             df = pd.read_csv(Path(result_dir, f"{model_name}_{test_name}.csv"))[cols]
-            df = df.rename(columns = {"pred": f"pred_{model_name}"})
+            df = df.rename(columns={"pred": f"pred_{model_name}"})
             dfs.append(df)
-        ensemble_df = reduce(lambda  left, right: pd.merge(left, right, on=["slide_id", "label"], how='outer'), dfs)
-        ensemble_df['agg'] = ensemble_df[[f'pred_{model_name}' for model_name in checkpoints]].apply(lambda x: get_majority_vote(x), axis=1)
+        ensemble_df = reduce(
+            lambda left, right: pd.merge(
+                left, right, on=["slide_id", "label"], how="outer"
+            ),
+            dfs,
+        )
+        ensemble_df["agg"] = ensemble_df[
+            [f"pred_{model_name}" for model_name in checkpoints]
+        ].apply(lambda x: get_majority_vote(x), axis=1)
 
         test_df = pd.read_csv(csv_path)
-        missing_sids = set(test_df.slide_id.values).difference(set(ensemble_df.slide_id.values))
+        missing_sids = set(test_df.slide_id.values).difference(
+            set(ensemble_df.slide_id.values)
+        )
         missing_df = pd.DataFrame.from_dict(
             {
-                'slide_id': list(missing_sids),
-                'label': test_df[test_df.slide_id.isin(missing_sids)][f"{cfg.label_name}"].values.tolist(),
-                'agg': [random.randint(0, cfg.num_classes-1) for _ in range(len(missing_sids))],
+                "slide_id": list(missing_sids),
+                "label": test_df[test_df.slide_id.isin(missing_sids)][
+                    f"{cfg.label_name}"
+                ].values.tolist(),
+                "agg": [
+                    random.randint(0, cfg.num_classes - 1)
+                    for _ in range(len(missing_sids))
+                ],
             }
         )
         ensemble_df = pd.concat([ensemble_df, missing_df], ignore_index=True)
-        ensemble_df.to_csv(Path(result_dir, f'{test_name}.csv'), index=False)
-        ensemble_metrics = get_metrics(ensemble_df["agg"].values, ensemble_df.label.values, class_names=[f"isup_{i}" for i in range(cfg.num_classes)], use_wandb=cfg.wandb.enable)
+        ensemble_df.to_csv(Path(result_dir, f"{test_name}.csv"), index=False)
+        ensemble_metrics = get_metrics(
+            ensemble_df["agg"].values,
+            ensemble_df.label.values,
+            class_names=[f"isup_{i}" for i in range(cfg.num_classes)],
+            use_wandb=cfg.wandb.enable,
+        )
 
         for r, v in ensemble_metrics.items():
             if isinstance(v, float):
@@ -172,12 +208,13 @@ def main(cfg: DictConfig):
                 v.savefig(save_path, bbox_inches="tight")
             if cfg.wandb.enable and r in log_to_wandb["test"]:
                 if r == "cm":
-                    wandb.log({f"{test_name}/ensemble_{r}": wandb.Image(str(save_path))})
+                    wandb.log(
+                        {f"{test_name}/ensemble_{r}": wandb.Image(str(save_path))}
+                    )
                 else:
                     wandb.log({f"{test_name}/ensemble_{r}": v})
             elif "cm" not in r:
                 print(f"{test_name} ensemble: {r} = {v}")
-
 
     end_time = time.time()
     mins, secs = compute_time(start_time, end_time)
@@ -185,5 +222,4 @@ def main(cfg: DictConfig):
 
 
 if __name__ == "__main__":
-
     main()

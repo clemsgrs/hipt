@@ -40,7 +40,6 @@ from source.utils import (
     config_name="panda",
 )
 def main(cfg: DictConfig):
-
     run_id = datetime.datetime.now().strftime("%Y-%m-%d_%H_%M")
     # set up wandb
     if cfg.wandb.enable:
@@ -61,7 +60,9 @@ def main(cfg: DictConfig):
 
     features_dir = Path(cfg.features_dir)
 
-    assert (cfg.task != "classification" and cfg.label_encoding != "ordinal") or (cfg.task == "classification")
+    assert (cfg.task != "classification" and cfg.label_encoding != "ordinal") or (
+        cfg.task == "classification"
+    )
 
     print(f"Loading data")
     train_df = pd.read_csv(cfg.data.train_csv)
@@ -107,9 +108,13 @@ def main(cfg: DictConfig):
         m == n == cfg.num_classes
     ), f"Either train (C={m}) or tune (C={n}) sets doesnt cover full class spectrum (C={cfg.num_classes}"
 
-    criterion = LossFactory(cfg.task, cfg.loss, cfg.label_encoding, cfg.loss_options).get_loss()
+    criterion = LossFactory(
+        cfg.task, cfg.loss, cfg.label_encoding, cfg.loss_options
+    ).get_loss()
 
-    model = ModelFactory(cfg.level, cfg.num_classes, cfg.task, cfg.loss, cfg.label_encoding, cfg.model).get_model()
+    model = ModelFactory(
+        cfg.level, cfg.num_classes, cfg.task, cfg.loss, cfg.label_encoding, cfg.model
+    ).get_model()
     model.relocate()
     print(model)
 
@@ -138,16 +143,14 @@ def main(cfg: DictConfig):
         ncols=100,
         leave=True,
     ) as t:
-
         for epoch in t:
-
             epoch_start_time = time.time()
             if cfg.wandb.enable:
-                log_dict = {"epoch": epoch+1}
+                log_dict = {"epoch": epoch + 1}
 
             if cfg.task == "regression":
                 train_results = train_regression(
-                    epoch+1,
+                    epoch + 1,
                     model,
                     train_dataset,
                     optimizer,
@@ -160,7 +163,7 @@ def main(cfg: DictConfig):
                 )
             elif cfg.label_encoding == "ordinal":
                 train_results = train_ordinal(
-                    epoch+1,
+                    epoch + 1,
                     model,
                     train_dataset,
                     optimizer,
@@ -174,7 +177,7 @@ def main(cfg: DictConfig):
                 )
             else:
                 train_results = train(
-                    epoch+1,
+                    epoch + 1,
                     model,
                     train_dataset,
                     optimizer,
@@ -191,12 +194,14 @@ def main(cfg: DictConfig):
                 update_log_dict(
                     "train", train_results, log_dict, to_log=log_to_wandb["train"]
                 )
-            train_dataset.df.to_csv(Path(result_dir, f"train_{epoch+1}.csv"), index=False)
+            train_dataset.df.to_csv(
+                Path(result_dir, f"train_{epoch+1}.csv"), index=False
+            )
 
             if epoch % cfg.tuning.tune_every == 0:
                 if cfg.task == "regression":
                     tune_results = tune_regression(
-                        epoch+1,
+                        epoch + 1,
                         model,
                         tune_dataset,
                         criterion,
@@ -206,7 +211,7 @@ def main(cfg: DictConfig):
                     )
                 elif cfg.label_encoding == "ordinal":
                     tune_results = tune_ordinal(
-                        epoch+1,
+                        epoch + 1,
                         model,
                         tune_dataset,
                         criterion,
@@ -217,7 +222,7 @@ def main(cfg: DictConfig):
                     )
                 else:
                     tune_results = tune(
-                        epoch+1,
+                        epoch + 1,
                         model,
                         tune_dataset,
                         criterion,
@@ -229,7 +234,10 @@ def main(cfg: DictConfig):
 
                 if cfg.wandb.enable:
                     update_log_dict(
-                        "tune", tune_results, log_dict, to_log=[e for e in log_to_wandb["tune"] if "cm" not in e],
+                        "tune",
+                        tune_results,
+                        log_dict,
+                        to_log=[e for e in log_to_wandb["tune"] if "cm" not in e],
                     )
                 tune_dataset.df.to_csv(
                     Path(result_dir, f"tune_{epoch+1}.csv"), index=False
@@ -248,7 +256,7 @@ def main(cfg: DictConfig):
 
             # logging
             if cfg.wandb.enable:
-                wandb.log(log_dict, step=epoch+1)
+                wandb.log(log_dict, step=epoch + 1)
 
             epoch_end_time = time.time()
             epoch_mins, epoch_secs = compute_time(epoch_start_time, epoch_end_time)
@@ -295,17 +303,27 @@ def main(cfg: DictConfig):
             num_workers=cfg.speed.num_workers,
             use_wandb=cfg.wandb.enable,
         )
-    tune_dataset.df.to_csv(Path(result_dir, f"tune_{cfg.testing.retrieve_checkpoint}.csv"), index=False)
+    tune_dataset.df.to_csv(
+        Path(result_dir, f"tune_{cfg.testing.retrieve_checkpoint}.csv"), index=False
+    )
 
     for r, v in tune_results.items():
         if isinstance(v, float):
             v = round(v, 5)
         if r == "cm":
-            save_path = Path(result_dir, f"tune_{cfg.testing.retrieve_checkpoint}_cm.png")
+            save_path = Path(
+                result_dir, f"tune_{cfg.testing.retrieve_checkpoint}_cm.png"
+            )
             v.savefig(save_path, bbox_inches="tight")
         if cfg.wandb.enable and r in log_to_wandb["tune"]:
             if r == "cm":
-                wandb.log({f"tune/{r}_{cfg.testing.retrieve_checkpoint}": wandb.Image(str(save_path))})
+                wandb.log(
+                    {
+                        f"tune/{r}_{cfg.testing.retrieve_checkpoint}": wandb.Image(
+                            str(save_path)
+                        )
+                    }
+                )
             else:
                 wandb.log({f"tune/{r}_{cfg.testing.retrieve_checkpoint}": v})
         elif "cm" not in r:
@@ -360,5 +378,4 @@ def main(cfg: DictConfig):
 
 
 if __name__ == "__main__":
-
     main()

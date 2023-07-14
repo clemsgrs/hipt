@@ -20,6 +20,7 @@ import source.vision_transformer as vits
 from source.utils import update_state_dict
 from eval_knn import extract_multiple_features, knn_classifier
 
+
 def hydra_argv_remapper(argv_map):
     """
     Call this function before main
@@ -170,7 +171,6 @@ class RegionDataAugmentationDINO(object):
         region_size: int = 4096,
         patch_size: int = 256,
     ):
-
         self.npatch = int(region_size // patch_size)
         global_crop_size = int(global_crops_scale * self.npatch)
         local_crop_size = int(local_crops_scale * self.npatch)
@@ -265,7 +265,9 @@ class SmoothedValue(object):
             main_device = "cuda"
         else:
             main_device = torch.device(f"cuda:{gpu_id}")
-        t = torch.tensor([self.count, self.total], dtype=torch.float64, device=main_device)
+        t = torch.tensor(
+            [self.count, self.total], dtype=torch.float64, device=main_device
+        )
         dist.barrier()
         dist.all_reduce(t)
         t = t.tolist()
@@ -487,9 +489,7 @@ class EarlyStoppingDINO:
         self.early_stop = False
 
     def __call__(self, epoch, results, snapshot):
-
         if results is not None:
-
             teacher_score = results["teacher"][self.tracking]
             student_score = results["student"][self.tracking]
 
@@ -497,7 +497,9 @@ class EarlyStoppingDINO:
                 teacher_score = -1 * teacher_score
                 student_score = -1 * student_score
 
-            if self.best_score is None or (teacher_score >= self.best_score and teacher_score > student_score):
+            if self.best_score is None or (
+                teacher_score >= self.best_score and teacher_score > student_score
+            ):
                 self.best_score = teacher_score
                 torch.save(snapshot, Path(self.checkpoint_dir, "best.pt"))
                 self.counter = 0
@@ -509,7 +511,9 @@ class EarlyStoppingDINO:
                         f"EarlyStopping counter: {min(self.counter,self.patience)}/{self.patience}"
                     )
                 elif self.verbose:
-                    tqdm.tqdm.write(f"EarlyStopping counter: {self.counter}/{self.patience}")
+                    tqdm.tqdm.write(
+                        f"EarlyStopping counter: {self.counter}/{self.patience}"
+                    )
                 if self.counter >= self.patience and epoch > self.min_epoch:
                     self.early_stop = True
 
@@ -608,13 +612,17 @@ def resume_from_checkpoint(ckpt_path, verbose: bool = True, **kwargs):
             except TypeError:
                 try:
                     sd = checkpoint[key]
-                    nn.modules.utils.consume_prefix_in_state_dict_if_present(sd, "module.")
+                    nn.modules.utils.consume_prefix_in_state_dict_if_present(
+                        sd, "module."
+                    )
                     msg = value.load_state_dict(sd)
                     if verbose:
                         print(f"=> loaded '{key}' from checkpoint: '{ckpt_path}'")
                 except ValueError:
                     if verbose:
-                        print(f"=> failed to load '{key}' from checkpoint: '{ckpt_path}'")
+                        print(
+                            f"=> failed to load '{key}' from checkpoint: '{ckpt_path}'"
+                        )
         elif verbose:
             print(f"=> key '{key}' not found in checkpoint: '{ckpt_path}'")
     return epoch
@@ -832,8 +840,9 @@ def tune_one_epoch(
     save_features: bool = False,
     use_cuda: bool = False,
 ):
-
-    student_model = vits.__dict__[arch](patch_size=patch_size, drop_path_rate=drop_path_rate, num_classes=0)
+    student_model = vits.__dict__[arch](
+        patch_size=patch_size, drop_path_rate=drop_path_rate, num_classes=0
+    )
     teacher_model = vits.__dict__[arch](patch_size=patch_size, num_classes=0)
     tqdm.tqdm.write(f"Teacher & student models {arch} {patch_size}x{patch_size} built.")
     student_model.cuda()
@@ -848,12 +857,22 @@ def tune_one_epoch(
 
     # ============ extract student features ============
     tqdm.tqdm.write("Extracting features for train set...")
-    train_features, train_labels = extract_multiple_features(student_model, teacher_model, train_dataloader, distributed, use_cuda)
+    train_features, train_labels = extract_multiple_features(
+        student_model, teacher_model, train_dataloader, distributed, use_cuda
+    )
     tqdm.tqdm.write("Extracting features for test set...")
-    test_features, test_labels = extract_multiple_features(student_model, teacher_model, test_dataloader, distributed, use_cuda)
+    test_features, test_labels = extract_multiple_features(
+        student_model, teacher_model, test_dataloader, distributed, use_cuda
+    )
 
-    teacher_train_features, teacher_test_features = train_features["teacher"], test_features["teacher"]
-    student_train_features, student_test_features = train_features["student"], test_features["student"]
+    teacher_train_features, teacher_test_features = (
+        train_features["teacher"],
+        test_features["teacher"],
+    )
+    student_train_features, student_test_features = (
+        train_features["student"],
+        test_features["student"],
+    )
 
     # save features and labels
     if save_features and is_main_process():
@@ -866,17 +885,41 @@ def tune_one_epoch(
 
     results = defaultdict(dict)
     if is_main_process():
-        assert len(torch.unique(train_labels)) == len(torch.unique(test_labels)), "train & test dataset have different number of classes!"
+        assert len(torch.unique(train_labels)) == len(
+            torch.unique(test_labels)
+        ), "train & test dataset have different number of classes!"
         num_classes = len(torch.unique(train_labels))
         if use_cuda:
-            teacher_train_features, teacher_test_features = teacher_train_features.cuda(), teacher_test_features.cuda()
-            student_train_features, student_test_features = student_train_features.cuda(), student_test_features.cuda()
+            teacher_train_features, teacher_test_features = (
+                teacher_train_features.cuda(),
+                teacher_test_features.cuda(),
+            )
+            student_train_features, student_test_features = (
+                student_train_features.cuda(),
+                student_test_features.cuda(),
+            )
             train_labels, test_labels = train_labels.cuda(), test_labels.cuda()
 
         tqdm.tqdm.write("Features are ready!\nStarting kNN classification.")
-        teacher_acc, teacher_auc = knn_classifier(teacher_train_features, train_labels, teacher_test_features, test_labels, k, temperature, num_classes)
-        student_acc, student_auc = knn_classifier(student_train_features, train_labels, student_test_features, test_labels, k, temperature, num_classes)
-        results["teacher"].update({'acc': teacher_acc, 'auc': teacher_auc})
-        results["student"].update({'acc': student_acc, 'auc': student_auc})
+        teacher_acc, teacher_auc = knn_classifier(
+            teacher_train_features,
+            train_labels,
+            teacher_test_features,
+            test_labels,
+            k,
+            temperature,
+            num_classes,
+        )
+        student_acc, student_auc = knn_classifier(
+            student_train_features,
+            train_labels,
+            student_test_features,
+            test_labels,
+            k,
+            temperature,
+            num_classes,
+        )
+        results["teacher"].update({"acc": teacher_acc, "auc": teacher_auc})
+        results["student"].update({"acc": student_acc, "auc": student_auc})
 
     return results

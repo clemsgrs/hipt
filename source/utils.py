@@ -211,13 +211,15 @@ def compute_time(start_time, end_time):
     return elapsed_mins, elapsed_secs
 
 
-def get_binary_metrics(preds: List[int], labels: List[int], probs: Optional[np.array] = None):
+def get_binary_metrics(
+    preds: List[int], labels: List[int], probs: Optional[np.array] = None
+):
     labels = np.asarray(labels)
     acc = metrics.accuracy_score(labels, preds)
     if probs is not None:
         auc = metrics.roc_auc_score(labels, probs)
     else:
-        auc = -1.
+        auc = -1.0
     precision = metrics.precision_score(labels, preds, zero_division=0)
     recall = metrics.recall_score(labels, preds)
     metrics_dict = {
@@ -300,7 +302,9 @@ def collate_survival_features(
     return [idx, feature, label, event_time, censorship]
 
 
-def collate_survival_features_coords(batch, label_type: str = "int", agg_method: str = "concat"):
+def collate_survival_features_coords(
+    batch, label_type: str = "int", agg_method: str = "concat"
+):
     idx = torch.LongTensor([item[0] for item in batch])
     if agg_method == "concat":
         feature = torch.cat([item[1] for item in batch], dim=0)
@@ -393,16 +397,16 @@ def plot_confusion_matrix(
                     s = cm_sum[i][0]
                     if show_pct:
                         annot[i, j] = f"{c}/{s}"
-                        annot2[i, j]= f"\n\n{p:.2f}%"
+                        annot2[i, j] = f"\n\n{p:.2f}%"
                     else:
                         annot[i, j] = f"{c}/{s}"
                 elif c == 0:
                     annot[i, j] = f"{c}"
-                    annot2[i, j]= ""
+                    annot2[i, j] = ""
                 else:
                     if show_pct:
                         annot[i, j] = f"{c}"
-                        annot2[i, j]= f"\n\n{p:.2f}%"
+                        annot2[i, j] = f"\n\n{p:.2f}%"
                     else:
                         annot[i, j] = f"{c}"
 
@@ -419,16 +423,16 @@ def plot_confusion_matrix(
                     s = cm_sum[i][0]
                     if show_pct:
                         annot[i, j] = f"{c}/{s}"
-                        annot2[i, j]= f"\n\n{p:.1f}%"
+                        annot2[i, j] = f"\n\n{p:.1f}%"
                     else:
                         annot[i, j] = f"{c}/{s}"
                 elif c == 0:
                     annot[i, j] = f"{c}"
-                    annot2[i, j]= ""
+                    annot2[i, j] = ""
                 else:
                     if show_pct:
                         annot[i, j] = f"{c}"
-                        annot2[i, j]= f"\n\n{p:.1f}%"
+                        annot2[i, j] = f"\n\n{p:.1f}%"
                     else:
                         annot[i, j] = f"{c}"
 
@@ -440,14 +444,29 @@ def plot_confusion_matrix(
     cm = pd.DataFrame(cm, index=labels, columns=labels)
     fig, ax = plt.subplots(dpi=dpi)
 
-    sns.heatmap(cm, annot=annot, fmt="", ax=ax, cmap="Blues", cbar=cbar, annot_kws={"size": 'small'})
+    sns.heatmap(
+        cm,
+        annot=annot,
+        fmt="",
+        ax=ax,
+        cmap="Blues",
+        cbar=cbar,
+        annot_kws={"size": "small"},
+    )
 
     # Create a colormap with fully transparent colors
     cmap = sns.color_palette("Blues", as_cmap=True)
     cmap_colors = cmap(np.arange(cmap.N))
     cmap_colors[:, -1] = 0.0
     transparent_cmap = matplotlib.colors.ListedColormap(cmap_colors)
-    sns.heatmap(cm, annot=annot2, fmt="", cmap=transparent_cmap, cbar=False, annot_kws={"size": 'xx-small'})
+    sns.heatmap(
+        cm,
+        annot=annot2,
+        fmt="",
+        cmap=transparent_cmap,
+        cbar=False,
+        annot_kws={"size": "xx-small"},
+    )
 
     ax.set_xlabel("Predicted", labelpad=10)
     ax.set_ylabel("Groundtruth", labelpad=10)
@@ -462,9 +481,9 @@ def plot_confusion_matrix(
 def get_majority_vote(preds):
     x = Counter(preds)
     max_occ = x.most_common(1)[0][1]
-    ties = [p for p,occ in x.items() if occ == max_occ]
+    ties = [p for p, occ in x.items() if occ == max_occ]
     if len(ties) > 1:
-        i = random.randint(0, len(ties)-1)
+        i = random.randint(0, len(ties) - 1)
         maj_vote = ties[i]
     else:
         maj_vote = ties[0]
@@ -502,7 +521,7 @@ def make_weights_for_balanced_classes(dataset):
 def get_preds_from_ordinal_logits(logits, loss: str):
     with torch.no_grad():
         prob = torch.sigmoid(logits)
-        if loss == 'corn':
+        if loss == "corn":
             prob = torch.cumprod(prob, dim=1)
     return prob, (prob > 0.5).cumprod(axis=1).sum(axis=1)
 
@@ -512,7 +531,10 @@ def get_label_from_ordinal_label(label):
 
 
 def get_label_from_regression_logits(logits, num_classes):
-    pred = torch.max(torch.min(torch.round(logits), torch.Tensor([num_classes-1])), torch.Tensor([0]))
+    pred = torch.max(
+        torch.min(torch.round(logits), torch.Tensor([num_classes - 1])),
+        torch.Tensor([0]),
+    )
     # prob = (pred == logits) * torch.Tensor([1.0]) + (pred < logits) * (1 -(logits) % 1) + (pred > logits) * (logits % 1)
     # need to deal with border values, e.g. logits < -0.5 or logits > num_classes-0.5
     return pred
@@ -587,7 +609,6 @@ class OptimizerFactory:
         weight_decay: float = 0.0,
         momentum: float = 0.0,
     ):
-
         if name == "adam":
             self.optimizer = optim.Adam(params, lr=lr, weight_decay=weight_decay)
         elif name == "sgd":
@@ -607,7 +628,6 @@ class SchedulerFactory:
         optimizer: torch.optim.Optimizer,
         params: Optional[dict] = None,
     ):
-
         self.scheduler = None
         self.name = params.name
         if self.name == "step":
@@ -668,7 +688,6 @@ class EarlyStopping:
         self.early_stop = False
 
     def __call__(self, epoch, model, results):
-
         score = results[self.tracking]
         if self.min_max == "min":
             score = -1 * score
@@ -712,7 +731,6 @@ def train(
     num_workers: int = 0,
     use_wandb: bool = False,
 ):
-
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     model.train()
@@ -747,9 +765,7 @@ def train(
         unit_scale=batch_size,
         leave=False,
     ) as t:
-
         for i, batch in enumerate(t):
-
             # optimizer.zero_grad()
             idx, x, label = batch
             x, label = x.to(device, non_blocking=True), label.to(
@@ -789,7 +805,13 @@ def train(
         # roc_auc_curve = get_roc_auc_curve(probs[:, 1], labels)
         # results.update({"roc_auc_curve": roc_auc_curve})
     else:
-        metrics = get_metrics(preds, labels, probs, class_names=[f"isup_{i}" for i in range(dataset.num_classes)], use_wandb=use_wandb)
+        metrics = get_metrics(
+            preds,
+            labels,
+            probs,
+            class_names=[f"isup_{i}" for i in range(dataset.num_classes)],
+            use_wandb=use_wandb,
+        )
 
     results.update(metrics)
 
@@ -809,7 +831,6 @@ def tune(
     num_workers: int = 0,
     use_wandb: bool = False,
 ):
-
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     model.eval()
@@ -838,11 +859,8 @@ def tune(
         unit_scale=batch_size,
         leave=False,
     ) as t:
-
         with torch.no_grad():
-
             for i, batch in enumerate(t):
-
                 idx, x, label = batch
                 x, label = x.to(device, non_blocking=True), label.to(
                     device, non_blocking=True
@@ -871,7 +889,13 @@ def tune(
         # roc_auc_curve = get_roc_auc_curve(probs[:, 1], labels)
         # results.update({"roc_auc_curve": roc_auc_curve})
     else:
-        metrics = get_metrics(preds, labels, probs, class_names=[f"isup_{i}" for i in range(dataset.num_classes)], use_wandb=use_wandb)
+        metrics = get_metrics(
+            preds,
+            labels,
+            probs,
+            class_names=[f"isup_{i}" for i in range(dataset.num_classes)],
+            use_wandb=use_wandb,
+        )
 
     results.update(metrics)
 
@@ -889,7 +913,6 @@ def test(
     num_workers: int = 0,
     use_wandb: bool = False,
 ):
-
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     model.eval()
@@ -917,11 +940,8 @@ def test(
         unit_scale=batch_size,
         leave=True,
     ) as t:
-
         with torch.no_grad():
-
             for i, batch in enumerate(t):
-
                 idx, x, label = batch
                 x, label = x.to(device, non_blocking=True), label.to(
                     device, non_blocking=True
@@ -947,7 +967,13 @@ def test(
         # roc_auc_curve = get_roc_auc_curve(probs[:, 1], labels)
         # results.update({"roc_auc_curve": roc_auc_curve})
     else:
-        metrics = get_metrics(preds, labels, probs, class_names=[f"isup_{i}" for i in range(dataset.num_classes)], use_wandb=use_wandb)
+        metrics = get_metrics(
+            preds,
+            labels,
+            probs,
+            class_names=[f"isup_{i}" for i in range(dataset.num_classes)],
+            use_wandb=use_wandb,
+        )
 
     results.update(metrics)
 
@@ -967,7 +993,6 @@ def train_regression(
     num_workers: int = 0,
     use_wandb: bool = False,
 ):
-
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     model.train()
@@ -1001,9 +1026,7 @@ def train_regression(
         unit_scale=batch_size,
         leave=False,
     ) as t:
-
         for i, batch in enumerate(t):
-
             # optimizer.zero_grad()
             idx, x, label = batch
             x, label = x.to(device, non_blocking=True), label.to(
@@ -1032,7 +1055,12 @@ def train_regression(
 
     dataset.df.loc[idxs, f"pred"] = preds
 
-    metrics = get_metrics(preds, labels, class_names=[f"isup_{i}" for i in range(dataset.num_classes)], use_wandb=use_wandb)
+    metrics = get_metrics(
+        preds,
+        labels,
+        class_names=[f"isup_{i}" for i in range(dataset.num_classes)],
+        use_wandb=use_wandb,
+    )
     results.update(metrics)
 
     train_loss = epoch_loss / len(loader)
@@ -1051,7 +1079,6 @@ def tune_regression(
     num_workers: int = 0,
     use_wandb: bool = False,
 ):
-
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     model.eval()
@@ -1079,11 +1106,8 @@ def tune_regression(
         unit_scale=batch_size,
         leave=False,
     ) as t:
-
         with torch.no_grad():
-
             for i, batch in enumerate(t):
-
                 idx, x, label = batch
                 x, label = x.to(device, non_blocking=True), label.to(
                     device, non_blocking=True
@@ -1091,7 +1115,9 @@ def tune_regression(
                 logits = model(x)
                 loss = criterion(logits, label.unsqueeze(1))
 
-                pred = get_label_from_regression_logits(logits.cpu(), dataset.num_classes)
+                pred = get_label_from_regression_logits(
+                    logits.cpu(), dataset.num_classes
+                )
                 preds.extend(pred[:, 0].clone().tolist())
 
                 labels.extend(label.clone().tolist())
@@ -1101,7 +1127,12 @@ def tune_regression(
 
     dataset.df.loc[idxs, f"pred"] = preds
 
-    metrics = get_metrics(preds, labels, class_names=[f"isup_{i}" for i in range(dataset.num_classes)], use_wandb=use_wandb)
+    metrics = get_metrics(
+        preds,
+        labels,
+        class_names=[f"isup_{i}" for i in range(dataset.num_classes)],
+        use_wandb=use_wandb,
+    )
     results.update(metrics)
 
     tune_loss = epoch_loss / len(loader)
@@ -1118,7 +1149,6 @@ def test_regression(
     num_workers: int = 0,
     use_wandb: bool = False,
 ):
-
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     model.eval()
@@ -1145,18 +1175,17 @@ def test_regression(
         unit_scale=batch_size,
         leave=True,
     ) as t:
-
         with torch.no_grad():
-
             for i, batch in enumerate(t):
-
                 idx, x, label = batch
                 x, label = x.to(device, non_blocking=True), label.to(
                     device, non_blocking=True
                 )
                 logits = model(x)
 
-                pred = get_label_from_regression_logits(logits.cpu(), dataset.num_classes)
+                pred = get_label_from_regression_logits(
+                    logits.cpu(), dataset.num_classes
+                )
                 preds.extend(pred[:, 0].clone().tolist())
 
                 labels.extend(label.clone().tolist())
@@ -1164,7 +1193,12 @@ def test_regression(
 
     dataset.df.loc[idxs, f"pred"] = preds
 
-    metrics = get_metrics(preds, labels, class_names=[f"isup_{i}" for i in range(dataset.num_classes)], use_wandb=use_wandb)
+    metrics = get_metrics(
+        preds,
+        labels,
+        class_names=[f"isup_{i}" for i in range(dataset.num_classes)],
+        use_wandb=use_wandb,
+    )
     results.update(metrics)
 
     return results
@@ -1184,7 +1218,6 @@ def train_ordinal(
     num_workers: int = 0,
     use_wandb: bool = False,
 ):
-
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     model.train()
@@ -1218,9 +1251,7 @@ def train_ordinal(
         unit_scale=batch_size,
         leave=False,
     ) as t:
-
         for i, batch in enumerate(t):
-
             # optimizer.zero_grad()
             idx, x, label = batch
             x, label = x.to(device, non_blocking=True), label.to(
@@ -1250,7 +1281,12 @@ def train_ordinal(
 
     dataset.df.loc[idxs, f"pred"] = preds
 
-    metrics = get_metrics(preds, labels, class_names=[f"isup_{i}" for i in range(dataset.num_classes)], use_wandb=use_wandb)
+    metrics = get_metrics(
+        preds,
+        labels,
+        class_names=[f"isup_{i}" for i in range(dataset.num_classes)],
+        use_wandb=use_wandb,
+    )
     results.update(metrics)
 
     train_loss = epoch_loss / len(loader)
@@ -1270,7 +1306,6 @@ def tune_ordinal(
     num_workers: int = 0,
     use_wandb: bool = False,
 ):
-
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     model.eval()
@@ -1298,11 +1333,8 @@ def tune_ordinal(
         unit_scale=batch_size,
         leave=False,
     ) as t:
-
         with torch.no_grad():
-
             for i, batch in enumerate(t):
-
                 idx, x, label = batch
                 x, label = x.to(device, non_blocking=True), label.to(
                     device, non_blocking=True
@@ -1321,7 +1353,12 @@ def tune_ordinal(
 
     dataset.df.loc[idxs, f"pred"] = preds
 
-    metrics = get_metrics(preds, labels, class_names=[f"isup_{i}" for i in range(dataset.num_classes)], use_wandb=use_wandb)
+    metrics = get_metrics(
+        preds,
+        labels,
+        class_names=[f"isup_{i}" for i in range(dataset.num_classes)],
+        use_wandb=use_wandb,
+    )
     results.update(metrics)
 
     tune_loss = epoch_loss / len(loader)
@@ -1339,11 +1376,10 @@ def test_ordinal(
     num_workers: int = 0,
     use_wandb: bool = False,
 ):
-
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     model.eval()
-    probs = np.empty((0, dataset.num_classes-1))
+    probs = np.empty((0, dataset.num_classes - 1))
     preds, labels = [], []
     idxs = []
 
@@ -1367,11 +1403,8 @@ def test_ordinal(
         unit_scale=batch_size,
         leave=True,
     ) as t:
-
         with torch.no_grad():
-
             for i, batch in enumerate(t):
-
                 idx, x, label = batch
                 x, label = x.to(device, non_blocking=True), label.to(
                     device, non_blocking=True
@@ -1390,7 +1423,12 @@ def test_ordinal(
     for class_idx, p in enumerate(probs.T):
         dataset.df.loc[idxs, f"prob_{class_idx}"] = p.tolist()
 
-    metrics = get_metrics(preds, labels, class_names=[f"isup_{i}" for i in range(dataset.num_classes)], use_wandb=use_wandb)
+    metrics = get_metrics(
+        preds,
+        labels,
+        class_names=[f"isup_{i}" for i in range(dataset.num_classes)],
+        use_wandb=use_wandb,
+    )
     results.update(metrics)
 
     return results
@@ -1408,7 +1446,6 @@ def train_survival(
     gradient_accumulation: Optional[int] = None,
     num_workers: int = 0,
 ):
-
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     model.train()
@@ -1452,9 +1489,7 @@ def train_survival(
         unit_scale=batch_size,
         leave=False,
     ) as t:
-
         for i, batch in enumerate(t):
-
             if dataset.use_coords:
                 idx, x, coords, label, event_time, c = batch
                 if agg_method == "concat":
@@ -1479,7 +1514,7 @@ def train_survival(
             )
 
             if dataset.use_coords:
-                logits = model(x, coords)   # [1, nbins]
+                logits = model(x, coords)  # [1, nbins]
             else:
                 logits = model(x)  # [1, nbins]
 
@@ -1534,7 +1569,6 @@ def tune_survival(
     batch_size: Optional[int] = 1,
     num_workers: int = 0,
 ):
-
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     model.eval()
@@ -1571,11 +1605,8 @@ def tune_survival(
         unit_scale=batch_size,
         leave=False,
     ) as t:
-
         with torch.no_grad():
-
             for i, batch in enumerate(t):
-
                 if dataset.use_coords:
                     idx, x, coords, label, event_time, c = batch
                     if agg_method == "concat":
@@ -1643,7 +1674,6 @@ def test_survival(
     batch_size: Optional[int] = 1,
     num_workers: int = 0,
 ):
-
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     model.eval()
@@ -1679,11 +1709,8 @@ def test_survival(
         unit_scale=batch_size,
         leave=True,
     ) as t:
-
         with torch.no_grad():
-
             for i, batch in enumerate(t):
-
                 if dataset.use_coords:
                     idx, x, coords, _, event_time, c = batch
                     if agg_method == "concat":

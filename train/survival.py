@@ -38,7 +38,6 @@ from source.utils import (
     version_base="1.2.0", config_path="../config/training/survival", config_name="debug"
 )
 def main(cfg: DictConfig):
-
     run_id = datetime.datetime.now().strftime("%Y-%m-%d_%H_%M")
     # set up wandb
     if cfg.wandb.enable:
@@ -60,7 +59,11 @@ def main(cfg: DictConfig):
     features_dir = Path(cfg.features_dir)
 
     tiles_df = None
-    if cfg.model.slide_pos_embed.type == "2d" and cfg.model.slide_pos_embed.use and cfg.model.agg_method:
+    if (
+        cfg.model.slide_pos_embed.type == "2d"
+        and cfg.model.slide_pos_embed.use
+        and cfg.model.agg_method
+    ):
         tiles_df = pd.read_csv(cfg.data.tiles_csv)
 
     print("Loading data")
@@ -84,34 +87,45 @@ def main(cfg: DictConfig):
         slide_dfs[p] = slide_df[slide_df.partition == p]
 
     train_dataset_options = SurvivalDatasetOptions(
-        patient_df = patient_dfs["train"],
-        slide_df = slide_dfs["train"],
-        tiles_df = tiles_df,
-        features_dir = features_dir,
-        label_name = cfg.label_name,
+        patient_df=patient_dfs["train"],
+        slide_df=slide_dfs["train"],
+        tiles_df=tiles_df,
+        features_dir=features_dir,
+        label_name=cfg.label_name,
     )
     tune_dataset_options = SurvivalDatasetOptions(
-        patient_df = patient_dfs["tune"],
-        slide_df = slide_dfs["tune"],
-        tiles_df = tiles_df,
-        features_dir = features_dir,
-        label_name = cfg.label_name,
+        patient_df=patient_dfs["tune"],
+        slide_df=slide_dfs["tune"],
+        tiles_df=tiles_df,
+        features_dir=features_dir,
+        label_name=cfg.label_name,
     )
     test_dataset_options = SurvivalDatasetOptions(
-        patient_df = patient_dfs["test"],
-        slide_df = slide_dfs["test"],
-        tiles_df = tiles_df,
-        features_dir = features_dir,
-        label_name = cfg.label_name,
+        patient_df=patient_dfs["test"],
+        slide_df=slide_dfs["test"],
+        tiles_df=tiles_df,
+        features_dir=features_dir,
+        label_name=cfg.label_name,
     )
 
-    train_dataset = DatasetFactory("survival", train_dataset_options, cfg.model.agg_method).get_dataset()
-    tune_dataset = DatasetFactory("survival", tune_dataset_options, cfg.model.agg_method).get_dataset()
-    test_dataset = DatasetFactory("survival", test_dataset_options, cfg.model.agg_method).get_dataset()
+    train_dataset = DatasetFactory(
+        "survival", train_dataset_options, cfg.model.agg_method
+    ).get_dataset()
+    tune_dataset = DatasetFactory(
+        "survival", tune_dataset_options, cfg.model.agg_method
+    ).get_dataset()
+    test_dataset = DatasetFactory(
+        "survival", test_dataset_options, cfg.model.agg_method
+    ).get_dataset()
 
     print("Configuring model")
     model = ModelFactory(
-        cfg.level, num_classes=cfg.nbins, task="survival", loss=cfg.loss, label_encoding=cfg.label_encoding, model_options=cfg.model
+        cfg.level,
+        num_classes=cfg.nbins,
+        task="survival",
+        loss=cfg.loss,
+        label_encoding=cfg.label_encoding,
+        model_options=cfg.model,
     ).get_model()
     model.relocate()
     print(model)
@@ -144,19 +158,17 @@ def main(cfg: DictConfig):
         ncols=100,
         leave=True,
     ) as t:
-
         for epoch in t:
-
             # set dataset seed
             train_dataset.seed = epoch
             tune_dataset.seed = epoch
 
             epoch_start_time = time.time()
             if cfg.wandb.enable:
-                log_dict = {"epoch": epoch+1}
+                log_dict = {"epoch": epoch + 1}
 
             train_results = train_survival(
-                epoch+1,
+                epoch + 1,
                 model,
                 train_dataset,
                 optimizer,
@@ -177,9 +189,8 @@ def main(cfg: DictConfig):
             )
 
             if epoch % cfg.tuning.tune_every == 0:
-
                 tune_results = tune_survival(
-                    epoch+1,
+                    epoch + 1,
                     model,
                     tune_dataset,
                     criterion,
@@ -221,7 +232,7 @@ def main(cfg: DictConfig):
 
             # logging
             if cfg.wandb.enable:
-                wandb.log(log_dict, step=epoch+1)
+                wandb.log(log_dict, step=epoch + 1)
 
             epoch_end_time = time.time()
             epoch_mins, epoch_secs = compute_time(epoch_start_time, epoch_end_time)
@@ -237,9 +248,7 @@ def main(cfg: DictConfig):
 
     if cfg.testing.run_testing:
         # load best model
-        best_model_fp = Path(
-            checkpoint_dir, f"{cfg.testing.retrieve_checkpoint}.pt"
-        )
+        best_model_fp = Path(checkpoint_dir, f"{cfg.testing.retrieve_checkpoint}.pt")
         if cfg.wandb.enable:
             wandb.save(str(best_model_fp))
         best_model_sd = torch.load(best_model_fp)
@@ -268,5 +277,4 @@ def main(cfg: DictConfig):
 
 
 if __name__ == "__main__":
-
     main()

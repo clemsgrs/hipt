@@ -218,7 +218,6 @@ class VisionTransformer(nn.Module):
         drop_path_rate: float = 0.0,
         norm_layer: Callable = nn.LayerNorm,
     ):
-
         super().__init__()
         self.embed_dim = embed_dim
         self.num_heads = num_heads
@@ -429,7 +428,6 @@ class VisionTransformer4K(nn.Module):
         drop_path_rate: float = 0.0,
         norm_layer: Callable = nn.LayerNorm,
     ):
-
         super().__init__()
         self.embed_dim = output_embed_dim
         self.num_heads = num_heads
@@ -522,7 +520,6 @@ class VisionTransformer4K(nn.Module):
         )  # [1, 1+256, 192]
 
     def prepare_tokens(self, x):
-
         # x = [M, 384, 16, 16]
         B, embed_dim, w, h = x.shape
         x = x.flatten(2, 3).transpose(1, 2)  # [M, npatch**2, 384]

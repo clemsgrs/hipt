@@ -15,14 +15,18 @@ from torchvision import transforms
 
 from source.dataset import RegionFilepathsDataset
 from source.models import GlobalFeatureExtractor, LocalFeatureExtractor
-from source.utils import initialize_wandb, initialize_df, collate_region_filepaths, is_main_process
+from source.utils import (
+    initialize_wandb,
+    initialize_df,
+    collate_region_filepaths,
+    is_main_process,
+)
 
 
 @hydra.main(
     version_base="1.2.0", config_path="config/feature_extraction", config_name="default"
 )
 def main(cfg: DictConfig):
-
     distributed = torch.cuda.device_count() > 1
     if distributed:
         torch.distributed.init_process_group(backend="nccl")
@@ -46,7 +50,9 @@ def main(cfg: DictConfig):
 
     if distributed:
         obj = [run_id]
-        torch.distributed.broadcast_object_list(obj, 0, device=torch.device(f"cuda:{gpu_id}"))
+        torch.distributed.broadcast_object_list(
+            obj, 0, device=torch.device(f"cuda:{gpu_id}")
+        )
         run_id = obj[0]
 
     output_dir = Path(cfg.output_dir, cfg.experiment_name, run_id)
@@ -112,7 +118,7 @@ def main(cfg: DictConfig):
             f"{len(dataset)}",
             "--log_to_wandb",
             "--id",
-            f"{run_id}"
+            f"{run_id}",
         ]
         subprocess.Popen(command_line)
 
@@ -155,11 +161,8 @@ def main(cfg: DictConfig):
         leave=True,
         disable=not (gpu_id in [-1, 0]),
     ) as t1:
-
         with torch.no_grad():
-
             for i, batch in enumerate(t1):
-
                 idx, region_fps, slide_id = batch
                 slide_ids.append(slide_id)
                 features = []
@@ -173,11 +176,9 @@ def main(cfg: DictConfig):
                     leave=False,
                     disable=not (gpu_id in [-1, 0]),
                 ) as t2:
-
                     for fp in t2:
-
                         x_y = Path(fp).stem
-                        x, y = int(x_y.split('_')[0]), int(x_y.split('_')[1])
+                        x, y = int(x_y.split("_")[0]), int(x_y.split("_")[1])
                         x_coords.append(x)
                         y_coords.append(y)
                         img = Image.open(fp)
@@ -186,7 +187,9 @@ def main(cfg: DictConfig):
                         img = img.to(device, non_blocking=True)
                         feature = model(img)
                         if cfg.save_region_features:
-                            save_path = Path(region_features_dir, f"{slide_id}_{x}_{y}.pt")
+                            save_path = Path(
+                                region_features_dir, f"{slide_id}_{x}_{y}.pt"
+                            )
                             torch.save(feature, save_path)
                             region_feature_paths.append(save_path.resolve())
                             region_slide_ids.append(slide_id)
@@ -200,32 +203,36 @@ def main(cfg: DictConfig):
                 if cfg.wandb.enable and not distributed:
                     wandb.log({"processed": i + 1})
 
-    slide_features_df = pd.DataFrame.from_dict({
-        'feature_path': slide_feature_paths,
-        'slide_id': slide_ids,
-        'level': [f'{cfg.level}']*len(slide_ids),
-        'tile_size': [cfg.region_size]*len(slide_ids),
-    })
+    slide_features_df = pd.DataFrame.from_dict(
+        {
+            "feature_path": slide_feature_paths,
+            "slide_id": slide_ids,
+            "level": [f"{cfg.level}"] * len(slide_ids),
+            "tile_size": [cfg.region_size] * len(slide_ids),
+        }
+    )
 
     if distributed:
-        slide_features_csv_path = Path(output_dir, f'slide_features_{gpu_id}.csv')
+        slide_features_csv_path = Path(output_dir, f"slide_features_{gpu_id}.csv")
     else:
-        slide_features_csv_path = Path(output_dir, f'slide_features.csv')
+        slide_features_csv_path = Path(output_dir, f"slide_features.csv")
     slide_features_df.to_csv(slide_features_csv_path, index=False)
 
     if cfg.save_region_features:
-        region_features_df = pd.DataFrame.from_dict({
-            'feature_path': region_feature_paths,
-            'slide_id': region_slide_ids,
-            'level': [f'{cfg.level}']*len(region_slide_ids),
-            'tile_size': [cfg.region_size]*len(region_slide_ids),
-            'x': x_coords,
-            'y': y_coords,
-        })
+        region_features_df = pd.DataFrame.from_dict(
+            {
+                "feature_path": region_feature_paths,
+                "slide_id": region_slide_ids,
+                "level": [f"{cfg.level}"] * len(region_slide_ids),
+                "tile_size": [cfg.region_size] * len(region_slide_ids),
+                "x": x_coords,
+                "y": y_coords,
+            }
+        )
         if distributed:
-            region_features_csv_path = Path(output_dir, f'region_features_{gpu_id}.csv')
+            region_features_csv_path = Path(output_dir, f"region_features_{gpu_id}.csv")
         else:
-            region_features_csv_path = Path(output_dir, f'region_features.csv')
+            region_features_csv_path = Path(output_dir, f"region_features.csv")
         region_features_df.to_csv(region_features_csv_path, index=False)
 
     if distributed:
@@ -235,28 +242,31 @@ def main(cfg: DictConfig):
             if cfg.save_region_features:
                 region_dfs = []
             for gpu_id in range(torch.cuda.device_count()):
-                slide_fp = Path(output_dir, f'slide_features_{gpu_id}.csv')
+                slide_fp = Path(output_dir, f"slide_features_{gpu_id}.csv")
                 slide_df = pd.read_csv(slide_fp)
                 slide_dfs.append(slide_df)
                 os.remove(slide_fp)
                 if cfg.save_region_features:
-                    region_fp = Path(output_dir, f'region_features_{gpu_id}.csv')
+                    region_fp = Path(output_dir, f"region_features_{gpu_id}.csv")
                     region_df = pd.read_csv(region_fp)
                     region_dfs.append(region_df)
                     os.remove(region_fp)
             slide_features_df = pd.concat(slide_dfs, ignore_index=True)
             slide_features_df = slide_features_df.drop_duplicates()
-            slide_features_df.to_csv(Path(output_dir, f'slide_features.csv'), index=False)
+            slide_features_df.to_csv(
+                Path(output_dir, f"slide_features.csv"), index=False
+            )
             if cfg.save_region_features:
                 region_features_df = pd.concat(region_dfs, ignore_index=True)
                 region_features_df = region_features_df.drop_duplicates()
-                region_features_df.to_csv(Path(output_dir, f'region_features.csv'), index=False)
+                region_features_df.to_csv(
+                    Path(output_dir, f"region_features.csv"), index=False
+                )
 
     if cfg.wandb.enable and is_main_process() and distributed:
         wandb.log({"processed": len(slide_features_df)})
 
 
 if __name__ == "__main__":
-
     # python3 -m torch.distributed.run --standalone --nproc_per_node=gpu extract_features.py --config-name 'debug'
     main()

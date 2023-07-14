@@ -10,7 +10,7 @@ from source.utils import get_device
 
 
 def cantor_diagonal(p: int, q: int):
-    return (p+q)*(1+p+q)/2+q
+    return (p + q) * (1 + p + q) / 2 + q
 
 
 class PositionalEncoderFactory:
@@ -20,42 +20,58 @@ class PositionalEncoderFactory:
         learned: bool,
         options: Optional[DictConfig] = None,
     ):
-
         if type == "1d":
             if learned:
                 self.pos_encoder = PositionalEmbedding(options.dim, options.max_seq_len)
             else:
-                self.pos_encoder = PositionalEncoding(options.dim, options.dropout, options.max_seq_len)
+                self.pos_encoder = PositionalEncoding(
+                    options.dim, options.dropout, options.max_seq_len
+                )
         elif type == "2d":
             if learned:
                 if options.agg_method == "concat":
-                    self.pos_encoder = ConcatPositionalEmbedding2d(options.tile_size, options.dim, options.max_seq_len, options.max_nslide)
+                    self.pos_encoder = ConcatPositionalEmbedding2d(
+                        options.tile_size,
+                        options.dim,
+                        options.max_seq_len,
+                        options.max_nslide,
+                    )
                 elif options.agg_method == "self_att":
-                    self.pos_encoder = PositionalEmbedding2d(options.tile_size, options.dim, options.max_seq_len)
+                    self.pos_encoder = PositionalEmbedding2d(
+                        options.tile_size, options.dim, options.max_seq_len
+                    )
             else:
                 if options.agg_method == "concat":
-                    self.pos_encoder = ConcatPositionalEncoding2d(options.dim, options.dropout, options.max_seq_len, options.max_nslide)
+                    self.pos_encoder = ConcatPositionalEncoding2d(
+                        options.dim,
+                        options.dropout,
+                        options.max_seq_len,
+                        options.max_nslide,
+                    )
                 elif options.agg_method == "self_att":
-                    self.pos_encoder = PositionalEncoding2d(options.dim, options.dropout, options.max_seq_len)
+                    self.pos_encoder = PositionalEncoding2d(
+                        options.dim, options.dropout, options.max_seq_len
+                    )
         else:
-           raise ValueError(f"cfg.model.slide_pos_embed.type ({type}) not supported")
+            raise ValueError(f"cfg.model.slide_pos_embed.type ({type}) not supported")
 
     def get_pos_encoder(self):
         return self.pos_encoder
 
 
 class PositionalEncoding(nn.Module):
-
     def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 5000):
         super().__init__()
         self.dropout = nn.Dropout(p=dropout)
 
         position = torch.arange(max_len).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model))
+        div_term = torch.exp(
+            torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model)
+        )
         pe = torch.zeros(max_len, 1, d_model)
         pe[:, 0, 0::2] = torch.sin(position * div_term)
         pe[:, 0, 1::2] = torch.cos(position * div_term)
-        self.register_buffer('pe', pe)
+        self.register_buffer("pe", pe)
 
     def forward(self, x):
         """
@@ -63,26 +79,27 @@ class PositionalEncoding(nn.Module):
             x: Tensor, shape [seq_len, embedding_dim]
         """
         x = x.unsqueeze(1)
-        x = x + self.pe[:x.size(0)]
+        x = x + self.pe[: x.size(0)]
         return self.dropout(x).squeeze(1)
 
 
 class PositionalEncoding2d(nn.Module):
-
     def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 1000):
         super().__init__()
         self.dropout = nn.Dropout(p=dropout)
 
         X = torch.arange(max_len)
         Y = torch.arange(max_len)
-        div_term = torch.exp(torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model))
+        div_term = torch.exp(
+            torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model)
+        )
         pe = torch.zeros(max_len, max_len, d_model)
         for x in X:
             for y in Y:
-                position = cantor_diagonal(x,y)
+                position = cantor_diagonal(x, y)
                 pe[x, y, 0::2] = torch.sin(position * div_term)
                 pe[x, y, 1::2] = torch.cos(position * div_term)
-        self.register_buffer('pe', pe)
+        self.register_buffer("pe", pe)
 
     def forward(self, x, coords):
         """
@@ -90,33 +107,42 @@ class PositionalEncoding2d(nn.Module):
             x: Tensor, shape [seq_len, embedding_dim]
             coords: Tensor, shape [seq_len, 2]
         """
-        x = x + self.pe[coords[:,0], coords[:,1]]
+        x = x + self.pe[coords[:, 0], coords[:, 1]]
         return self.dropout(x)
 
 
 class ConcatPositionalEncoding2d(nn.Module):
-
-    def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 1000, max_nslide: int = 10):
+    def __init__(
+        self,
+        d_model: int,
+        dropout: float = 0.1,
+        max_len: int = 1000,
+        max_nslide: int = 10,
+    ):
         super().__init__()
         self.dropout = nn.Dropout(p=dropout)
 
         X = torch.arange(max_len)
         Y = torch.arange(max_len)
-        div_term = torch.exp(torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model))
+        div_term = torch.exp(
+            torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model)
+        )
         pe = torch.zeros(max_len, max_len, d_model)
         for x in X:
             for y in Y:
-                position = cantor_diagonal(x,y)
+                position = cantor_diagonal(x, y)
                 pe[x, y, 0::2] = torch.sin(position * div_term)
                 pe[x, y, 1::2] = torch.cos(position * div_term)
-        self.register_buffer('pe', pe)
+        self.register_buffer("pe", pe)
 
         slide_pos = torch.arange(max_nslide).unsqueeze(1)
-        slide_div_term = torch.exp(torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model))
+        slide_div_term = torch.exp(
+            torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model)
+        )
         slide_pe = torch.zeros(max_nslide, 1, d_model)
         slide_pe[:, 0, 0::2] = torch.sin(slide_pos * slide_div_term)
         slide_pe[:, 0, 1::2] = torch.cos(slide_pos * slide_div_term)
-        self.register_buffer('slide_pe', slide_pe.squeeze(1))
+        self.register_buffer("slide_pe", slide_pe.squeeze(1))
 
     def forward(self, x, coords):
         """
@@ -125,12 +151,11 @@ class ConcatPositionalEncoding2d(nn.Module):
             coords: Tensor, shape [seq_len, 3]
         """
         slide_idx, coord = coords[:, 0], coords[:, 1:]
-        x = x + self.pe[coord[:,0], coord[:,1]] + self.slide_pe[slide_idx]
+        x = x + self.pe[coord[:, 0], coord[:, 1]] + self.slide_pe[slide_idx]
         return self.dropout(x)
 
 
 class PositionalEmbedding(nn.Module):
-
     def __init__(self, dim: int, max_len: int = 3000, gpu_id: int = -1):
         super().__init__()
         device = get_device(gpu_id)
@@ -150,16 +175,15 @@ class PositionalEmbedding(nn.Module):
 
 
 class PositionalEmbedding2d(nn.Module):
-
     def __init__(self, tile_size: int, dim: int, max_len: int = 512):
         super().__init__()
         self.tile_size = tile_size
-        self.embedder_x = nn.Embedding(max_len, dim//2)
-        self.embedder_y = nn.Embedding(max_len, dim//2)
+        self.embedder_x = nn.Embedding(max_len, dim // 2)
+        self.embedder_y = nn.Embedding(max_len, dim // 2)
 
     def get_grid_values(self, coords: np.ndarray):
         m = coords.min()
-        grid_coords = torch.div(coords-m, self.tile_size, rounding_mode='floor')
+        grid_coords = torch.div(coords - m, self.tile_size, rounding_mode="floor")
         return grid_coords
 
     def forward(self, x, coords):
@@ -168,8 +192,8 @@ class PositionalEmbedding2d(nn.Module):
             x: Tensor, shape [seq_len, embedding_dim]
             coords: Tensor, shape [seq_len, 3]
         """
-        coord_x = self.get_grid_values(coords[:,1])
-        coord_y = self.get_grid_values(coords[:,2])
+        coord_x = self.get_grid_values(coords[:, 1])
+        coord_y = self.get_grid_values(coords[:, 2])
         embedding_x = self.embedder_x(coord_x)
         embedding_y = self.embedder_y(coord_y)
         position_embedding = torch.cat([embedding_x, embedding_y], dim=1)
@@ -178,17 +202,18 @@ class PositionalEmbedding2d(nn.Module):
 
 
 class ConcatPositionalEmbedding2d(nn.Module):
-
-    def __init__(self, tile_size: int, dim: int, max_len: int = 512, max_nslide: int = 10):
+    def __init__(
+        self, tile_size: int, dim: int, max_len: int = 512, max_nslide: int = 10
+    ):
         super().__init__()
         self.tile_size = tile_size
-        self.embedder_x = nn.Embedding(max_len, dim//2)
-        self.embedder_y = nn.Embedding(max_len, dim//2)
+        self.embedder_x = nn.Embedding(max_len, dim // 2)
+        self.embedder_y = nn.Embedding(max_len, dim // 2)
         self.embedder_slide_pos = nn.Embedding(max_nslide, dim)
 
     def get_grid_values(self, coords: np.ndarray):
         m = coords.min()
-        grid_coords = torch.div(coords-m, self.tile_size, rounding_mode='floor')
+        grid_coords = torch.div(coords - m, self.tile_size, rounding_mode="floor")
         return grid_coords
 
     def forward(self, x, coords):
@@ -198,8 +223,8 @@ class ConcatPositionalEmbedding2d(nn.Module):
             coords: Tensor, shape [seq_len, 3]
         """
         slide_idx, coord = coords[:, 0], coords[:, 1:]
-        coord_x = self.get_grid_values(coord[:,0])
-        coord_y = self.get_grid_values(coord[:,1])
+        coord_x = self.get_grid_values(coord[:, 0])
+        coord_y = self.get_grid_values(coord[:, 1])
         embedding_x = self.embedder_x(coord_x)
         embedding_y = self.embedder_y(coord_y)
         position_embedding = torch.cat([embedding_x, embedding_y], dim=1)

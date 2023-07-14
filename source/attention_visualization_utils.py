@@ -28,7 +28,6 @@ def get_patch_model(
     arch: str = "vit_small",
     device: Optional[torch.device] = None,
 ):
-
     checkpoint_key = "teacher"
     if device is None:
         device = (
@@ -65,13 +64,14 @@ def get_region_model(
     patch_size: int = 256,
     device: Optional[torch.device] = None,
 ):
-
     checkpoint_key = "teacher"
     if device is None:
         device = (
             torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
         )
-    region_model = vits.__dict__[arch](img_size=region_size, patch_size=patch_size, num_classes=0)
+    region_model = vits.__dict__[arch](
+        img_size=region_size, patch_size=patch_size, num_classes=0
+    )
     for p in region_model.parameters():
         p.requires_grad = False
     region_model.eval()
@@ -101,7 +101,6 @@ class SlideAgg(nn.Module):
         embed_dim_region: int = 192,
         dropout: float = 0.25,
     ):
-
         super(SlideAgg, self).__init__()
 
         # Global Aggregation
@@ -126,9 +125,7 @@ class SlideAgg(nn.Module):
             *[nn.Linear(192, 192), nn.ReLU(), nn.Dropout(dropout)]
         )
 
-
     def forward(self, x, return_attention: bool = False):
-
         # x = [M, 192]
         x = self.global_phi(x)
 
@@ -149,7 +146,6 @@ def get_slide_model(
     state_dict,
     device: Optional[torch.device] = None,
 ):
-
     slide_model = SlideAgg()
     for p in slide_model.parameters():
         p.requires_grad = False
@@ -337,7 +333,6 @@ def DrawMapFromCoords(
     thickness: int = 2,
     verbose: bool = False,
 ):
-
     downsamples = wsi_object.level_downsamples[vis_level]
     if indices is None:
         indices = np.arange(len(coords))
@@ -350,7 +345,6 @@ def DrawMapFromCoords(
         print(f"downscaled patch size: {patch_size}")
 
     for idx in range(total):
-
         patch_id = indices[idx]
         coord = coords[patch_id]
         x, y = coord
@@ -465,7 +459,6 @@ def create_patch_heatmaps_indiv(
     offset_ = offset
 
     if granular:
-
         offset = int(offset_ * patch_size / 256)
         patch2 = add_margin(
             patch.crop((offset, offset, patch_size, patch_size)),
@@ -491,9 +484,7 @@ def create_patch_heatmaps_indiv(
         unit=" head",
         leave=True,
     ) as t:
-
         for i in t:
-
             att_scores = normalize_patch_scores(att[:, i, :, :], size=(patch_size,) * 2)
 
             if granular:
@@ -509,9 +500,8 @@ def create_patch_heatmaps_indiv(
                 patch_overlay = np.ones_like(att_scores_2) * 100
                 patch_overlay[offset:patch_size, offset:patch_size] += 100
                 att_scores = (att_scores + new_att_scores_2) / patch_overlay
-            
-            if threshold != None:
 
+            if threshold != None:
                 att_mask = att_scores.copy()
                 att_mask[att_mask < threshold] = 0
                 att_mask[att_mask >= threshold] = 0.95
@@ -578,7 +568,6 @@ def create_patch_heatmaps_concat(
     offset_ = offset
 
     if granular:
-
         offset = int(offset_ * patch_size / 256)
         patch2 = add_margin(
             patch.crop((offset, offset, patch_size, patch_size)),
@@ -606,9 +595,7 @@ def create_patch_heatmaps_concat(
         unit=" head",
         leave=True,
     ) as t:
-
         for i in t:
-
             att_scores = normalize_patch_scores(att[:, i, :, :], size=(patch_size,) * 2)
 
             if granular:
@@ -626,7 +613,6 @@ def create_patch_heatmaps_concat(
                 att_scores = (att_scores + new_att_scores_2) / patch_overlay
 
             if threshold != None:
-
                 att_mask = att_scores.copy()
                 att_mask[att_mask < threshold] = 0
                 att_mask[att_mask >= threshold] = 0.95
@@ -662,7 +648,8 @@ def create_patch_heatmaps_concat(
     concat_img.save(Path(output_dir, f"{fname}_{patch_size}_hm.png"))
 
     concat_img_thresh = getConcatImage(
-        [getConcatImage(hms_thresh[0:3]), getConcatImage(hms_thresh[3:6])], how="vertical"
+        [getConcatImage(hms_thresh[0:3]), getConcatImage(hms_thresh[3:6])],
+        how="vertical",
     )
     concat_img_thresh.save(Path(output_dir, f"{fname}_{patch_size}_thresh.png"))
 
@@ -815,7 +802,6 @@ def create_hierarchical_heatmaps_indiv(
     )  # (n_patch**2, nhead, patch_size, patch_size) when downscale = 1
 
     if granular:
-
         offset = int(offset_ * region_size / 4096)
         region2 = add_margin(
             region.crop((offset, offset, region_size, region_size)),
@@ -889,9 +875,7 @@ def create_hierarchical_heatmaps_indiv(
         unit=" head",
         leave=True,
     ) as t:
-
         for i in t:
-
             patch_att_scores = concat_patch_scores(
                 patch_att[:, i, :, :],
                 region_size=region_size,
@@ -919,7 +903,6 @@ def create_hierarchical_heatmaps_indiv(
                 ) / patch_overlay
 
             if threshold != None:
-
                 thresh_output_dir = Path(output_dir, f"{fname}_{patch_size}_thresh")
                 thresh_output_dir.mkdir(exist_ok=True, parents=True)
 
@@ -955,7 +938,7 @@ def create_hierarchical_heatmaps_indiv(
                 save_region.copy(),
             )
             img = Image.fromarray(patch_hm)
-            img.save(Path(patch_output_dir, f"head_{i}.png"))     
+            img.save(Path(patch_output_dir, f"head_{i}.png"))
 
     region_output_dir = Path(output_dir, f"{fname}_{region_size}")
     region_output_dir.mkdir(exist_ok=True, parents=True)
@@ -966,9 +949,7 @@ def create_hierarchical_heatmaps_indiv(
         unit=" head",
         leave=True,
     ) as t:
-
         for j in t:
-
             region_att_scores = concat_region_scores(region_att[j], size=(s,) * 2)
 
             if granular:
@@ -1007,10 +988,11 @@ def create_hierarchical_heatmaps_indiv(
                     + new_region_att_scores_3
                     + new_region_att_scores_4
                 ) / region_overlay
-            
-            if threshold != None:
 
-                thresh_region_output_dir = Path(output_dir, f"{fname}_{region_size}_thresh")
+            if threshold != None:
+                thresh_region_output_dir = Path(
+                    output_dir, f"{fname}_{region_size}_thresh"
+                )
                 thresh_region_output_dir.mkdir(exist_ok=True, parents=True)
 
                 att_mask = region_att_scores.copy()
@@ -1056,9 +1038,7 @@ def create_hierarchical_heatmaps_indiv(
         unit=" head",
         leave=True,
     ) as t1:
-
         for j in t1:
-
             region_att_scores = concat_region_scores(region_att[j], size=(s,) * 2)
 
             if granular:
@@ -1104,9 +1084,7 @@ def create_hierarchical_heatmaps_indiv(
                 unit=" head",
                 leave=False,
             ) as t2:
-
                 for i in t2:
-
                     patch_att_scores = concat_patch_scores(
                         patch_att[:, i, :, :],
                         region_size=region_size,
@@ -1145,9 +1123,12 @@ def create_hierarchical_heatmaps_indiv(
                         score = (region_att_scores + patch_att_scores) / 2
 
                     if threshold != None:
-
-                        thresh_hierarchical_output_dir = Path(output_dir, f"{fname}_{region_size}_{patch_size}_thresh")
-                        thresh_hierarchical_output_dir.mkdir(exist_ok=True, parents=True)
+                        thresh_hierarchical_output_dir = Path(
+                            output_dir, f"{fname}_{region_size}_{patch_size}_thresh"
+                        )
+                        thresh_hierarchical_output_dir.mkdir(
+                            exist_ok=True, parents=True
+                        )
 
                         att_mask = score.copy()
                         att_mask[att_mask < threshold] = 0
@@ -1167,7 +1148,12 @@ def create_hierarchical_heatmaps_indiv(
                         img_inverse[att_mask == 0.95] = 0
                         hm = hm + img_inverse
                         img = Image.fromarray(hm)
-                        img.save(Path(thresh_hierarchical_output_dir, f"rhead_{j}_phead_{i}.png"))
+                        img.save(
+                            Path(
+                                thresh_hierarchical_output_dir,
+                                f"rhead_{j}_phead_{i}.png",
+                            )
+                        )
 
                     color_block = (cmap(score) * 255)[:, :, :3].astype(np.uint8)
                     hm = cv2.addWeighted(
@@ -1235,7 +1221,6 @@ def create_hierarchical_heatmaps_concat(
     )  # (256, 6, 128, 128), (6, 2048, 2048) when downscale = 2
 
     if granular:
-
         offset = int(offset_ * region_size / 4096)
         region2 = add_margin(
             region.crop((offset, offset, region_size, region_size)),
@@ -1308,9 +1293,7 @@ def create_hierarchical_heatmaps_concat(
         unit=" head",
         leave=True,
     ) as t1:
-
         for j in t1:
-
             region_att_scores_1 = concat_region_scores(
                 region_att[j], size=(s,) * 2
             )  # (2048, 2048) for downscale = 2
@@ -1371,9 +1354,7 @@ def create_hierarchical_heatmaps_concat(
                 unit=" head",
                 leave=False,
             ) as t2:
-
                 for i in t2:
-
                     patch_att_scores = concat_patch_scores(
                         patch_att[:, i, :, :],
                         region_size=region_size,
@@ -1507,7 +1488,11 @@ def get_slide_patch_level_heatmaps(
         fp for fp in Path(region_dir, slide_id, "imgs").glob(f"*.{region_fmt}")
     ]
     nregions = len(region_paths)
-    patch_heatmaps, patch_heatmaps_thresh, coords = defaultdict(list), defaultdict(list), defaultdict(list)
+    patch_heatmaps, patch_heatmaps_thresh, coords = (
+        defaultdict(list),
+        defaultdict(list),
+        defaultdict(list),
+    )
 
     nhead_patch = patch_model.num_heads
     offset_ = offset
@@ -1520,9 +1505,7 @@ def get_slide_patch_level_heatmaps(
         position=0,
         disable=not main_process,
     ) as t1:
-
         for k, fp in enumerate(t1):
-
             region = Image.open(fp)
             region_size = region.size[0]
             n_patch = region_size // patch_size
@@ -1539,7 +1522,6 @@ def get_slide_patch_level_heatmaps(
             )
 
             if granular:
-
                 offset = int(offset_ * region_size / 4096)
                 region2 = add_margin(
                     region.crop((offset, offset, region_size, region_size)),
@@ -1571,9 +1553,7 @@ def get_slide_patch_level_heatmaps(
                 leave=True,
                 disable=not main_process,
             ) as t2:
-
                 for i in t2:
-
                     patch_hm_output_dir = Path(
                         patch_output_dir, f"{patch_size}", f"head_{i}"
                     )
@@ -1607,9 +1587,8 @@ def get_slide_patch_level_heatmaps(
                         patch_att_scores = (
                             patch_att_scores + new_patch_att_scores_2
                         ) / patch_overlay
-                    
-                    if threshold != None:
 
+                    if threshold != None:
                         thresh_patch_hm_output_dir = Path(
                             patch_output_dir, f"{patch_size}", f"head_{i}_thresh"
                         )
@@ -1639,9 +1618,9 @@ def get_slide_patch_level_heatmaps(
                             img = Image.fromarray(patch_hm)
                             img.save(Path(thresh_patch_hm_output_dir, f"{x}_{y}.png"))
 
-                    patch_color_block = (cmap(patch_att_scores) * 255)[
-                        :, :, :3
-                    ].astype(np.uint8)
+                    patch_color_block = (cmap(patch_att_scores) * 255)[:, :, :3].astype(
+                        np.uint8
+                    )
                     patch_hm = cv2.addWeighted(
                         patch_color_block,
                         alpha,
@@ -1699,7 +1678,11 @@ def get_slide_region_level_heatmaps(
         fp for fp in Path(region_dir, slide_id, "imgs").glob(f"*.{region_fmt}")
     ]
     nregions = len(region_paths)
-    region_heatmaps, region_heatmaps_thresh, coords = defaultdict(list), defaultdict(list), defaultdict(list)
+    region_heatmaps, region_heatmaps_thresh, coords = (
+        defaultdict(list),
+        defaultdict(list),
+        defaultdict(list),
+    )
 
     nhead_region = region_model.num_heads
     offset_ = offset
@@ -1712,9 +1695,7 @@ def get_slide_region_level_heatmaps(
         position=0,
         disable=not main_process,
     ) as t1:
-
         for k, fp in enumerate(t1):
-
             region = Image.open(fp)
             region_size = region.size[0]
 
@@ -1730,7 +1711,6 @@ def get_slide_region_level_heatmaps(
             )
 
             if granular:
-
                 offset = int(offset_ * region_size / 4096)
                 region2 = add_margin(
                     region.crop((offset, offset, region_size, region_size)),
@@ -1802,9 +1782,7 @@ def get_slide_region_level_heatmaps(
                 leave=True,
                 disable=not main_process,
             ) as t2:
-
                 for j in t2:
-
                     region_hm_output_dir = Path(
                         region_output_dir, f"{region_size}", f"head_{j}"
                     )
@@ -1853,9 +1831,8 @@ def get_slide_region_level_heatmaps(
                             + new_region_att_scores_3
                             + new_region_att_scores_4
                         ) / region_overlay
-                    
-                    if threshold != None:
 
+                    if threshold != None:
                         thresh_region_hm_output_dir = Path(
                             region_output_dir, f"{region_size}", f"head_{j}_thresh"
                         )
@@ -1941,8 +1918,16 @@ def get_slide_hierarchical_heatmaps(
     ]
     nregions = len(region_paths)
 
-    hierarchical_heatmaps, hierarchical_heatmaps_thresh, coords = defaultdict(dict), defaultdict(dict), defaultdict(dict)
-    hm_dict, hm_dict_thresh, coord_dict = defaultdict(list), defaultdict(list), defaultdict(list)
+    hierarchical_heatmaps, hierarchical_heatmaps_thresh, coords = (
+        defaultdict(dict),
+        defaultdict(dict),
+        defaultdict(dict),
+    )
+    hm_dict, hm_dict_thresh, coord_dict = (
+        defaultdict(list),
+        defaultdict(list),
+        defaultdict(list),
+    )
 
     nhead_patch = patch_model.num_heads
     nhead_region = region_model.num_heads
@@ -1956,9 +1941,7 @@ def get_slide_hierarchical_heatmaps(
         position=0,
         disable=not main_process,
     ) as t1:
-
         for k, fp in enumerate(t1):
-
             region = Image.open(fp)
             region_size = region.size[0]
             n_patch = region_size // patch_size
@@ -1975,7 +1958,6 @@ def get_slide_hierarchical_heatmaps(
             )
 
             if granular:
-
                 offset = int(offset_ * region_size / 4096)
                 region2 = add_margin(
                     region.crop((offset, offset, region_size, region_size)),
@@ -2047,9 +2029,7 @@ def get_slide_hierarchical_heatmaps(
                 leave=True,
                 disable=not main_process,
             ) as t1:
-
                 for j in t1:
-
                     region_att_scores = concat_region_scores(
                         region_att[j], size=(s,) * 2
                     )
@@ -2098,13 +2078,15 @@ def get_slide_hierarchical_heatmaps(
                         leave=False,
                         disable=not main_process,
                     ) as t2:
-
                         for i in t2:
-
                             hierarchical_hm_output_dir = Path(
-                                output_dir, f"hierarchical_{region_size}_{patch_size}", f"rhead_{j}_phead_{i}"
+                                output_dir,
+                                f"hierarchical_{region_size}_{patch_size}",
+                                f"rhead_{j}_phead_{i}",
                             )
-                            hierarchical_hm_output_dir.mkdir(exist_ok=True, parents=True)
+                            hierarchical_hm_output_dir.mkdir(
+                                exist_ok=True, parents=True
+                            )
 
                             x, y = int(fp.stem.split("_")[0]), int(
                                 fp.stem.split("_")[1]
@@ -2154,17 +2136,22 @@ def get_slide_hierarchical_heatmaps(
                                 score = (region_att_scores + patch_att_scores) / 2
 
                             if threshold != None:
-
                                 thresh_hierarchical_hm_output_dir = Path(
-                                    output_dir, f"hierarchical_{region_size}_{patch_size}", f"rhead_{j}_phead_{i}_thresh"
+                                    output_dir,
+                                    f"hierarchical_{region_size}_{patch_size}",
+                                    f"rhead_{j}_phead_{i}_thresh",
                                 )
-                                thresh_hierarchical_hm_output_dir.mkdir(exist_ok=True, parents=True)
+                                thresh_hierarchical_hm_output_dir.mkdir(
+                                    exist_ok=True, parents=True
+                                )
 
                                 att_mask = score.copy()
                                 att_mask[att_mask < threshold] = 0
                                 att_mask[att_mask >= threshold] = 0.95
 
-                                color_block = (cmap(att_mask) * 255)[:, :, :3].astype(np.uint8)
+                                color_block = (cmap(att_mask) * 255)[:, :, :3].astype(
+                                    np.uint8
+                                )
                                 region_hm = cv2.addWeighted(
                                     color_block,
                                     alpha,
@@ -2180,7 +2167,12 @@ def get_slide_hierarchical_heatmaps(
                                 hm_dict_thresh[j].append(region_hm)
                                 if save_to_disk:
                                     img = Image.fromarray(region_hm)
-                                    img.save(Path(thresh_hierarchical_hm_output_dir, f"{x}_{y}.png"))
+                                    img.save(
+                                        Path(
+                                            thresh_hierarchical_hm_output_dir,
+                                            f"{x}_{y}.png",
+                                        )
+                                    )
 
                             color_block = (cmap(score) * 255)[:, :, :3].astype(np.uint8)
                             region_hm = cv2.addWeighted(
@@ -2235,7 +2227,6 @@ def stitch_slide_heatmaps(
     )
 
     for hm, (x, y) in zip(heatmaps, coords):
-
         w, h, _ = hm.shape
         downsample_factor = wsi_object.level_downsamples[vis_level]
         x_downsampled = int(x * 1 / downsample_factor[0])
@@ -2250,8 +2241,11 @@ def stitch_slide_heatmaps(
         # TODO: make sure (x,y) are inverted
         canvas[
             y_downsampled : min(y_downsampled + h_downsampled, height),
-            x_downsampled : min(x_downsampled + w_downsampled, width)
-        ] = hm_downsampled[:min(h_downsampled, height-y_downsampled), :min(w_downsampled, width-x_downsampled)]
+            x_downsampled : min(x_downsampled + w_downsampled, width),
+        ] = hm_downsampled[
+            : min(h_downsampled, height - y_downsampled),
+            : min(w_downsampled, width - x_downsampled),
+        ]
 
     stitched_hm = Image.fromarray(canvas)
     if save_to_disk:
@@ -2280,7 +2274,6 @@ def display_stitched_heatmaps(
     w, h = next(iter(heatmaps.values())).size
 
     if display_patching:
-
         hdf5_file_path = Path(slide_dir, f"{slide_id}.h5")
         h5_file = h5py.File(hdf5_file_path, "r")
         dset = h5_file[key]
@@ -2393,9 +2386,7 @@ def get_slide_attention_scores(
         position=0,
         disable=not main_process,
     ) as t1:
-
         for k, fp in enumerate(t1):
-
             region = Image.open(fp)
             region_size = region.size[0]
             n_patch = region_size // patch_size
@@ -2417,18 +2408,24 @@ def get_slide_attention_scores(
                 patch_features = patch_model(patches)  # (n_patch**2, 384)
 
                 regions = (
-                    patch_features.unfold(0, n_patch, n_patch).transpose(0, 1).unsqueeze(dim=0)
+                    patch_features.unfold(0, n_patch, n_patch)
+                    .transpose(0, 1)
+                    .unsqueeze(dim=0)
                 )  # (1, 384, n_patch, n_patch)
-                region_features = region_model(regions) # (1, 192)
+                region_features = region_model(regions)  # (1, 192)
 
                 features.append(region_features)
 
     with torch.no_grad():
         feature_seq = torch.stack(features, dim=0).squeeze(1)  # (M, 192)
-        slide_attention = slide_model(feature_seq, return_attention=True).squeeze(0) # (M)
-        slide_attention = concat_slide_scores(slide_attention.cpu().numpy()) # (M)
-        slide_attention = slide_attention.reshape(-1, 1, 1) # (M, 1, 1)
-        slide_attention = torch.from_numpy(slide_attention).to(device, non_blocking=True)
+        slide_attention = slide_model(feature_seq, return_attention=True).squeeze(
+            0
+        )  # (M)
+        slide_attention = concat_slide_scores(slide_attention.cpu().numpy())  # (M)
+        slide_attention = slide_attention.reshape(-1, 1, 1)  # (M, 1, 1)
+        slide_attention = torch.from_numpy(slide_attention).to(
+            device, non_blocking=True
+        )
 
         slide_attention = (
             nn.functional.interpolate(
@@ -2484,7 +2481,7 @@ def get_slide_level_heatmaps(
         patch_size=patch_size,
         downscale=downscale,
         device=device,
-    )   # (M, region_size, region_size), (M)
+    )  # (M, region_size, region_size), (M)
 
     region_paths = [
         fp for fp in Path(region_dir, slide_id, "imgs").glob(f"*.{region_fmt}")
@@ -2500,15 +2497,12 @@ def get_slide_level_heatmaps(
         position=0,
         disable=not main_process,
     ) as t1:
-
         for k, fp in enumerate(t1):
-
             region = Image.open(fp)
             region_size = region.size[0]
             s = region_size // downscale
 
             if threshold != None:
-
                 save_region = np.array(region.resize((s, s)))
                 att_mask = att[k].copy()
                 att_mask[att_mask < threshold] = 0
@@ -2531,9 +2525,7 @@ def get_slide_level_heatmaps(
 
             save_region = np.array(region.resize((s, s)))
 
-            color_block = (cmap(att[k]) * 255)[
-                :, :, :3
-            ].astype(np.uint8)
+            color_block = (cmap(att[k]) * 255)[:, :, :3].astype(np.uint8)
             hm = cv2.addWeighted(
                 color_block,
                 alpha,

@@ -22,11 +22,13 @@ class ModelFactory:
         label_encoding: Optional[str] = None,
         model_options: Optional[DictConfig] = None,
     ):
-
         if task in ["classification", "survival"]:
             if level == "global":
                 if model_options.agg_method == "self_att":
-                    if model_options.slide_pos_embed.type == '2d' and model_options.slide_pos_embed.use:
+                    if (
+                        model_options.slide_pos_embed.type == "2d"
+                        and model_options.slide_pos_embed.use
+                    ):
                         self.model = GlobalPatientLevelCoordsHIPT(
                             num_classes=num_classes,
                             dropout=model_options.dropout,
@@ -38,15 +40,20 @@ class ModelFactory:
                             dropout=model_options.dropout,
                             slide_pos_embed=model_options.slide_pos_embed,
                         )
-                elif model_options.agg_method == "concat" or not model_options.agg_method:
-                    if model_options.slide_pos_embed.type == '2d' and model_options.slide_pos_embed.use:
+                elif (
+                    model_options.agg_method == "concat" or not model_options.agg_method
+                ):
+                    if (
+                        model_options.slide_pos_embed.type == "2d"
+                        and model_options.slide_pos_embed.use
+                    ):
                         self.model = GlobalCoordsHIPT(
                             num_classes=num_classes,
                             dropout=model_options.dropout,
                             slide_pos_embed=model_options.slide_pos_embed,
                         )
                     elif label_encoding == "ordinal":
-                        if loss == 'coral':
+                        if loss == "coral":
                             self.model = GlobalCoralHIPT(
                                 num_classes=num_classes,
                                 dropout=model_options.dropout,
@@ -70,7 +77,7 @@ class ModelFactory:
                     )
             elif level == "local":
                 if label_encoding == "ordinal":
-                    if loss == 'coral':
+                    if loss == "coral":
                         self.model = LocalGlobalCoralHIPT(
                             num_classes=num_classes,
                             region_size=model_options.region_size,
@@ -123,28 +130,35 @@ class ModelFactory:
         elif task == "regression":
             if level == "global":
                 if model_options.agg_method == "self_att":
-                    raise KeyError(f"aggregation method '{model_options.agg_method}' is not supported yet for {task} task")
-                elif model_options.agg_method == "concat" or not model_options.agg_method:
+                    raise KeyError(
+                        f"aggregation method '{model_options.agg_method}' is not supported yet for {task} task"
+                    )
+                elif (
+                    model_options.agg_method == "concat" or not model_options.agg_method
+                ):
                     self.model = GlobalRegressionHIPT(
-                            num_classes=num_classes,
-                            dropout=model_options.dropout,
-                            slide_pos_embed=model_options.slide_pos_embed,
-                        )
+                        num_classes=num_classes,
+                        dropout=model_options.dropout,
+                        slide_pos_embed=model_options.slide_pos_embed,
+                    )
             elif level == "local":
                 if model_options.agg_method == "self_att":
-                    raise KeyError(f"aggregation method '{model_options.agg_method}' is not supported yet for {task} task")
-                elif model_options.agg_method == "concat" or not model_options.agg_method:
+                    raise KeyError(
+                        f"aggregation method '{model_options.agg_method}' is not supported yet for {task} task"
+                    )
+                elif (
+                    model_options.agg_method == "concat" or not model_options.agg_method
+                ):
                     self.model = LocalGlobalRegressionHIPT(
-                            num_classes=num_classes,
-                            region_size=model_options.region_size,
-                            patch_size=model_options.patch_size,
-                            pretrain_vit_region=model_options.pretrain_vit_region,
-                            freeze_vit_region=model_options.freeze_vit_region,
-                            freeze_vit_region_pos_embed=model_options.freeze_vit_region_pos_embed,
-                            dropout=model_options.dropout,
-                            slide_pos_embed=model_options.slide_pos_embed,
-                        )
-
+                        num_classes=num_classes,
+                        region_size=model_options.region_size,
+                        patch_size=model_options.patch_size,
+                        pretrain_vit_region=model_options.pretrain_vit_region,
+                        freeze_vit_region=model_options.freeze_vit_region,
+                        freeze_vit_region_pos_embed=model_options.freeze_vit_region_pos_embed,
+                        dropout=model_options.dropout,
+                        slide_pos_embed=model_options.slide_pos_embed,
+                    )
 
     def get_model(self):
         return self.model
@@ -159,7 +173,6 @@ class GlobalHIPT(nn.Module):
         dropout: float = 0.25,
         slide_pos_embed: Optional[DictConfig] = None,
     ):
-
         super(GlobalHIPT, self).__init__()
         self.slide_pos_embed = slide_pos_embed
 
@@ -203,7 +216,6 @@ class GlobalHIPT(nn.Module):
         self.classifier = nn.Linear(192, num_classes)
 
     def forward(self, x):
-
         # x = [M, 192]
         x = self.global_phi(x)
 
@@ -261,7 +273,6 @@ class LocalGlobalHIPT(nn.Module):
         dropout: float = 0.25,
         slide_pos_embed: Optional[DictConfig] = None,
     ):
-
         super(LocalGlobalHIPT, self).__init__()
         self.npatch = int(region_size // patch_size)
         self.slide_pos_embed = slide_pos_embed
@@ -348,7 +359,6 @@ class LocalGlobalHIPT(nn.Module):
         self.classifier = nn.Linear(192, num_classes)
 
     def forward(self, x):
-
         # x = [M, 256, 384]
         x = self.vit_region(
             x.unfold(1, self.npatch, self.npatch).transpose(1, 2)
@@ -416,7 +426,6 @@ class HIPT(nn.Module):
         dropout: float = 0.25,
         slide_pos_embed: Optional[DictConfig] = None,
     ):
-
         super(HIPT, self).__init__()
         self.npatch = int(region_size // patch_size)
         self.num_patches = self.npatch**2
@@ -424,7 +433,7 @@ class HIPT(nn.Module):
         self.slide_pos_embed = slide_pos_embed
 
         self.split_across_gpus = split_across_gpus
-        #TODO: becareful how this would interact with distributed training
+        # TODO: becareful how this would interact with distributed training
         if split_across_gpus:
             self.device_patch = torch.device("cuda:0")
             self.device_region = torch.device("cuda:1")
@@ -554,7 +563,6 @@ class HIPT(nn.Module):
         self.classifier = nn.Linear(192, num_classes)
 
     def forward(self, x):
-
         # x = [M, 3, region_size, region_size]
         # TODO: add prepare_img_tensor method
         x = x.unfold(2, self.ps, self.ps).unfold(
@@ -639,7 +647,6 @@ class GlobalFeatureExtractor(nn.Module):
         split_across_gpus: bool = False,
         verbose: bool = True,
     ):
-
         super(GlobalFeatureExtractor, self).__init__()
         checkpoint_key = "teacher"
 
@@ -733,7 +740,6 @@ class GlobalFeatureExtractor(nn.Module):
             self.vit_region.to(self.device_region)
 
     def forward(self, x):
-
         # x = [1, 3, region_size, region_size]
         # TODO: add prepare_img_tensor method
         x = x.unfold(2, self.ps, self.ps).unfold(
@@ -767,7 +773,6 @@ class LocalFeatureExtractor(nn.Module):
         embed_dim_patch: int = 384,
         verbose: bool = True,
     ):
-
         super(LocalFeatureExtractor, self).__init__()
         checkpoint_key = "teacher"
 
@@ -810,7 +815,6 @@ class LocalFeatureExtractor(nn.Module):
             print("Done")
 
     def forward(self, x):
-
         # x = [1, 3, region_size, region_size]
         # TODO: add prepare_img_tensor method
         x = x.unfold(2, self.ps, self.ps).unfold(
@@ -833,7 +837,6 @@ class GlobalPatientLevelHIPT(nn.Module):
         dropout: float = 0.25,
         slide_pos_embed: Optional[DictConfig] = None,
     ):
-
         super(GlobalPatientLevelHIPT, self).__init__()
         self.slide_pos_embed = slide_pos_embed
 
@@ -908,7 +911,6 @@ class GlobalPatientLevelHIPT(nn.Module):
         self.classifier = nn.Linear(embed_dim_patient, num_classes)
 
     def forward(self, x):
-
         # x = [ [M1, 192], [M2, 192], ...]
         N = len(x)
         slide_seq = []
@@ -982,12 +984,12 @@ class GlobalCoordsHIPT(GlobalHIPT):
         dropout: float = 0.25,
         slide_pos_embed: Optional[DictConfig] = None,
     ):
-
-        super().__init__(num_classes, embed_dim_region, d_model, dropout, slide_pos_embed)
+        super().__init__(
+            num_classes, embed_dim_region, d_model, dropout, slide_pos_embed
+        )
         self.tile_size = tile_size
 
     def forward(self, x, coords):
-
         # x = [M, 192]
         x = self.global_phi(x)
 
@@ -1020,12 +1022,17 @@ class GlobalPatientLevelCoordsHIPT(GlobalPatientLevelHIPT):
         dropout: float = 0.25,
         slide_pos_embed: Optional[DictConfig] = None,
     ):
-
-        super().__init__(num_classes, embed_dim_region, embed_dim_slide, embed_dim_patient, dropout, slide_pos_embed)
+        super().__init__(
+            num_classes,
+            embed_dim_region,
+            embed_dim_slide,
+            embed_dim_patient,
+            dropout,
+            slide_pos_embed,
+        )
         self.tile_size = tile_size
 
     def forward(self, x, coords):
-
         # x = [ [M1, 192], [M2, 192], ...]
         N = len(x)
         slide_seq = []
@@ -1070,8 +1077,9 @@ class GlobalRegressionHIPT(GlobalHIPT):
         dropout: float = 0.25,
         slide_pos_embed: Optional[DictConfig] = None,
     ):
-
-        super().__init__(num_classes, embed_dim_region, d_model, dropout, slide_pos_embed)
+        super().__init__(
+            num_classes, embed_dim_region, d_model, dropout, slide_pos_embed
+        )
         self.classifier = nn.Linear(192, 1)
 
 
@@ -1084,9 +1092,10 @@ class GlobalOrdinalHIPT(GlobalHIPT):
         dropout: float = 0.25,
         slide_pos_embed: Optional[DictConfig] = None,
     ):
-
-        super().__init__(num_classes, embed_dim_region, d_model, dropout, slide_pos_embed)
-        self.classifier = nn.Linear(192, num_classes-1)
+        super().__init__(
+            num_classes, embed_dim_region, d_model, dropout, slide_pos_embed
+        )
+        self.classifier = nn.Linear(192, num_classes - 1)
 
 
 class GlobalCoralHIPT(GlobalHIPT):
@@ -1098,14 +1107,14 @@ class GlobalCoralHIPT(GlobalHIPT):
         dropout: float = 0.25,
         slide_pos_embed: Optional[DictConfig] = None,
     ):
-
-        super().__init__(num_classes, embed_dim_region, d_model, dropout, slide_pos_embed)
+        super().__init__(
+            num_classes, embed_dim_region, d_model, dropout, slide_pos_embed
+        )
         self.classifier = nn.Linear(192, 1, bias=False)
         self.num_classes = num_classes
-        self.b = nn.Parameter(torch.zeros(self.num_classes-1, device='cuda').float())
+        self.b = nn.Parameter(torch.zeros(self.num_classes - 1, device="cuda").float())
 
     def forward(self, x):
-
         # x = [M, 192]
         x = self.global_phi(x)
 
@@ -1136,7 +1145,7 @@ class GlobalCoralHIPT(GlobalHIPT):
         self.global_rho = self.global_rho.to(device)
 
         self.classifier = self.classifier.to(device)
-        self.b = nn.Parameter(torch.zeros(self.num_classes-1, device=device).float())
+        self.b = nn.Parameter(torch.zeros(self.num_classes - 1, device=device).float())
 
 
 class LocalGlobalOrdinalHIPT(LocalGlobalHIPT):
@@ -1153,9 +1162,19 @@ class LocalGlobalOrdinalHIPT(LocalGlobalHIPT):
         dropout: float = 0.25,
         slide_pos_embed: Optional[DictConfig] = None,
     ):
-
-        super().__init__(num_classes, region_size, patch_size, pretrain_vit_region, embed_dim_patch, embed_dim_region,freeze_vit_region, freeze_vit_region_pos_embed, dropout, slide_pos_embed)
-        self.classifier = nn.Linear(192, num_classes-1)
+        super().__init__(
+            num_classes,
+            region_size,
+            patch_size,
+            pretrain_vit_region,
+            embed_dim_patch,
+            embed_dim_region,
+            freeze_vit_region,
+            freeze_vit_region_pos_embed,
+            dropout,
+            slide_pos_embed,
+        )
+        self.classifier = nn.Linear(192, num_classes - 1)
 
 
 class LocalGlobalCoralHIPT(LocalGlobalHIPT):
@@ -1172,14 +1191,23 @@ class LocalGlobalCoralHIPT(LocalGlobalHIPT):
         dropout: float = 0.25,
         slide_pos_embed: Optional[DictConfig] = None,
     ):
-
-        super().__init__(num_classes, region_size, patch_size, pretrain_vit_region, embed_dim_patch, embed_dim_region,freeze_vit_region, freeze_vit_region_pos_embed, dropout, slide_pos_embed)
+        super().__init__(
+            num_classes,
+            region_size,
+            patch_size,
+            pretrain_vit_region,
+            embed_dim_patch,
+            embed_dim_region,
+            freeze_vit_region,
+            freeze_vit_region_pos_embed,
+            dropout,
+            slide_pos_embed,
+        )
         self.classifier = nn.Linear(192, 1, bias=False)
         self.num_classes = num_classes
-        self.b = nn.Parameter(torch.zeros(self.num_classes-1, device='cuda').float())
+        self.b = nn.Parameter(torch.zeros(self.num_classes - 1, device="cuda").float())
 
     def forward(self, x):
-
         # x = [M, 256, 384]
         x = self.vit_region(
             x.unfold(1, self.npatch, self.npatch).transpose(1, 2)
@@ -1215,7 +1243,7 @@ class LocalGlobalCoralHIPT(LocalGlobalHIPT):
         self.global_rho = self.global_rho.to(device)
 
         self.classifier = self.classifier.to(device)
-        self.b = nn.Parameter(torch.zeros(self.num_classes-1, device=device).float())
+        self.b = nn.Parameter(torch.zeros(self.num_classes - 1, device=device).float())
 
 
 class LocalGlobalRegressionHIPT(LocalGlobalHIPT):
@@ -1232,6 +1260,16 @@ class LocalGlobalRegressionHIPT(LocalGlobalHIPT):
         dropout: float = 0.25,
         slide_pos_embed: Optional[DictConfig] = None,
     ):
-
-        super().__init__(num_classes, region_size, patch_size, pretrain_vit_region, embed_dim_patch, embed_dim_region,freeze_vit_region, freeze_vit_region_pos_embed, dropout, slide_pos_embed)
+        super().__init__(
+            num_classes,
+            region_size,
+            patch_size,
+            pretrain_vit_region,
+            embed_dim_patch,
+            embed_dim_region,
+            freeze_vit_region,
+            freeze_vit_region_pos_embed,
+            dropout,
+            slide_pos_embed,
+        )
         self.classifier = nn.Linear(192, 1)

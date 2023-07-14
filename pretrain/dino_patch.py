@@ -42,7 +42,6 @@ from utils import (
     version_base="1.2.0", config_path="../config/pretraining", config_name="patch"
 )
 def main(cfg: DictConfig):
-
     distributed = torch.cuda.device_count() > 1
     if distributed:
         torch.distributed.init_process_group(backend="nccl")
@@ -66,7 +65,9 @@ def main(cfg: DictConfig):
 
     if distributed:
         obj = [run_id]
-        torch.distributed.broadcast_object_list(obj, 0, device=torch.device(f"cuda:{gpu_id}"))
+        torch.distributed.broadcast_object_list(
+            obj, 0, device=torch.device(f"cuda:{gpu_id}")
+        )
         run_id = obj[0]
 
     fix_random_seeds(cfg.seed)
@@ -77,9 +78,9 @@ def main(cfg: DictConfig):
     features_dir = Path(output_dir, "features")
     if not cfg.resume and is_main_process():
         if output_dir.exists():
-                print(f"WARNING: {output_dir} already exists! Deleting its content...")
-                shutil.rmtree(output_dir)
-                output_dir.mkdir(parents=True)
+            print(f"WARNING: {output_dir} already exists! Deleting its content...")
+            shutil.rmtree(output_dir)
+            output_dir.mkdir(parents=True)
         else:
             output_dir.mkdir(parents=True, exist_ok=True)
         snapshot_dir.mkdir(exist_ok=True, parents=True)
@@ -103,7 +104,9 @@ def main(cfg: DictConfig):
             cfg.early_stopping.downstream.num_workers,
             cfg.early_stopping.downstream.label_name,
         )
-        print(f"Tuning data loaded with {len(downstream_train_loader.dataset)} train patches and {len(downstream_test_loader.dataset)} test patches.")
+        print(
+            f"Tuning data loaded with {len(downstream_train_loader.dataset)} train patches and {len(downstream_test_loader.dataset)} test patches."
+        )
 
     transform = PatchDataAugmentationDINO(
         cfg.aug.global_crops_scale,
@@ -178,14 +181,18 @@ def main(cfg: DictConfig):
         # we need DDP wrapper to have synchro batch norms working...
         student = nn.SyncBatchNorm.convert_sync_batchnorm(student)
         teacher = nn.SyncBatchNorm.convert_sync_batchnorm(teacher)
-        teacher = nn.parallel.DistributedDataParallel(teacher, device_ids=[gpu_id], output_device=gpu_id)
+        teacher = nn.parallel.DistributedDataParallel(
+            teacher, device_ids=[gpu_id], output_device=gpu_id
+        )
         teacher_without_ddp = teacher.module
     else:
         # teacher_without_ddp and teacher are the same thing
         teacher_without_ddp = teacher
 
     if distributed:
-        student = nn.parallel.DistributedDataParallel(student, device_ids=[gpu_id], output_device=gpu_id)
+        student = nn.parallel.DistributedDataParallel(
+            student, device_ids=[gpu_id], output_device=gpu_id
+        )
 
     # teacher and student start with the same weights
     student_sd = student.state_dict()
@@ -302,11 +309,9 @@ def main(cfg: DictConfig):
         total=cfg.training.nepochs,
         file=sys.stdout,
         position=0,
-        disable=not is_main_process()
+        disable=not is_main_process(),
     ) as t:
-
         for epoch in t:
-
             epoch_start_time = time.time()
             if cfg.wandb.enable and is_main_process():
                 log_dict = {"epoch": epoch}
@@ -334,9 +339,7 @@ def main(cfg: DictConfig):
             )
 
             if cfg.wandb.enable and is_main_process():
-                update_log_dict(
-                    "train", train_stats, log_dict, step="epoch"
-                )
+                update_log_dict("train", train_stats, log_dict, step="epoch")
 
             if is_main_process():
                 snapshot = {
@@ -351,10 +354,13 @@ def main(cfg: DictConfig):
 
             # only run tuning on rank 0, otherwise one has to take care of gathering knn metrics from multiple gpus
             tune_results = None
-            if cfg.early_stopping.tune_every and epoch % cfg.early_stopping.tune_every == 0 and is_main_process():
-
+            if (
+                cfg.early_stopping.tune_every
+                and epoch % cfg.early_stopping.tune_every == 0
+                and is_main_process()
+            ):
                 tune_results = tune_one_epoch(
-                    epoch+1,
+                    epoch + 1,
                     student,
                     teacher_without_ddp,
                     downstream_train_loader,
@@ -371,9 +377,7 @@ def main(cfg: DictConfig):
                 )
 
                 if cfg.wandb.enable and is_main_process():
-                    update_log_dict(
-                        "tune", tune_results, log_dict, step="epoch"
-                    )
+                    update_log_dict("tune", tune_results, log_dict, step="epoch")
 
             if is_main_process():
                 early_stopping(epoch, tune_results, snapshot)
@@ -427,7 +431,6 @@ def main(cfg: DictConfig):
 
 
 if __name__ == "__main__":
-
     # python3 -m torch.distributed.run --standalone --nproc_per_node=gpu pretrain/dino_patch.py --config-name 'debug'
 
     # ISSUE WITH TORCHRUN ON SOL2: USES PYTHON3.8 INSTEAD OF PYTHON3.9 FOR SOME REASON
