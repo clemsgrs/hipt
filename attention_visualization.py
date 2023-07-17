@@ -670,4 +670,7 @@ def main(cfg: DictConfig):
 
 
 if __name__ == "__main__":
+
+    # python3 attention_visualization.py --config-name 'default'
+
     main()
