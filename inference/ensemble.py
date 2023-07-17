@@ -6,6 +6,7 @@ import torch
 import random
 import datetime
 import pandas as pd
+import matplotlib.pyplot as plt
 
 from pathlib import Path
 from functools import partial, reduce
@@ -139,6 +140,7 @@ def main(cfg: DictConfig):
                 if r == "cm":
                     save_path = Path(result_dir, f"{model_name}_{test_name}.png")
                     v.savefig(save_path, bbox_inches="tight")
+                    plt.close(v)
                 if cfg.wandb.enable and r in log_to_wandb["test"]:
                     if r == "cm":
                         wandb.log(
@@ -206,6 +208,7 @@ def main(cfg: DictConfig):
             if r == "cm":
                 save_path = Path(result_dir, f"ensemble_{test_name}.png")
                 v.savefig(save_path, bbox_inches="tight")
+                plt.close(v)
             if cfg.wandb.enable and r in log_to_wandb["test"]:
                 if r == "cm":
                     wandb.log(

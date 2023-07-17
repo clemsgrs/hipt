@@ -7,6 +7,8 @@ import torch.nn as nn
 import hydra
 import datetime
 import pandas as pd
+import matplotlib.pyplot as plt
+
 from pathlib import Path
 from omegaconf import DictConfig
 
@@ -245,6 +247,7 @@ def main(cfg: DictConfig):
                 result_dir, f"tune_{cfg.testing.retrieve_checkpoint}_cm.png"
             )
             v.savefig(save_path, bbox_inches="tight")
+            plt.close(v)
         if cfg.wandb.enable and r in log_to_wandb["tune"]:
             if r == "cm":
                 wandb.log(
@@ -276,6 +279,7 @@ def main(cfg: DictConfig):
             if r == "cm":
                 save_path = Path(result_dir, f"test_cm.png")
                 v.savefig(save_path, bbox_inches="tight")
+                plt.close(v)
             if cfg.wandb.enable and r in log_to_wandb["test"]:
                 if r == "cm":
                     wandb.log({f"test/{r}": wandb.Image(str(save_path))})

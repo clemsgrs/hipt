@@ -5,6 +5,7 @@ import hydra
 import torch
 import datetime
 import pandas as pd
+import matplotlib.pyplot as plt
 
 from pathlib import Path
 from functools import partial
@@ -106,6 +107,7 @@ def main(cfg: DictConfig):
         if r == "cm":
             save_path = Path(result_dir, f"test_cm.png")
             v.savefig(save_path, bbox_inches="tight")
+            plt.close(v)
         if r in log_to_wandb["test"] and cfg.wandb.enable:
             if r == "cm":
                 wandb.log({f"test/{r}": wandb.Image(str(save_path))})

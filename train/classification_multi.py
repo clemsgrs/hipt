@@ -8,6 +8,7 @@ import datetime
 import statistics
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
 
 from pathlib import Path
 from functools import partial
@@ -359,6 +360,7 @@ def main(cfg: DictConfig):
                     result_dir, f"tune_{cfg.testing.retrieve_checkpoint}_cm.png"
                 )
                 v.savefig(save_path, bbox_inches="tight")
+                plt.close(v)
             if cfg.wandb.enable and r in log_to_wandb["tune"]:
                 if r == "cm":
                     wandb.log(
@@ -411,6 +413,7 @@ def main(cfg: DictConfig):
                 if r == "cm":
                     save_path = Path(result_dir, f"test_cm.png")
                     v.savefig(save_path, bbox_inches="tight")
+                    plt.close(v)
                 if cfg.wandb.enable and r in log_to_wandb["test"]:
                     if r == "cm":
                         wandb.log({f"test/fold_{i}/{r}": wandb.Image(str(save_path))})
@@ -422,7 +425,8 @@ def main(cfg: DictConfig):
     metrics = defaultdict(list)
     for _, metric_dict in tune_metrics.items():
         for metric_name, metric_val in metric_dict.items():
-            metrics[metric_name].append(metric_val)
+            if isinstance(metric_val, float):
+                metrics[metric_name].append(metric_val)
 
     mean_tune_metrics = {
         metric_name: round(np.mean(metric_values), 5)
@@ -444,7 +448,8 @@ def main(cfg: DictConfig):
     metrics = defaultdict(list)
     for _, metric_dict in test_metrics.items():
         for metric_name, metric_val in metric_dict.items():
-            metrics[metric_name].append(metric_val)
+            if isinstance(metric_val, float):
+                metrics[metric_name].append(metric_val)
 
     mean_test_metrics = {
         metric_name: round(np.mean(metric_values), 5)
