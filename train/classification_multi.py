@@ -5,6 +5,7 @@ import wandb
 import torch
 import hydra
 import datetime
+import matplotlib
 import statistics
 import numpy as np
 import pandas as pd
@@ -231,6 +232,9 @@ def main(cfg: DictConfig):
                         step=f"train/fold_{i}/epoch",
                         to_log=log_to_wandb["train"],
                     )
+                for r, v in train_results.items():
+                    if isinstance(v, matplotlib.figure.Figure):
+                        plt.close(v)
                 train_dataset.df.to_csv(
                     Path(result_dir, f"train_{epoch+1}.csv"), index=False
                 )
@@ -277,6 +281,9 @@ def main(cfg: DictConfig):
                             step=f"train/fold_{i}/epoch",
                             to_log=[e for e in log_to_wandb["tune"] if "cm" not in e],
                         )
+                    for r, v in tune_results.items():
+                        if isinstance(v, matplotlib.figure.Figure):
+                            plt.close(v)
                     tune_dataset.df.to_csv(
                         Path(result_dir, f"tune_{epoch+1}.csv"), index=False
                     )
@@ -474,8 +481,8 @@ def main(cfg: DictConfig):
 
 
 if __name__ == "__main__":
-    import torch.multiprocessing
 
+    import torch.multiprocessing
     torch.multiprocessing.set_sharing_strategy("file_system")
 
     main()
