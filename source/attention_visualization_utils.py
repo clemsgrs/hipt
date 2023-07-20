@@ -8,9 +8,7 @@ import torch.nn as nn
 import numpy as np
 import torchvision.transforms as transforms
 
-from PIL import Image
-from PIL import ImageFont
-from PIL import ImageDraw
+from PIL import Image, ImageFont, ImageDraw
 from einops import rearrange
 from scipy.stats import rankdata
 from typing import Optional, List, Tuple, Dict
@@ -418,6 +416,8 @@ def get_patch_attention_scores(
             .cpu()
             .numpy()
         )  # (1, 6, patch_size, patch_size) when downscale = 1
+        # 'nearest' interpolation guarantees the values in the up-sampled array
+        # lie in the same set as the values in the original array
 
         if downscale != 1:
             batch = nn.functional.interpolate(
@@ -439,6 +439,7 @@ def create_patch_heatmaps_indiv(
     granular: bool = False,
     offset: int = 16,
     save_to_disk: bool = True,
+    downscale: int = 1,
     patch_device: torch.device = torch.device("cuda:0"),
 ):
     """
@@ -454,7 +455,7 @@ def create_patch_heatmaps_indiv(
     """
     patch1 = patch.copy()
     _, att = get_patch_attention_scores(
-        patch1, patch_model, mini_patch_size=mini_patch_size, patch_device=patch_device
+        patch1, patch_model, mini_patch_size=mini_patch_size, downscale=downscale, patch_device=patch_device
     )
     offset_ = offset
 
@@ -472,6 +473,7 @@ def create_patch_heatmaps_indiv(
             patch2,
             patch_model,
             mini_patch_size=mini_patch_size,
+            downscale=downscale,
             patch_device=patch_device,
         )
 
@@ -547,6 +549,7 @@ def create_patch_heatmaps_concat(
     cmap: matplotlib.colors.LinearSegmentedColormap = plt.get_cmap("coolwarm"),
     granular: bool = False,
     offset: int = 16,
+    downscale: int = 1,
     patch_device=torch.device("cuda:0"),
 ):
     """
@@ -563,7 +566,7 @@ def create_patch_heatmaps_concat(
     """
     patch1 = patch.copy()
     _, att = get_patch_attention_scores(
-        patch1, patch_model, mini_patch_size=mini_patch_size, patch_device=patch_device
+        patch1, patch_model, mini_patch_size=mini_patch_size, downscale=downscale, patch_device=patch_device
     )
     offset_ = offset
 
@@ -581,6 +584,7 @@ def create_patch_heatmaps_concat(
             patch2,
             patch_model,
             mini_patch_size=mini_patch_size,
+            downscale=downscale,
             patch_device=patch_device,
         )
 
@@ -673,7 +677,7 @@ def get_region_attention_scores(
     - region_model (torch.nn): region-level Transformer
     - patch_size (int): size of patches used for unrolling input region
     - mini_patch_size (int): size of mini-patches used for unrolling patch_model inputs
-    - downscale (int): how much to downscale the output image by (e.g. downscale=4 will resize images to be 1024x1024)
+    - downscale (int): how much to downscale the output image by (e.g. downscale=4 & input image size 4096x4096 will give an output image of size 1024x1024)
 
     Returns:
     - np.array: [n_patch**2, patch_size/downscale, patch_size/downscale, 3] array sequence of image patch_size-sized patches from the input region.
@@ -719,6 +723,8 @@ def get_region_attention_scores(
             .cpu()
             .numpy()
         )  # (n_patch**2, nhead, patch_size, patch_size) when downscale = 1
+        # 'nearest' interpolation guarantees the values in the up-sampled array
+        # lie in the same set as the values in the original array
 
         region_features = (
             patch_features.unfold(0, n_patch, n_patch).transpose(0, 1).unsqueeze(dim=0)
@@ -864,6 +870,8 @@ def create_hierarchical_heatmaps_indiv(
         offset_4 = (offset * 3) // downscale
 
     s = region_size // downscale
+    # given region is an RGB image, so the default filter for resizing is Resampling.BICUBIC
+    # which is fine as we're resizing the image here, not attention scores
     save_region = np.array(region.resize((s, s)))
 
     patch_output_dir = Path(output_dir, f"{fname}_{patch_size}")
@@ -1283,6 +1291,8 @@ def create_hierarchical_heatmaps_concat(
         offset_4 = (offset * 3) // downscale
 
     s = region_size // downscale  # 2048 for downscale = 2, region_size = 4096
+    # given region is an RGB image, so the default filter for resizing is Resampling.BICUBIC
+    # which is fine as we're resizing the image here, not attention scores
     save_region = np.array(
         region.resize((s, s))
     )  # (2048, 2048) for downscale = 2, region_size = 4096
@@ -1544,6 +1554,8 @@ def get_slide_patch_level_heatmaps(
                 offset_2 = offset // downscale
 
             s = region_size // downscale
+            # given region is an RGB image, so the default filter for resizing is Resampling.BICUBIC
+            # which is fine as we're resizing the image here, not attention scores
             save_region = np.array(region.resize((s, s)))
 
             with tqdm.tqdm(
@@ -1773,6 +1785,8 @@ def get_slide_region_level_heatmaps(
                 offset_4 = (offset * 3) // downscale
 
             s = region_size // downscale
+            # given region is an RGB image, so the default filter for resizing is Resampling.BICUBIC
+            # which is fine as we're resizing the image here, not attention scores
             save_region = np.array(region.resize((s, s)))
 
             with tqdm.tqdm(
@@ -2020,6 +2034,8 @@ def get_slide_hierarchical_heatmaps(
                 offset_4 = (offset * 3) // downscale
 
             s = region_size // downscale
+            # given region is an RGB image, so the default filter for resizing is Resampling.BICUBIC
+            # which is fine as we're resizing the image here, not attention scores
             save_region = np.array(region.resize((s, s)))
 
             with tqdm.tqdm(
@@ -2206,6 +2222,7 @@ def stitch_slide_heatmaps(
     coords: List[Tuple[(int, int)]],
     output_dir: Path,
     fname: str,
+    spacing: float,
     downsample: int = 32,
     downscale: int = 1,
     save_to_disk: bool = False,
@@ -2228,14 +2245,19 @@ def stitch_slide_heatmaps(
 
     for hm, (x, y) in zip(heatmaps, coords):
         w, h, _ = hm.shape
-        downsample_factor = wsi_object.level_downsamples[vis_level]
+        # need to scale region heatmaps from spacing level to vis level
+        spacing_level = wsi_object.get_best_level_for_spacing(spacing)
+        downsample_factor = wsi_object.level_downsamples[vis_level] / wsi_object.level_downsamples[spacing_level]
         x_downsampled = int(x * 1 / downsample_factor[0])
         y_downsampled = int(y * 1 / downsample_factor[1])
         w_downsampled = int(w * downscale * 1 / downsample_factor[0])
         h_downsampled = int(h * downscale * 1 / downsample_factor[1])
         # TODO: becarefull when resizing : we're dealing with a palette hence values should remain in palette range
+        # hm is a RGB array so the default filter for resizing is Image.BICUBIC
+        # which is NOT fine as we're dealing with a color palette
+        # instead, we should use Image.NEAREST (i guess?)
         hm_downsampled = np.array(
-            Image.fromarray(hm).resize((w_downsampled, h_downsampled))
+            Image.fromarray(hm).resize((w_downsampled, h_downsampled), resample=Image.NEAREST)
         )
 
         # TODO: make sure (x,y) are inverted
@@ -2436,6 +2458,8 @@ def get_slide_attention_scores(
             .cpu()
             .numpy()
         )  # (M, region_size, region_size) when downscale = 1
+        # 'nearest' interpolation guarantees the values in the up-sampled array
+        # lie in the same set as the values in the original array
 
     return slide_attention, coords
 
@@ -2523,6 +2547,8 @@ def get_slide_level_heatmaps(
                 thresh_hm = thresh_hm + img_inverse
                 thresh_heatmaps.append(thresh_hm)
 
+            # given region is an RGB image, so the default filter for resizing is Resampling.BICUBIC
+            # which is fine as we're resizing the image here, not attention scores
             save_region = np.array(region.resize((s, s)))
 
             color_block = (cmap(att[k]) * 255)[:, :, :3].astype(np.uint8)

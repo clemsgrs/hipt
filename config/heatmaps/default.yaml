@@ -16,6 +16,7 @@ patch_weights: '/data/pathology/projects/ais-cap/code/git/clemsgrs/hipt/checkpoi
 region_weights: '/data/pathology/projects/ais-cap/code/git/clemsgrs/hipt/checkpoints/vit4k_xs_dino.pth' # region-level Transformer weights
 
 display: False  # whether to display the heatmaps of multiple attention heads on a single image
+spacing: 0.5 # when processing a slide, indicate the pixel spacing which the regions were extracted at (in mpp)
 downscale: 1 # how much to downscale the output image by (e.g. downscale=4 will resize 4096x4096 regions to 1024x1024)
 downsample: 32  # uses this value to find the closest downsample level in the WSI for slide-level heatmap visualization
 granular: True  # whether to compute attention scores using an overlapping stride to obtain more granular heatmaps
