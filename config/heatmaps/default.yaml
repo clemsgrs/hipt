@@ -3,8 +3,8 @@ experiment_name: 'attention_heatmaps'
 
 patch_fp: # path to (256, 256) input patch
 # patch_fp: 'data/image_256.png'  # path to (256, 256) input patch
-# region_fp:  # path to input region
-region_fp: 'data/image_2k.png'  # path to input region
+region_fp:  # path to input region
+# region_fp: 'data/image_2k.png'  # path to input region
 
 slide_fp: # path to input slide
 slide_csv: # path to .csv file which contains a 'slide_path' column
@@ -14,6 +14,7 @@ region_size: 2048 # if slide_fp is provided, must indicate the size of the regio
 
 patch_weights: '/data/pathology/projects/ais-cap/code/git/clemsgrs/hipt/checkpoints/vit_256_small_dino.pth' # patch-level Transformer weights
 region_weights: '/data/pathology/projects/ais-cap/code/git/clemsgrs/hipt/checkpoints/vit4k_xs_dino.pth' # region-level Transformer weights
+slide_weights: # slide-level Transformer weights
 
 display: False  # whether to display the heatmaps of multiple attention heads on a single image
 spacing: 0.5 # when processing a slide, indicate the pixel spacing which the regions were extracted at (in mpp)

@@ -68,6 +68,9 @@ early_stopping:
   min_epoch: 30
   save_all: False
 
+speed:
+  num_workers: 8
+
 wandb:
   enable: True
   project: 'hipt'
