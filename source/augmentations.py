@@ -1,5 +1,6 @@
 import tqdm
 import torch
+import random
 import pandas as pd
 import matplotlib.pyplot as plt
 
@@ -12,8 +13,7 @@ from source.wsi import WholeSlideImage
 
 
 def add_random_noise(feature, gamma: float = 0.5, mean: int = 0, std: float = 1.):
-    embed_dim = feature.shape[0]
-    noise = torch.normal(mean, std, size=(1, embed_dim))[0]
+    noise = torch.normal(mean, std, size=feature.shape)[0]
     augm_feature = feature + gamma * noise
     return augm_feature
 
@@ -64,6 +64,29 @@ def get_knn_features(feature, slide_id, region_df, label_df, K: int = 10, sim_th
     knn_features = stacked_features[indices]
     knn_df = in_class_df[indices]
     return knn_features, knn_df
+
+
+def random_augmentation(features, gamma: float = 0.5, mean: int = 0, std: float = 1.):
+    augm_features = add_random_noise(features, gamma, mean, std)
+    return augm_features
+
+
+def simple_augmentation(features, slide_id, region_df, label_df, method: str, K: int = 10, sim_threshold: Optional[float] = None, lmbda: float = 0.5):
+    augm_features = []
+    for feature in features:
+        knn_features, knn_df = get_knn_features(feature, slide_id, region_df, label_df, K, sim_threshold)
+        # pick a random neighbor, compute augmented feature
+        i = random.randint(0,K-1)
+        neighbor_feature = knn_features[i]
+        if method == "interpolation":
+            augm_feature = interpolate_feature(feature, neighbor_feature, lmbda=lmbda)
+        elif method == "extrapolation":
+            augm_feature = extrapolate_feature(feature, neighbor_feature, lmbda=lmbda)
+        else:
+            raise KeyError(f"provided method '{method}' not suported ; chose among ['interpolation', 'extrapolation']")
+        augm_features.append(augm_feature.unsqueeze(0))
+    stacked_augm_features = torch.cat(augm_features, dim=0)
+    return stacked_augm_features
 
 
 def plot_knn_features(feature, x, y, slide_id, region_df, label_df, K: int = 10, sim_threshold: Optional[float] = None, region_dir: Optional[str] = None, slide_dir: Optional[str] = None, spacing: Optional[float] = None, backend: str = 'openslide', size: int = 256, region_fmt: str = 'jpg', dpi: int = 300):
