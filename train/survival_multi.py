@@ -176,6 +176,7 @@ def main(cfg: DictConfig):
             leave=True,
         ) as t:
             for epoch in t:
+
                 # set dataset seed
                 train_dataset.seed = epoch
                 tune_dataset.seed = epoch

@@ -96,6 +96,7 @@ def main(cfg: DictConfig):
             features_dir=region_features_dir,
             region_df=region_df,
             label_df=train_df,
+            level=cfg.level,
             multiprocessing=(cfg.speed.num_workers == 0),
             kwargs=kwargs,
         )
@@ -173,6 +174,10 @@ def main(cfg: DictConfig):
     ) as t:
         for epoch in t:
             epoch_start_time = time.time()
+
+            # set dataset seed
+            train_dataset.seed = epoch
+
             if cfg.wandb.enable:
                 log_dict = {"epoch": epoch + 1}
 

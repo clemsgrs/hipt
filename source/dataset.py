@@ -215,6 +215,8 @@ class ExtractedFeaturesDataset(torch.utils.data.Dataset):
         self.label_mapping = label_mapping
         self.transform = transform
 
+        self.seed = 0
+
         self.df, _ = self.prepare_data(df)
 
         self.num_classes = len(self.df.label.value_counts(dropna=True))
@@ -255,7 +257,7 @@ class ExtractedFeaturesDataset(torch.utils.data.Dataset):
         features = torch.load(fp)
         label = row.label
         if self.transform:
-            features = self.transform(features, slide_id)
+            features = self.transform(features, slide_id, self.seed)
         return idx, features, label
 
     def __len__(self):
@@ -281,7 +283,7 @@ class ExtractedFeaturesOrdinalDataset(ExtractedFeaturesDataset):
         label = np.zeros(self.num_classes - 1).astype(np.float32)
         label[: row.label] = 1.0
         if self.transform:
-            features = self.transform(features, slide_id)
+            features = self.transform(features, slide_id, self.seed)
         return idx, features, label
 
 
@@ -396,6 +398,8 @@ class ExtractedFeaturesCoordsSurvivalDataset(torch.utils.data.Dataset):
         self.label_name = label_name
         self.use_coords = True
         self.agg_level = "patient"
+
+        self.seed = 0
 
         self.slide_df = slide_df
         self.df = patient_df
@@ -530,6 +534,8 @@ class ExtractedFeaturesSlideLevelSurvivalDataset(torch.utils.data.Dataset):
         self.label_name = label_name
         self.use_coords = False
         self.agg_level = "slide"
+
+        self.seed = 0
 
         self.df = self.filter_df(slide_df)
 

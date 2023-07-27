@@ -16,7 +16,8 @@ from sklearn.neighbors import NearestNeighbors
 from source.wsi import WholeSlideImage
 
 
-def add_random_noise(feature, gamma: float = 0.5, mean: float = 0., std: float = 1.):
+def add_random_noise(feature, gamma: float = 0.5, mean: float = 0., std: float = 1., seed: int = 21):
+    torch.manual_seed(seed)
     noise = torch.normal(mean, std, size=feature.shape)
     augm_feature = feature + gamma * noise
     return augm_feature
@@ -105,8 +106,8 @@ def get_knn_features(
     return knn_features, knn_df
 
 
-def random_augmentation(features, gamma: float = 0.5, mean: float = 0., std: float = 1., slide_id: Optional[str] = None):
-    augm_features = add_random_noise(features, gamma, mean, std)
+def random_augmentation(features, gamma: float = 0.5, mean: float = 0., std: float = 1., seed: int = 21, slide_id: Optional[str] = None):
+    augm_features = add_random_noise(features, gamma, mean, std, seed=seed)
     return augm_features
 
 
@@ -115,6 +116,7 @@ def simple_augmentation(
     slide_id,
     region_df,
     label_df,
+    level: str,
     method: str,
     output_dir: Path = Path(''),
     K: int = 10,
@@ -122,21 +124,50 @@ def simple_augmentation(
     lmbda: float = 0.5,
     features_dir: Optional[Path] = None,
     multiprocessing: bool = True,
+    seed: int = 21,
 ):
-    augm_features = []
-    for feature in features:
-        knn_features, knn_df = get_knn_features(feature, slide_id, region_df, label_df, output_dir, K, sim_threshold, features_dir, multiprocessing)
-        # pick a random neighbor, compute augmented feature
-        i = random.randint(0,K-1)
-        neighbor_feature = knn_features[i]
-        if method == "interpolation":
-            augm_feature = interpolate_feature(feature, neighbor_feature, lmbda=lmbda)
-        elif method == "extrapolation":
-            augm_feature = extrapolate_feature(feature, neighbor_feature, lmbda=lmbda)
-        else:
-            raise KeyError(f"provided method '{method}' not suported ; chose among ['interpolation', 'extrapolation']")
-        augm_features.append(augm_feature.unsqueeze(0))
-    stacked_augm_features = torch.cat(augm_features, dim=0)
+    if level == "global":
+        # features = (M, 192)
+        augm_features = []
+        for feature in features:
+            # feature = (192)
+            knn_features, knn_df = get_knn_features(feature, slide_id, region_df, label_df, output_dir, K, sim_threshold, features_dir, multiprocessing)
+            # pick a random neighbor, compute augmented feature
+            random.seed(seed)
+            i = random.randint(0,K-1)
+            neighbor_feature = knn_features[i]
+            if method == "interpolation":
+                augm_feature = interpolate_feature(feature, neighbor_feature, lmbda=lmbda)
+            elif method == "extrapolation":
+                augm_feature = extrapolate_feature(feature, neighbor_feature, lmbda=lmbda)
+            else:
+                raise KeyError(f"provided method '{method}' not suported ; chose among ['interpolation', 'extrapolation']")
+            augm_features.append(augm_feature.unsqueeze(0))
+        stacked_augm_features = torch.cat(augm_features, dim=0)
+    elif level == "local":
+        # features = (M, npatch, 384)
+        augm_slide_features = []
+        for slide_features in features:
+            # slide_features = (npatch, 384)
+            augm_patch_features = []
+            for patch_feature in slide_features:
+                # patch_feature = (384)
+                knn_features, knn_df = get_knn_features(patch_feature, slide_id, region_df, label_df, output_dir, K, sim_threshold, features_dir, multiprocessing)
+                # pick a random neighbor, compute augmented feature
+                random.seed(seed)
+                i = random.randint(0,K-1)
+                neighbor_feature = knn_features[i]
+                if method == "interpolation":
+                    augm_patch_feature = interpolate_feature(patch_feature, neighbor_feature, lmbda=lmbda)
+                elif method == "extrapolation":
+                    augm_patch_feature = extrapolate_feature(patch_feature, neighbor_feature, lmbda=lmbda)
+                else:
+                    raise KeyError(f"provided method '{method}' not suported ; chose among ['interpolation', 'extrapolation']")
+                augm_patch_features.append(augm_patch_feature.unsqueeze(0)) # [(1, 384)] of len npatch
+            stacked_augm_patch_features = torch.cat(augm_patch_features, dim=0) # (npatch, 384)
+            augm_slide_features.append(stacked_augm_patch_features.unsqueeze(0)) # [(1, npatch, 384)] of len M
+        stacked_augm_features = torch.cat(augm_slide_features, dim=0) # (M, npatch, 384)
+
     return stacked_augm_features
 
 
@@ -189,6 +220,7 @@ class AugmentationOptions:
     features_dir: Path
     region_df: pd.DataFrame
     label_df: pd.DataFrame
+    level: str
     multiprocessing: Optional[bool] = True
     kwargs: Dict[str, Union[str, float, int]] = field(default_factory=lambda: {})
 
@@ -203,6 +235,7 @@ class FeatureSpaceAugmentation:
                 simple_augmentation,
                 region_df=options.region_df,
                 label_df=options.label_df,
+                level=options.level,
                 method=self.name,
                 output_dir=options.output_dir,
                 features_dir=options.features_dir,
@@ -212,6 +245,6 @@ class FeatureSpaceAugmentation:
         else:
             raise KeyError(f"'{name}' not supported ; please chose among ['random', 'interpolation', 'extrapolation']")
 
-    def __call__(self, features, slide_id):
-        augm_features = self.aug(features, slide_id=slide_id)
+    def __call__(self, features, slide_id, seed):
+        augm_features = self.aug(features, slide_id=slide_id, seed=seed)
         return augm_features

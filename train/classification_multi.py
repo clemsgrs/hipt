@@ -124,6 +124,7 @@ def main(cfg: DictConfig):
                 features_dir=region_features_dir,
                 region_df=region_df,
                 label_df=train_df,
+                level=cfg.level,
                 multiprocessing=(cfg.speed.num_workers == 0),
                 kwargs=kwargs,
             )
@@ -208,6 +209,10 @@ def main(cfg: DictConfig):
             leave=True,
         ) as t:
             for epoch in t:
+
+                # set dataset seed
+                train_dataset.seed = epoch
+
                 epoch_start_time = time.time()
                 if cfg.wandb.enable:
                     log_dict = {f"train/fold_{i}/epoch": epoch + 1}
