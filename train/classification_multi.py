@@ -110,7 +110,7 @@ def main(cfg: DictConfig):
         if cfg.augmentation.use:
             aug_dir = Path(aug_root_dir, f"fold_{i}")
             aug_dir.mkdir(parents=True, exist_ok=True)
-            csv_path = Path(features_dir.parent, "region_features.csv")
+            csv_path = Path(region_features_dir.parent, "region_features.csv")
             if csv_path.is_file():
                 region_df = pd.read_csv(csv_path)
             elif cfg.augmentation.name in ["interpolation", "extrapolation"]:
