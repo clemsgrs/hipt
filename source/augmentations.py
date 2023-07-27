@@ -57,7 +57,7 @@ def get_knn_features(
     features = []
     in_class_feature_paths = list(in_class_df.feature_path.unique())
     if features_dir:
-        in_class_feature_paths = [Path(features_dir, fp.name) for fp in in_class_feature_paths]
+        in_class_feature_paths = [Path(features_dir, Path(fp).name) for fp in in_class_feature_paths]
     stacked_features_path = Path(output_dir, f"in_class_features_{label}.pt")
     if stacked_features_path.is_file():
         stacked_features = torch.load(stacked_features_path)
