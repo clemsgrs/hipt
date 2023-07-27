@@ -45,6 +45,7 @@ def get_knn_features(
     output_dir: Path = Path(''),
     K: int = 10,
     sim_threshold: Optional[float] = None,
+    features_dir: Optional[Path] = None,
     multiprocessing: bool = True,
 ):
     label = label_df[label_df.slide_id == slide_id].label.values[0]
@@ -55,6 +56,8 @@ def get_knn_features(
     # load features
     features = []
     in_class_feature_paths = list(in_class_df.feature_path.unique())
+    if features_dir:
+        in_class_feature_paths = [Path(features_dir, fp.name) for fp in in_class_feature_paths]
     stacked_features_path = Path(output_dir, f"in_class_features_{label}.pt")
     if stacked_features_path.is_file():
         stacked_features = torch.load(stacked_features_path)
@@ -117,11 +120,12 @@ def simple_augmentation(
     K: int = 10,
     sim_threshold: Optional[float] = None,
     lmbda: float = 0.5,
+    features_dir: Optional[Path] = None,
     multiprocessing: bool = True,
 ):
     augm_features = []
     for feature in features:
-        knn_features, knn_df = get_knn_features(feature, slide_id, region_df, label_df, output_dir, K, sim_threshold, multiprocessing)
+        knn_features, knn_df = get_knn_features(feature, slide_id, region_df, label_df, output_dir, K, sim_threshold, features_dir, multiprocessing)
         # pick a random neighbor, compute augmented feature
         i = random.randint(0,K-1)
         neighbor_feature = knn_features[i]
@@ -182,6 +186,7 @@ def plot_knn_features(feature, x, y, slide_id, region_df, label_df, K: int = 10,
 class AugmentationOptions:
     name: str
     output_dir: Path
+    features_dir: Path
     region_df: pd.DataFrame
     label_df: pd.DataFrame
     multiprocessing: Optional[bool] = True
@@ -200,6 +205,7 @@ class FeatureSpaceAugmentation:
                 label_df=options.label_df,
                 method=self.name,
                 output_dir=options.output_dir,
+                features_dir=options.features_dir,
                 multiprocessing=options.multiprocessing,
                 **options.kwargs,
             )

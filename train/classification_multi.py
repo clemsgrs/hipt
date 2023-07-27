@@ -120,6 +120,7 @@ def main(cfg: DictConfig):
             aug_options = AugmentationOptions(
                 name=cfg.augmentation.name,
                 output_dir=aug_dir,
+                features_dir=features_dir,
                 region_df=region_df,
                 label_df=train_df,
                 multiprocessing=(cfg.speed.num_workers == 0),
