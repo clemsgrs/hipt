@@ -3,16 +3,16 @@ defaults:
   - _self_
 
 data:
-  train_csv: '/data/pathology/projects/ais-cap/dataset/panda/train.csv'
-  tune_csv: '/data/pathology/projects/ais-cap/dataset/panda/tune.csv'
-  test_csv: '/data/pathology/projects/ais-cap/dataset/panda/test.csv'
+  train_csv: '/data/pathology/projects/ais-cap/dataset/panda/5-fold_cleaned/fold_0/train.csv'
+  tune_csv: '/data/pathology/projects/ais-cap/dataset/panda/5-fold_cleaned/fold_0/tune.csv'
+  test_csv:
 
-region_dir: '/data/pathology/projects/ais-cap/dataset/panda/hs2p/patches/otsu/${model.region_size}/jpg'
+region_dir: '/data/pathology/projects/ais-cap/dataset/panda/hs2p/patches/otsu/${model.region_size}/${region_fmt}'
 output_dir: 'output/panda'
 experiment_name: 'classification'
 level: 'region'
 
-M_max: 200
+M_max: 250
 region_fmt: 'jpg'
 
 task: 'classification'
@@ -28,7 +28,8 @@ testing:
   retrieve_checkpoint: 'best'
 
 model:
-  pretrain_vit_patch: '/data/pathology/projects/ais-cap/dataset/panda/hipt/dino/vit_256_small_dino.pt'
+  # pretrain_vit_patch: '/data/pathology/projects/ais-cap/dataset/panda/hipt/dino/vit_256_small_dino.pt'
+  pretrain_vit_patch: '/data/pathology/projects/ais-cap/dataset/panda/hipt/dino/5-fold/vit_256_small_dino_fold_0.pt'
   freeze_vit_patch: False
   freeze_vit_patch_pos_embed: False
   pretrain_vit_region:
@@ -49,7 +50,7 @@ early_stopping:
   min_max: 'min'
   patience: 20
   min_epoch: 50
-  save_all: True
+  save_all: False
 
 wandb:
   enable: True

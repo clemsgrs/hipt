@@ -13,12 +13,13 @@ import matplotlib.pyplot as plt
 
 from pathlib import Path
 from functools import partial
-from omegaconf import DictConfig
+from omegaconf import OmegaConf, DictConfig
 from collections import defaultdict
 
 from source.models import ModelFactory
 from source.components import LossFactory
 from source.dataset import ClassificationDatasetOptions, DatasetFactory
+from source.augmentations import AugmentationOptions, FeatureSpaceAugmentation
 from source.utils import (
     initialize_wandb,
     train,
@@ -63,7 +64,11 @@ def main(cfg: DictConfig):
     result_root_dir = Path(output_dir, "results")
     result_root_dir.mkdir(parents=True, exist_ok=True)
 
-    features_root_dir = Path(cfg.features_dir)
+    if cfg.augmentation.use:
+        aug_root_dir = Path(output_dir, "augmentation")
+        aug_root_dir.mkdir(parents=True, exist_ok=True)
+
+    features_root_dir = Path(cfg.features_root_dir)
 
     assert (cfg.task != "classification" and cfg.label_encoding != "ordinal") or (
         cfg.task == "classification"
@@ -84,7 +89,7 @@ def main(cfg: DictConfig):
         result_dir = Path(result_root_dir, f"fold_{i}")
         result_dir.mkdir(parents=True, exist_ok=True)
 
-        features_dir = Path(features_root_dir, f"fold_{i}")
+        features_dir = Path(features_root_dir, f"fold_{i}/features")
 
         print(f"Loading data for fold {i+1}")
         train_df_path = Path(fold_dir, "train.csv")
@@ -100,12 +105,35 @@ def main(cfg: DictConfig):
             train_df = train_df.sample(frac=cfg.training.pct).reset_index(drop=True)
             tune_df = tune_df.sample(frac=cfg.training.pct).reset_index(drop=True)
 
+        transform = None
+        if cfg.augmentation.use:
+            aug_dir = Path(aug_root_dir, f"fold_{i}")
+            aug_dir.mkdir(parents=True, exist_ok=True)
+            csv_path = Path(features_dir.parent, "region_features.csv")
+            if csv_path.is_file():
+                region_df = pd.read_csv(csv_path)
+            elif cfg.augmentation.name in ["interpolation", "extrapolation"]:
+                raise OSError(f"{csv_path} doesn't exist!")
+            else:
+                region_df = None
+            kwargs = {k: v for e in cfg.augmentation.kwargs for k, v in e.items()}
+            aug_options = AugmentationOptions(
+                name=cfg.augmentation.name,
+                output_dir=aug_dir,
+                region_df=region_df,
+                label_df=train_df,
+                multiprocessing=(cfg.speed.num_workers == 0),
+                kwargs=kwargs,
+            )
+            transform = FeatureSpaceAugmentation(aug_options)
+
         train_dataset_options = ClassificationDatasetOptions(
             df=train_df,
             features_dir=features_dir,
             label_name=cfg.label_name,
             label_mapping=cfg.label_mapping,
             label_encoding=cfg.label_encoding,
+            transform=transform,
         )
         tune_dataset_options = ClassificationDatasetOptions(
             df=tune_df,

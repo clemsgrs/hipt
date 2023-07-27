@@ -110,7 +110,7 @@ def initialize_wandb(
     if cfg.wandb.tags == None:
         tags = []
     else:
-        tags = cfg.wandb.tags
+        tags = [str(t) for t in cfg.wandb.tags]
     config = OmegaConf.to_container(cfg, resolve=True, throw_on_missing=True)
     if cfg.wandb.resume_id:
         run = wandb.init(

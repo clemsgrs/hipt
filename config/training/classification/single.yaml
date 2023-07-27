@@ -3,7 +3,8 @@ data:
   tune_csv: ''
   test_csv: ''
 
-features_dir:
+features_root_dir:
+features_dir: '${features_root_dir}/features'
 output_dir: 'output'
 experiment_name: 'tcga_brca'
 level: 'global'
@@ -24,6 +25,14 @@ training:
   pct:
   weighted_sampling: True
   gradient_accumulation: 32
+
+augmentation:
+  use: False
+  name: 'random'
+  kwargs:
+      - gamma: 0.5
+      - mean: 0.
+      - std: 1.
 
 tuning:
   batch_size: 1

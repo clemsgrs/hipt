@@ -3,7 +3,8 @@ data:
   tune_csv: '/data/pathology/projects/ais-cap/code/git/clemsgrs/hipt/data/debug/classification/train.csv'
   test_csv:
 
-features_dir: '/data/pathology/projects/ais-cap/code/git/clemsgrs/hipt/output/panda/feature_extraction/rqvqzwur/slide'
+features_root_dir: '/data/pathology/projects/ais-cap/code/git/clemsgrs/hipt/output/panda/feature_extraction/rqvqzwur'
+features_dir: '${features_root_dir}/slide'
 output_dir: 'output'
 experiment_name: 'debug'
 level: 'global'
@@ -14,8 +15,9 @@ loss_options:
   num_classes: ${num_classes}
 
 nepochs: 2
-num_classes: 2
+num_classes: 6
 label_name: 'isup_grade'
+# label_mapping: {0: 0, 1: 1, 2: 1, 3: 1, 4: 1, 5: 1}
 label_mapping:
 label_encoding:
 
@@ -23,7 +25,15 @@ training:
   batch_size: 1
   pct:
   weighted_sampling: False
-  gradient_accumulation: 1
+  gradient_accumulation: 32
+
+augmentation:
+  use: True
+  name: 'random'
+  kwargs:
+    - gamma: 0.5
+    - mean: 0.
+    - std: 1.
 
 tuning:
   batch_size: 1
@@ -68,6 +78,9 @@ early_stopping:
   patience: 10
   min_epoch: 30
   save_all: False
+
+speed:
+  num_workers: 0
 
 wandb:
   enable: False

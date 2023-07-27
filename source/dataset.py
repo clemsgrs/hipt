@@ -118,6 +118,7 @@ class ClassificationDatasetOptions:
     label_name: str
     label_mapping: Dict[int, int] = field(default_factory=lambda: {})
     label_encoding: Optional[str] = None
+    transform: Optional[Callable] = None
 
 
 @dataclass
@@ -127,6 +128,7 @@ class SurvivalDatasetOptions:
     tiles_df: pd.DataFrame
     features_dir: Path
     label_name: str
+    transform: Optional[Callable] = None,
 
 
 class DatasetFactory:
@@ -141,6 +143,7 @@ class DatasetFactory:
                 self.dataset = ExtractedFeaturesOrdinalDataset(
                     options.df,
                     options.features_dir,
+                    options.transform,
                     options.label_name,
                     options.label_mapping,
                 )
@@ -148,6 +151,7 @@ class DatasetFactory:
                 self.dataset = ExtractedFeaturesDataset(
                     options.df,
                     options.features_dir,
+                    options.transform,
                     options.label_name,
                     options.label_mapping,
                 )
@@ -202,12 +206,14 @@ class ExtractedFeaturesDataset(torch.utils.data.Dataset):
         self,
         df: pd.DataFrame,
         features_dir: Path,
+        transform: Optional[Callable] = None,
         label_name: str = "label",
         label_mapping: Dict[int, int] = {},
     ):
         self.features_dir = features_dir
         self.label_name = label_name
         self.label_mapping = label_mapping
+        self.transform = transform
 
         self.df, _ = self.prepare_data(df)
 
@@ -248,6 +254,8 @@ class ExtractedFeaturesDataset(torch.utils.data.Dataset):
         fp = Path(self.features_dir, f"{slide_id}.pt")
         features = torch.load(fp)
         label = row.label
+        if self.transform:
+            features = self.transform(features, slide_id)
         return idx, features, label
 
     def __len__(self):
@@ -259,10 +267,11 @@ class ExtractedFeaturesOrdinalDataset(ExtractedFeaturesDataset):
         self,
         df: pd.DataFrame,
         features_dir: Path,
+        transform: Optional[Callable] = None,
         label_name: str = "label",
         label_mapping: Dict[int, int] = {},
     ):
-        super().__init__(df, features_dir, label_name, label_mapping)
+        super().__init__(df, features_dir, transform, label_name, label_mapping)
 
     def __getitem__(self, idx: int):
         row = self.df.loc[idx]
@@ -271,6 +280,8 @@ class ExtractedFeaturesOrdinalDataset(ExtractedFeaturesDataset):
         features = torch.load(fp)
         label = np.zeros(self.num_classes - 1).astype(np.float32)
         label[: row.label] = 1.0
+        if self.transform:
+            features = self.transform(features, slide_id)
         return idx, features, label
 
 
