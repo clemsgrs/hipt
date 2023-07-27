@@ -61,7 +61,8 @@ def main(cfg: DictConfig):
     result_dir.mkdir(parents=True, exist_ok=True)
 
     features_root_dir = Path(cfg.features_root_dir)
-    features_dir = Path(cfg.features_dir)
+    slide_features_dir = Path(features_root_dir, f"slide_features")
+    region_features_dir = Path(features_root_dir, f"region_features")
 
     assert (cfg.task != "classification" and cfg.label_encoding != "ordinal") or (
         cfg.task == "classification"
@@ -92,7 +93,7 @@ def main(cfg: DictConfig):
         aug_options = AugmentationOptions(
             name=cfg.augmentation.name,
             output_dir=aug_dir,
-            features_dir=features_dir,
+            features_dir=region_features_dir,
             region_df=region_df,
             label_df=train_df,
             multiprocessing=(cfg.speed.num_workers == 0),
@@ -102,7 +103,7 @@ def main(cfg: DictConfig):
 
     train_dataset_options = ClassificationDatasetOptions(
         df=train_df,
-        features_dir=features_dir,
+        features_dir=slide_features_dir,
         label_name=cfg.label_name,
         label_mapping=cfg.label_mapping,
         label_encoding=cfg.label_encoding,
@@ -110,7 +111,7 @@ def main(cfg: DictConfig):
     )
     tune_dataset_options = ClassificationDatasetOptions(
         df=tune_df,
-        features_dir=features_dir,
+        features_dir=slide_features_dir,
         label_name=cfg.label_name,
         label_mapping=cfg.label_mapping,
         label_encoding=cfg.label_encoding,
@@ -118,7 +119,7 @@ def main(cfg: DictConfig):
     if cfg.data.test_csv:
         test_dataset_options = ClassificationDatasetOptions(
             df=test_df,
-            features_dir=features_dir,
+            features_dir=slide_features_dir,
             label_name=cfg.label_name,
             label_mapping=cfg.label_mapping,
             label_encoding=cfg.label_encoding,

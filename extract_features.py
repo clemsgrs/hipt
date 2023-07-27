@@ -56,8 +56,8 @@ def main(cfg: DictConfig):
         run_id = obj[0]
 
     output_dir = Path(cfg.output_dir, cfg.experiment_name, run_id)
-    slide_features_dir = Path(output_dir, "slide")
-    region_features_dir = Path(output_dir, "region")
+    slide_features_dir = Path(output_dir, "slide_features")
+    region_features_dir = Path(output_dir, "region_features")
     if not cfg.resume and is_main_process():
         if output_dir.exists():
             print(f"{output_dir} already exists! deleting it...")
