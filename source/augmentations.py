@@ -34,7 +34,7 @@ def extrapolate_feature(ref_feature, neighbor_feature, lmbda: float = 0.5):
 
 
 def load_feature(feature_path):
-    f = torch.load(fp)
+    f = torch.load(feature_path)
     return f
 
 
@@ -68,8 +68,7 @@ def get_knn_features(
             num_workers = mp.cpu_count()
             features = []
             with mp.Pool(num_workers) as pool:
-                args = [(fp) for fp in in_class_feature_paths]
-                for i, r in enumerate(pool.starmap(load_feature, args)):
+                for i, r in enumerate(pool.starmap(load_feature, in_class_feature_paths)):
                     features.append(r)
         else:
             with tqdm.tqdm(
