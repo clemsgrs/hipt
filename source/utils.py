@@ -17,8 +17,9 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 from functools import partial
 from collections import Counter
+from collections.abc import Callable
+from typing import Optional, List, Union
 from omegaconf import DictConfig, OmegaConf
-from typing import Optional, Callable, List, Union
 from sklearn import metrics
 from sklearn.model_selection import train_test_split
 from sksurv.metrics import concordance_index_censored, cumulative_dynamic_auc
@@ -478,12 +479,34 @@ def plot_confusion_matrix(
     return fig
 
 
-def get_majority_vote(preds):
+def custom_isup_grade_dist(x: int, y: int):
+    if (x == 0 and y == 1) or (x == 1 and y == 0):
+        return 1.5
+    else:
+        return abs(x-y)
+
+
+def get_majority_vote(preds, distance_func: Optional[Callable] = None, nfold: int = 5, seed: int = 0):
+    random.seed(seed)
     x = Counter(preds)
     max_occ = x.most_common(1)[0][1]
     ties = [p for p, occ in x.items() if occ == max_occ]
-    if len(ties) > 1:
+    if len(ties) == nfold:
+        # [0,1,2,3,4] situation in 5-fold cv
         i = random.randint(0, len(ties) - 1)
+        maj_vote = ties[i]
+    elif len(ties) > 1:
+        # [0,0,2,3,3] situation in 5-fold cv
+        # in that case, break the tie by taking prediction closest to outlier
+        outlier = [p for p, occ in x.items() if occ != max_occ][0]
+        if distance_func:
+            distances = [distance_func(t, outlier) for t in ties]
+        else:
+            distances = [abs(t-outlier) for t in ties]
+        m = min(distances)
+        idx_min = [i for i, v in enumerate(distances) if v == m]
+        idx = random.randint(0, len(idx_min) - 1)
+        i = idx_min[idx]
         maj_vote = ties[i]
     else:
         maj_vote = ties[0]

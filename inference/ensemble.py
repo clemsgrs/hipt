@@ -18,6 +18,7 @@ from source.utils import (
     initialize_wandb,
     get_metrics,
     get_majority_vote,
+    custom_isup_grade_dist,
     test,
     test_ordinal,
     test_regression,
@@ -84,7 +85,7 @@ def main(cfg: DictConfig):
         msg = model.load_state_dict(sd)
         print(f"Checkpoint loaded with msg: {msg}")
 
-        features_dir = Path(features_root_dir, f"{model_name}")
+        features_dir = Path(features_root_dir, f"{model_name}", "slide_features")
 
         model_start_time = time.time()
         for test_name, csv_path in test_csvs.items():
@@ -160,6 +161,9 @@ def main(cfg: DictConfig):
         print(f"Time taken ({model_name}): {mins}m {secs}s")
         print()
 
+    distance_func = None
+    if cfg.distance_func == 'custom':
+        distance_func = custom_isup_grade_dist
     for test_name, csv_path in test_csvs.items():
         dfs = []
         cols = ["slide_id", "label", "pred"]
@@ -175,7 +179,7 @@ def main(cfg: DictConfig):
         )
         ensemble_df["agg"] = ensemble_df[
             [f"pred_{model_name}" for model_name in checkpoints]
-        ].apply(lambda x: get_majority_vote(x), axis=1)
+        ].apply(lambda x: get_majority_vote(x, distance_func, seed=x.name), axis=1)
 
         test_df = pd.read_csv(csv_path)
         missing_sids = set(test_df.slide_id.values).difference(
