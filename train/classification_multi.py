@@ -124,6 +124,7 @@ def main(cfg: DictConfig):
                 features_dir=region_features_dir,
                 region_df=region_df,
                 label_df=train_df,
+                label_name=cfg.label_name,
                 level=cfg.level,
                 multiprocessing=(cfg.speed.num_workers == 0),
                 kwargs=kwargs,

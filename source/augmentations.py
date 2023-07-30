@@ -43,16 +43,18 @@ def get_knn_features(
     slide_id,
     region_df,
     label_df,
+    label_name: str = 'label',
+    level: str = 'global',
     output_dir: Path = Path(''),
     K: int = 10,
     sim_threshold: Optional[float] = None,
     features_dir: Optional[Path] = None,
     multiprocessing: bool = True,
 ):
-    label = label_df[label_df.slide_id == slide_id].label.values[0]
-    df = pd.merge(region_df, label_df[['slide_id', 'label']], on='slide_id', how='inner')
+    label = label_df[label_df.slide_id == slide_id][label_name].values[0]
+    df = pd.merge(region_df, label_df[['slide_id', label_name]], on='slide_id', how='inner')
     # grab all samples be longing to same class
-    in_class_df = df[df.label == label].reset_index(drop=True)
+    in_class_df = df[df[label_name] == label].reset_index(drop=True)
 
     # load features
     features = []
@@ -68,7 +70,7 @@ def get_knn_features(
             num_workers = mp.cpu_count()
             features = []
             with mp.Pool(num_workers) as pool:
-                for i, r in enumerate(pool.starmap(load_feature, in_class_feature_paths)):
+                for i, r in enumerate(pool.map(load_feature, in_class_feature_paths)):
                     features.append(r)
         else:
             with tqdm.tqdm(
@@ -101,7 +103,10 @@ def get_knn_features(
         indices = indices[idx]
         similarities = similarities[idx]
     knn_features = stacked_features[indices]
-    knn_df = in_class_df.loc[indices]
+    if level == 'global':
+        knn_df = in_class_df.loc[indices]
+    else:
+        knn_df = None
     return knn_features, knn_df
 
 
@@ -117,6 +122,7 @@ def simple_augmentation(
     label_df,
     level: str,
     method: str,
+    label_name: str = 'label',
     output_dir: Path = Path(''),
     K: int = 10,
     sim_threshold: Optional[float] = None,
@@ -130,7 +136,7 @@ def simple_augmentation(
         augm_features = []
         for feature in features:
             # feature = (192)
-            knn_features, knn_df = get_knn_features(feature, slide_id, region_df, label_df, output_dir, K, sim_threshold, features_dir, multiprocessing)
+            knn_features, _ = get_knn_features(feature, slide_id, region_df, label_df, label_name, level, output_dir, K, sim_threshold, features_dir, multiprocessing)
             # pick a random neighbor, compute augmented feature
             random.seed(seed)
             i = random.randint(0,K-1)
@@ -151,7 +157,7 @@ def simple_augmentation(
             augm_patch_features = []
             for patch_feature in slide_features:
                 # patch_feature = (384)
-                knn_features, knn_df = get_knn_features(patch_feature, slide_id, region_df, label_df, output_dir, K, sim_threshold, features_dir, multiprocessing)
+                knn_features, _ = get_knn_features(patch_feature, slide_id, region_df, label_df, label_name, level, output_dir, K, sim_threshold, features_dir, multiprocessing)
                 # pick a random neighbor, compute augmented feature
                 random.seed(seed)
                 i = random.randint(0,K-1)
@@ -170,8 +176,8 @@ def simple_augmentation(
     return stacked_augm_features
 
 
-def plot_knn_features(feature, x, y, slide_id, region_df, label_df, K: int = 10, sim_threshold: Optional[float] = None, region_dir: Optional[str] = None, slide_dir: Optional[str] = None, spacing: Optional[float] = None, backend: str = 'openslide', size: int = 256, region_fmt: str = 'jpg', dpi: int = 300):
-    _, knn_df = get_knn_features(feature, slide_id, region_df, label_df, K, sim_threshold)
+def plot_knn_features(feature, x, y, slide_id, region_df, label_df, label_name: str = 'label', K: int = 10, sim_threshold: Optional[float] = None, region_dir: Optional[str] = None, slide_dir: Optional[str] = None, spacing: Optional[float] = None, backend: str = 'openslide', size: int = 256, region_fmt: str = 'jpg', dpi: int = 300):
+    _, knn_df = get_knn_features(feature, slide_id, region_df, label_df, label_name=label_name, level='gobal', K=K, sim_threshold=sim_threshold)
     fig, ax = plt.subplots(1, K+1, dpi=dpi)
 
     # get reference region
@@ -220,6 +226,7 @@ class AugmentationOptions:
     region_df: pd.DataFrame
     label_df: pd.DataFrame
     level: str
+    label_name: str = 'label'
     multiprocessing: Optional[bool] = True
     kwargs: Dict[str, Union[str, float, int]] = field(default_factory=lambda: {})
 
@@ -234,6 +241,7 @@ class FeatureSpaceAugmentation:
                 simple_augmentation,
                 region_df=options.region_df,
                 label_df=options.label_df,
+                label_name=options.label_name,
                 level=options.level,
                 method=self.name,
                 output_dir=options.output_dir,
@@ -242,7 +250,7 @@ class FeatureSpaceAugmentation:
                 **options.kwargs,
             )
         else:
-            raise KeyError(f"'{name}' not supported ; please chose among ['random', 'interpolation', 'extrapolation']")
+            raise KeyError(f"'{self.name}' not supported ; please chose among ['random', 'interpolation', 'extrapolation']")
 
     def __call__(self, features, slide_id, seed):
         augm_features = self.aug(features, slide_id=slide_id, seed=seed)
