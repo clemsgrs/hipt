@@ -30,6 +30,9 @@ model:
     max_nslide:
     tile_size:
 
+speed:
+  num_workers: 8
+
 wandb:
   enable: False
   project: 'hipt'

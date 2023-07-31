@@ -12,12 +12,10 @@ from functools import partial
 from omegaconf import DictConfig
 
 from source.models import ModelFactory
-from source.dataset import ClassificationDatasetOptions, DatasetFactory
+from source.dataset import StackedRegionsDataset
 from source.utils import (
     initialize_wandb,
     test,
-    test_ordinal,
-    test_regression,
     compute_time,
     collate_features,
 )
@@ -44,7 +42,7 @@ def main(cfg: DictConfig):
     result_dir = Path(output_dir, "results")
     result_dir.mkdir(parents=True, exist_ok=True)
 
-    features_dir = Path(cfg.features_dir)
+    region_dir = Path(cfg.region_dir)
 
     assert (cfg.task != "classification" and cfg.label_encoding != "ordinal") or (
         cfg.task == "classification"
@@ -56,10 +54,9 @@ def main(cfg: DictConfig):
     model.relocate()
     print(model)
     print()
-
+    
     print(f"Loading provided model checkpoint")
     print(cfg.model.checkpoint)
-    print(model.state_dict())
     sd = torch.load(cfg.model.checkpoint)
     msg = model.load_state_dict(sd)
     print(f"Checkpoint loaded with msg: {msg}")
@@ -70,44 +67,27 @@ def main(cfg: DictConfig):
         print(f"Loading {test_name} data")
         test_df = pd.read_csv(csv_path)
 
-        test_dataset_options = ClassificationDatasetOptions(
-            df=test_df,
-            features_dir=features_dir,
-            label_name=cfg.label_name,
-            label_mapping=cfg.label_mapping,
-            label_encoding=cfg.label_encoding,
-        )
-
         print(f"Initializing test dataset")
-        test_dataset = DatasetFactory(cfg.task, test_dataset_options).get_dataset()
+        test_dataset = StackedRegionsDataset(
+            test_df,
+            region_dir,
+            cfg.model.region_size,
+            cfg.region_fmt,
+            cfg.label_name,
+            cfg.label_mapping,
+            M_max=cfg.M_max,
+        )
+        test_dataset.seed = 0
 
         print(f"Running inference on {test_name} dataset")
 
-        if cfg.task == "regression":
-            test_results = test_regression(
-                model,
-                test_dataset,
-                batch_size=1,
-                num_workers=cfg.speed.num_workers,
-                use_wandb=cfg.wandb.enable,
-            )
-        elif cfg.label_encoding == "ordinal":
-            test_results = test_ordinal(
-                model,
-                test_dataset,
-                batch_size=1,
-                num_workers=cfg.speed.num_workers,
-                use_wandb=cfg.wandb.enable,
-            )
-        else:
-            test_results = test(
-                model,
-                test_dataset,
-                collate_fn=partial(collate_features, label_type="int"),
-                batch_size=1,
-                num_workers=cfg.speed.num_workers,
-                use_wandb=cfg.wandb.enable,
-            )
+        test_results = test(
+            model,
+            test_dataset,
+            batch_size=1,
+            num_workers=cfg.speed.num_workers,
+            use_wandb=cfg.wandb.enable,
+        )
         test_dataset.df.to_csv(Path(result_dir, f"{test_name}.csv"), index=False)
         print()
 
