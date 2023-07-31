@@ -40,9 +40,10 @@ def load_feature(feature_path):
 
 def get_knn_features(
     feature,
-    slide_id,
-    region_df,
-    label_df,
+    slide_id: str,
+    fname: str,
+    region_df: pd.DataFrame,
+    label_df: pd.DataFrame,
     label_name: str = 'label',
     level: str = 'global',
     output_dir: Path = Path(''),
@@ -63,7 +64,7 @@ def get_knn_features(
         in_class_feature_paths = [Path(features_dir, Path(fp).name) for fp in in_class_feature_paths]
     stacked_features_path = Path(output_dir, f"in_class_features_{label}.pt")
     if stacked_features_path.is_file():
-        stacked_features = torch.load(stacked_features_path)
+        stacked_features = torch.load(stacked_features_path)    # (nregion, 192) or (nregion*npatch, 384) with npatch = 256 (resp. 64, 16) if region size = 4096 (resp. 2048, 1024)
     else:
         # multi-cpu support
         if multiprocessing:
@@ -84,30 +85,54 @@ def get_knn_features(
                     features.append(f)
         assert len(features) == len(in_class_feature_paths)
         stacked_features = torch.cat(features, dim=0)
-        torch.save(stacked_features, stacked_features_path)
-
-    knn = NearestNeighbors(
-        n_neighbors=K+1,
-        metric='cosine',
-    )
-    knn.fit(stacked_features.numpy())
-    # retrieve K nearest neighbors
-    distances, indices = knn.kneighbors(feature.numpy().reshape(1, -1), return_distance=True)
-    # drop the first result which corresponds to the input feature
-    distances, indices = distances.squeeze()[1:], indices.squeeze()[1:].tolist()
-    # cosine distance is defined as (1 - cosine_similarity)
-    similarities = (1 - distances)
-    # optional thresholding
-    if sim_threshold:
-        idx = (similarities > sim_threshold).nonzero()[0]
-        indices = indices[idx]
-        similarities = similarities[idx]
-    knn_features = stacked_features[indices]
-    if level == 'global':
-        knn_df = in_class_df.loc[indices]
+        # save it for later epochs
+        torch.save(stacked_features, stacked_features_path) # (nregion, 192) or (nregion*npatch, 384) with npatch = 256 (resp. 64, 16) if region size = 4096 (resp. 2048, 1024)
+    # nearest neighbor search doesn't have to be conducted every epoch
+    # only on first epoch
+    knn_output_dir = Path(output_dir, 'knn')
+    knn_output_dir.mkdir(exist_ok=True)
+    knn_csv_path = Path(knn_output_dir, f"{slide_id}_{fname}.csv")
+    if knn_csv_path.is_file():
+        knn_df = pd.read_csv(knn_csv_path)
     else:
-        knn_df = None
-    return knn_features, knn_df
+        knn = NearestNeighbors(
+            n_neighbors=K+1,
+            metric='cosine',
+        )
+        knn.fit(stacked_features.numpy())
+        # retrieve K nearest neighbors
+        distances, indices = knn.kneighbors(feature.numpy().reshape(1, -1), return_distance=True)
+        # drop the first result which corresponds to the input feature
+        distances, indices = distances.squeeze()[1:], indices.squeeze()[1:].tolist()
+        # cosine distance is defined as (1 - cosine_similarity)
+        similarities = (1 - distances)
+        # optional thresholding
+        if sim_threshold:
+            idx = (similarities > sim_threshold).nonzero()[0]
+            indices = indices[idx]
+            similarities = similarities[idx]
+        if level == "local":
+            npatch = 64
+            region_indices, patch_indices = [i//npatch for i in indices], [i%npatch for i in indices]
+            knn_df = pd.DataFrame(
+                {
+                    'region_idx': region_indices,
+                    'patch_idx': patch_indices,
+                    'knn_idx': indices,
+                    'sim': similarities,
+                }
+            )
+        else:
+            knn_df = pd.DataFrame(
+                {
+                    'knn_idx': indices,
+                    'sim': similarities,
+                }
+            )
+        knn_df.to_csv(knn_csv_path)
+    indices = knn_df.knn_idx.values.tolist()
+    knn_features = stacked_features[indices]
+    return knn_features, indices
 
 
 def random_augmentation(features, gamma: float = 0.5, mean: float = 0., std: float = 1., seed: int = 21, slide_id: Optional[str] = None):
@@ -134,9 +159,10 @@ def simple_augmentation(
     if level == "global":
         # features = (M, 192)
         augm_features = []
-        for feature in features:
+        for region_idx, feature in enumerate(features):
             # feature = (192)
-            knn_features, _ = get_knn_features(feature, slide_id, region_df, label_df, label_name, level, output_dir, K, sim_threshold, features_dir, multiprocessing)
+            fname = f"{region_idx}"
+            knn_features, _ = get_knn_features(feature, slide_id, fname, region_df, label_df, label_name, level, output_dir, K, sim_threshold, features_dir, multiprocessing)
             # pick a random neighbor, compute augmented feature
             random.seed(seed)
             i = random.randint(0,K-1)
@@ -152,12 +178,13 @@ def simple_augmentation(
     elif level == "local":
         # features = (M, npatch, 384)
         augm_slide_features = []
-        for slide_features in features:
-            # slide_features = (npatch, 384)
+        for region_idx, region_features in enumerate(features):
+            # region_features = (npatch, 384)
             augm_patch_features = []
-            for patch_feature in slide_features:
+            for patch_idx, patch_feature in enumerate(region_features):
                 # patch_feature = (384)
-                knn_features, _ = get_knn_features(patch_feature, slide_id, region_df, label_df, label_name, level, output_dir, K, sim_threshold, features_dir, multiprocessing)
+                fname = f"{region_idx}_{patch_idx}"
+                knn_features, _ = get_knn_features(patch_feature, slide_id, fname, region_df, label_df, label_name, level, output_dir, K, sim_threshold, features_dir, multiprocessing)
                 # pick a random neighbor, compute augmented feature
                 random.seed(seed)
                 i = random.randint(0,K-1)
@@ -177,7 +204,13 @@ def simple_augmentation(
 
 
 def plot_knn_features(feature, x, y, slide_id, region_df, label_df, label_name: str = 'label', K: int = 10, sim_threshold: Optional[float] = None, region_dir: Optional[str] = None, slide_dir: Optional[str] = None, spacing: Optional[float] = None, backend: str = 'openslide', size: int = 256, region_fmt: str = 'jpg', dpi: int = 300):
-    _, knn_df = get_knn_features(feature, slide_id, region_df, label_df, label_name=label_name, level='gobal', K=K, sim_threshold=sim_threshold)
+    label = label_df[label_df.slide_id == slide_id][label_name].values[0]
+    df = pd.merge(region_df, label_df[['slide_id', label_name]], on='slide_id', how='inner')
+    # grab all samples be longing to same class
+    in_class_df = df[df[label_name] == label].reset_index(drop=True)
+    fname = f"{x}_{y}"
+    _, knn_indices = get_knn_features(feature, slide_id, region_df, label_df, label_name=label_name, level='gobal', K=K, sim_threshold=sim_threshold)
+    knn_df = in_class_df.loc[knn_indices]
     fig, ax = plt.subplots(1, K+1, dpi=dpi)
 
     # get reference region
