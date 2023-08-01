@@ -4,7 +4,6 @@ data:
   test_csv: ''
 
 features_root_dir:
-features_dir: '${features_root_dir}/features'
 output_dir: 'output'
 experiment_name: 'tcga_brca'
 level: 'global'

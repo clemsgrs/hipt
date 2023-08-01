@@ -1,6 +1,6 @@
 test_csv:
 
-features_dir:
+features_root_dir:
 output_dir: 'output/debug'
 experiment_name: 'inference'
 level: 'global'

@@ -5,6 +5,7 @@ import hydra
 import torch
 import datetime
 import pandas as pd
+import multiprocessing as mp
 import matplotlib.pyplot as plt
 
 from pathlib import Path
@@ -44,7 +45,10 @@ def main(cfg: DictConfig):
     result_dir = Path(output_dir, "results")
     result_dir.mkdir(parents=True, exist_ok=True)
 
-    features_dir = Path(cfg.features_dir)
+    features_root_dir = Path(cfg.features_root_dir)
+    slide_features_dir = Path(features_root_dir, f"slide_features")
+
+    num_workers = min(mp.cpu_count(), cfg.speed.num_workers)
 
     assert (cfg.task != "classification" and cfg.label_encoding != "ordinal") or (
         cfg.task == "classification"
@@ -59,7 +63,6 @@ def main(cfg: DictConfig):
 
     print(f"Loading provided model checkpoint")
     print(cfg.model.checkpoint)
-    print(model.state_dict())
     sd = torch.load(cfg.model.checkpoint)
     msg = model.load_state_dict(sd)
     print(f"Checkpoint loaded with msg: {msg}")
@@ -72,7 +75,7 @@ def main(cfg: DictConfig):
 
         test_dataset_options = ClassificationDatasetOptions(
             df=test_df,
-            features_dir=features_dir,
+            features_dir=slide_features_dir,
             label_name=cfg.label_name,
             label_mapping=cfg.label_mapping,
             label_encoding=cfg.label_encoding,
@@ -88,7 +91,7 @@ def main(cfg: DictConfig):
                 model,
                 test_dataset,
                 batch_size=1,
-                num_workers=cfg.speed.num_workers,
+                num_workers=num_workers,
                 use_wandb=cfg.wandb.enable,
             )
         elif cfg.label_encoding == "ordinal":
@@ -96,7 +99,7 @@ def main(cfg: DictConfig):
                 model,
                 test_dataset,
                 batch_size=1,
-                num_workers=cfg.speed.num_workers,
+                num_workers=num_workers,
                 use_wandb=cfg.wandb.enable,
             )
         else:
@@ -105,7 +108,7 @@ def main(cfg: DictConfig):
                 test_dataset,
                 collate_fn=partial(collate_features, label_type="int"),
                 batch_size=1,
-                num_workers=cfg.speed.num_workers,
+                num_workers=num_workers,
                 use_wandb=cfg.wandb.enable,
             )
         test_dataset.df.to_csv(Path(result_dir, f"{test_name}.csv"), index=False)

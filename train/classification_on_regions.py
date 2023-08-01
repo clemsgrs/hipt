@@ -7,6 +7,7 @@ import torch.nn as nn
 import hydra
 import datetime
 import pandas as pd
+import multiprocessing as mp
 import matplotlib.pyplot as plt
 
 from pathlib import Path
@@ -53,6 +54,8 @@ def main(cfg: DictConfig):
     result_dir.mkdir(parents=True, exist_ok=True)
 
     region_dir = Path(cfg.region_dir)
+
+    num_workers = min(mp.cpu_count(), cfg.speed.num_workers)
 
     assert (cfg.task != "classification" and cfg.label_encoding != "ordinal") or (
         cfg.task == "classification"
@@ -158,7 +161,7 @@ def main(cfg: DictConfig):
                 batch_size=cfg.training.batch_size,
                 weighted_sampling=cfg.training.weighted_sampling,
                 gradient_accumulation=cfg.training.gradient_accumulation,
-                num_workers=cfg.speed.num_workers,
+                num_workers=num_workers,
                 use_wandb=cfg.wandb.enable,
             )
 
@@ -177,7 +180,7 @@ def main(cfg: DictConfig):
                     tune_dataset,
                     criterion,
                     batch_size=cfg.tuning.batch_size,
-                    num_workers=cfg.speed.num_workers,
+                    num_workers=num_workers,
                     use_wandb=cfg.wandb.enable,
                 )
 
@@ -219,6 +222,14 @@ def main(cfg: DictConfig):
                 )
                 break
 
+    # save number of regions per slide
+    M_data = {
+        'slide_id': list(train_dataset.slide_id_to_M.keys())+list(tune_dataset.slide_id_to_M.keys()),
+        'M': list(train_dataset.slide_id_to_M.values())+list(tune_dataset.slide_id_to_M.values()),
+    }
+    M_df = pd.DataFrame.from_dict(M_data)
+    M_df.to_csv(Path(result_dir, f"M.csv"), index=False)
+
     # load best model
     best_model_fp = Path(checkpoint_dir, f"{cfg.testing.retrieve_checkpoint}.pt")
     if cfg.wandb.enable:
@@ -232,7 +243,7 @@ def main(cfg: DictConfig):
         model,
         tune_dataset,
         batch_size=1,
-        num_workers=cfg.speed.num_workers,
+        num_workers=num_workers,
         use_wandb=cfg.wandb.enable,
     )
     tune_dataset.df.to_csv(
@@ -269,7 +280,8 @@ def main(cfg: DictConfig):
             model,
             test_dataset,
             batch_size=1,
-            num_workers=cfg.speed.num_workers,
+            num_workers=num_workers,
+            use_wandb=cfg.wandb.enable,
         )
         test_dataset.df.to_csv(Path(result_dir, f"test.csv"), index=False)
 
@@ -294,4 +306,8 @@ def main(cfg: DictConfig):
 
 
 if __name__ == "__main__":
+
+    import torch.multiprocessing
+    torch.multiprocessing.set_sharing_strategy("file_system")
+
     main()

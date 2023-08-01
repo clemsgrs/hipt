@@ -70,6 +70,8 @@ def main(cfg: DictConfig):
 
     features_root_dir = Path(cfg.features_root_dir)
 
+    num_workers = min(mp.cpu_count(), cfg.speed.num_workers)
+
     assert (cfg.task != "classification" and cfg.label_encoding != "ordinal") or (
         cfg.task == "classification"
     )
@@ -126,7 +128,7 @@ def main(cfg: DictConfig):
                 label_df=train_df,
                 label_name=cfg.label_name,
                 level=cfg.level,
-                multiprocessing=(cfg.speed.num_workers == 0),
+                multiprocessing=(num_workers == 0),
                 kwargs=kwargs,
             )
             transform = FeatureSpaceAugmentation(aug_options)
@@ -228,7 +230,7 @@ def main(cfg: DictConfig):
                         batch_size=cfg.training.batch_size,
                         weighted_sampling=cfg.training.weighted_sampling,
                         gradient_accumulation=cfg.training.gradient_accumulation,
-                        num_workers=cfg.speed.num_workers,
+                        num_workers=num_workers,
                         use_wandb=cfg.wandb.enable,
                     )
                 elif cfg.label_encoding == "ordinal":
@@ -242,7 +244,7 @@ def main(cfg: DictConfig):
                         batch_size=cfg.training.batch_size,
                         weighted_sampling=cfg.training.weighted_sampling,
                         gradient_accumulation=cfg.training.gradient_accumulation,
-                        num_workers=cfg.speed.num_workers,
+                        num_workers=num_workers,
                         use_wandb=cfg.wandb.enable,
                     )
                 else:
@@ -256,7 +258,7 @@ def main(cfg: DictConfig):
                         batch_size=cfg.training.batch_size,
                         weighted_sampling=cfg.training.weighted_sampling,
                         gradient_accumulation=cfg.training.gradient_accumulation,
-                        num_workers=cfg.speed.num_workers,
+                        num_workers=num_workers,
                         use_wandb=cfg.wandb.enable,
                     )
 
@@ -283,7 +285,7 @@ def main(cfg: DictConfig):
                             tune_dataset,
                             criterion,
                             batch_size=cfg.tuning.batch_size,
-                            num_workers=cfg.speed.num_workers,
+                            num_workers=num_workers,
                             use_wandb=cfg.wandb.enable,
                         )
                     elif cfg.label_encoding == "ordinal":
@@ -294,7 +296,7 @@ def main(cfg: DictConfig):
                             criterion,
                             cfg.loss,
                             batch_size=cfg.tuning.batch_size,
-                            num_workers=cfg.speed.num_workers,
+                            num_workers=num_workers,
                             use_wandb=cfg.wandb.enable,
                         )
                     else:
@@ -305,7 +307,7 @@ def main(cfg: DictConfig):
                             criterion,
                             collate_fn=partial(collate_features, label_type="int"),
                             batch_size=cfg.tuning.batch_size,
-                            num_workers=cfg.speed.num_workers,
+                            num_workers=num_workers,
                             use_wandb=cfg.wandb.enable,
                         )
 
@@ -369,7 +371,7 @@ def main(cfg: DictConfig):
                 model,
                 tune_dataset,
                 batch_size=1,
-                num_workers=cfg.speed.num_workers,
+                num_workers=num_workers,
                 use_wandb=cfg.wandb.enable,
             )
         elif cfg.label_encoding == "ordinal":
@@ -378,7 +380,7 @@ def main(cfg: DictConfig):
                 tune_dataset,
                 cfg.loss,
                 batch_size=1,
-                num_workers=cfg.speed.num_workers,
+                num_workers=num_workers,
                 use_wandb=cfg.wandb.enable,
             )
         else:
@@ -387,7 +389,7 @@ def main(cfg: DictConfig):
                 tune_dataset,
                 collate_fn=partial(collate_features, label_type="int"),
                 batch_size=1,
-                num_workers=cfg.speed.num_workers,
+                num_workers=num_workers,
                 use_wandb=cfg.wandb.enable,
             )
         tune_dataset.df.to_csv(
@@ -426,7 +428,7 @@ def main(cfg: DictConfig):
                     model,
                     test_dataset,
                     batch_size=1,
-                    num_workers=cfg.speed.num_workers,
+                    num_workers=num_workers,
                     use_wandb=cfg.wandb.enable,
                 )
             elif cfg.label_encoding == "ordinal":
@@ -435,7 +437,7 @@ def main(cfg: DictConfig):
                     test_dataset,
                     cfg.loss,
                     batch_size=1,
-                    num_workers=cfg.speed.num_workers,
+                    num_workers=num_workers,
                     use_wandb=cfg.wandb.enable,
                 )
             else:
@@ -444,7 +446,7 @@ def main(cfg: DictConfig):
                     test_dataset,
                     collate_fn=partial(collate_features, label_type="int"),
                     batch_size=1,
-                    num_workers=cfg.speed.num_workers,
+                    num_workers=num_workers,
                     use_wandb=cfg.wandb.enable,
                 )
             test_dataset.df.to_csv(Path(result_dir, f"test.csv"), index=False)

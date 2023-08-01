@@ -5,6 +5,7 @@ import hydra
 import torch
 import datetime
 import pandas as pd
+import multiprocessing as mp
 import matplotlib.pyplot as plt
 
 from pathlib import Path
@@ -43,6 +44,8 @@ def main(cfg: DictConfig):
     result_dir.mkdir(parents=True, exist_ok=True)
 
     region_dir = Path(cfg.region_dir)
+
+    num_workers = min(mp.cpu_count(), cfg.speed.num_workers)
 
     assert (cfg.task != "classification" and cfg.label_encoding != "ordinal") or (
         cfg.task == "classification"
@@ -85,7 +88,7 @@ def main(cfg: DictConfig):
             model,
             test_dataset,
             batch_size=1,
-            num_workers=cfg.speed.num_workers,
+            num_workers=num_workers,
             use_wandb=cfg.wandb.enable,
         )
         test_dataset.df.to_csv(Path(result_dir, f"{test_name}.csv"), index=False)
