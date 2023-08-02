@@ -18,9 +18,9 @@ from source.components import LossFactory
 from source.dataset import StackedRegionsDataset
 from source.utils import (
     initialize_wandb,
-    train,
-    tune,
-    test,
+    train_on_regions,
+    tune_on_regions,
+    test_on_regions,
     compute_time,
     update_log_dict,
     EarlyStopping,
@@ -152,7 +152,7 @@ def main(cfg: DictConfig):
             if cfg.wandb.enable:
                 log_dict = {"epoch": epoch + 1}
 
-            train_results = train(
+            train_results = train_on_regions(
                 epoch + 1,
                 model,
                 train_dataset,
@@ -174,7 +174,7 @@ def main(cfg: DictConfig):
             )
 
             if epoch % cfg.tuning.tune_every == 0:
-                tune_results = tune(
+                tune_results = tune_on_regions(
                     epoch + 1,
                     model,
                     tune_dataset,
@@ -222,14 +222,6 @@ def main(cfg: DictConfig):
                 )
                 break
 
-    # save number of regions per slide
-    M_data = {
-        'slide_id': list(train_dataset.slide_id_to_M.keys())+list(tune_dataset.slide_id_to_M.keys()),
-        'M': list(train_dataset.slide_id_to_M.values())+list(tune_dataset.slide_id_to_M.values()),
-    }
-    M_df = pd.DataFrame.from_dict(M_data)
-    M_df.to_csv(Path(result_dir, f"M.csv"), index=False)
-
     # load best model
     best_model_fp = Path(checkpoint_dir, f"{cfg.testing.retrieve_checkpoint}.pt")
     if cfg.wandb.enable:
@@ -239,7 +231,7 @@ def main(cfg: DictConfig):
 
     # best tune score
     tune_dataset.seed = early_stopping.best_epoch
-    tune_results = test(
+    tune_results = test_on_regions(
         model,
         tune_dataset,
         batch_size=1,
@@ -276,7 +268,7 @@ def main(cfg: DictConfig):
     # testing
     if cfg.data.test_csv:
         test_dataset.seed = early_stopping.best_epoch
-        test_results = test(
+        test_results = test_on_regions(
             model,
             test_dataset,
             batch_size=1,

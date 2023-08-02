@@ -54,4 +54,4 @@ early_stopping:
 
 wandb:
   enable: True
-  tags: ['panda', '${level}']
+  tags: ['panda', '${level}', '${loss}', '${model.region_size}']

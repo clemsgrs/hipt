@@ -586,6 +586,7 @@ class StackedRegionsDataset(torch.utils.data.Dataset):
         self.label_name = label_name
         self.label_mapping = label_mapping
         self.transform = transform
+
         self.M_max = M_max
 
         self.seed = 0
@@ -656,9 +657,9 @@ class StackedRegionsDataset(torch.utils.data.Dataset):
                 img = img.unsqueeze(0)
                 stacked_regions[i] = img
 
-            label = row[self.label_name]
+        label = row[self.label_name]
 
-            return idx, stacked_regions, label
+        return idx, stacked_regions, M, label
 
     def __len__(self):
         return len(self.df)

@@ -325,6 +325,18 @@ def collate_survival_features_coords(
     return [idx, feature, coords, label, event_time, censorship]
 
 
+def collate_features_and_num_regions(batch, label_type: str = "int"):
+    idx = torch.LongTensor([item[0] for item in batch])
+    # feature = torch.vstack([item[1] for item in batch])
+    feature = torch.cat([item[1] for item in batch], dim=0)
+    num_regions = torch.LongTensor([item[2] for item in batch])
+    if label_type == "float":
+        label = torch.FloatTensor([item[3] for item in batch])
+    elif label_type == "int":
+        label = torch.LongTensor([item[3] for item in batch])
+    return [idx, feature, num_regions, label]
+
+
 def collate_region_filepaths(batch):
     item = batch[0]
     idx = torch.LongTensor([item[0]])
@@ -1780,5 +1792,273 @@ def test_survival(
     )[0]
 
     results["c-index"] = c_index
+
+    return results
+
+
+def train_on_regions(
+    epoch: int,
+    model: nn.Module,
+    dataset: torch.utils.data.Dataset,
+    optimizer: torch.optim.Optimizer,
+    criterion: Callable,
+    collate_fn: Callable = partial(collate_features_and_num_regions, label_type="int"),
+    batch_size: Optional[int] = 1,
+    weighted_sampling: Optional[bool] = False,
+    gradient_accumulation: Optional[int] = None,
+    num_workers: int = 0,
+    use_wandb: bool = False,
+):
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    model.train()
+    epoch_loss = 0
+    probs = np.empty((0, dataset.num_classes))
+    preds, labels = [], []
+    idxs, num_regions = [], []
+
+    sampler = torch.utils.data.RandomSampler(dataset)
+    if weighted_sampling:
+        weights = make_weights_for_balanced_classes(dataset)
+        sampler = torch.utils.data.WeightedRandomSampler(
+            weights,
+            len(weights),
+        )
+
+    loader = torch.utils.data.DataLoader(
+        dataset,
+        batch_size=batch_size,
+        sampler=sampler,
+        collate_fn=collate_fn,
+        num_workers=num_workers,
+    )
+
+    results = {}
+
+    with tqdm.tqdm(
+        loader,
+        desc=(f"Epoch {epoch} - Train"),
+        unit=" slide",
+        ncols=80,
+        unit_scale=batch_size,
+        leave=False,
+    ) as t:
+        for i, batch in enumerate(t):
+            # optimizer.zero_grad()
+            idx, x, M, label = batch
+            x, label = x.to(device, non_blocking=True), label.to(
+                device, non_blocking=True
+            )
+            logits = model(x)
+            loss = criterion(logits, label)
+
+            loss_value = loss.item()
+            epoch_loss += loss_value
+
+            if gradient_accumulation:
+                loss = loss / gradient_accumulation
+
+            loss.backward()
+
+            if (i + 1) % gradient_accumulation == 0:
+                optimizer.step()
+                optimizer.zero_grad()
+
+            pred = torch.topk(logits, 1, dim=1)[1]
+            preds.extend(pred[:, 0].clone().tolist())
+
+            prob = F.softmax(logits, dim=1).cpu().detach().numpy()
+            probs = np.append(probs, prob, axis=0)
+
+            labels.extend(label.clone().tolist())
+            idxs.extend(list(idx))
+            num_regions.extend(list(M))
+
+    # TODO: what happens if idxs is not made of unique index values?
+    for class_idx, p in enumerate(probs.T):
+        dataset.df.loc[idxs, f"prob_{class_idx}"] = p.tolist()
+    dataset.df.loc[idxs, f"pred"] = preds
+    dataset.df.loc[idxs, f"num_regions_sampled"] = [int(m) for m in num_regions]
+
+    if dataset.num_classes == 2:
+        metrics = get_binary_metrics(preds, labels, probs[:, 1])
+        # roc_auc_curve = get_roc_auc_curve(probs[:, 1], labels)
+        # results.update({"roc_auc_curve": roc_auc_curve})
+    else:
+        metrics = get_metrics(
+            preds,
+            labels,
+            probs,
+            class_names=[f"isup_{i}" for i in range(dataset.num_classes)],
+            use_wandb=use_wandb,
+        )
+
+    results.update(metrics)
+
+    train_loss = epoch_loss / len(loader)
+    results["loss"] = train_loss
+
+    return results
+
+
+def tune_on_regions(
+    epoch: int,
+    model: nn.Module,
+    dataset: torch.utils.data.Dataset,
+    criterion: Callable,
+    collate_fn: Callable = partial(collate_features_and_num_regions, label_type="int"),
+    batch_size: Optional[int] = 1,
+    num_workers: int = 0,
+    use_wandb: bool = False,
+):
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    model.eval()
+    epoch_loss = 0
+    probs = np.empty((0, dataset.num_classes))
+    preds, labels = [], []
+    idxs, num_regions = [], []
+
+    sampler = torch.utils.data.SequentialSampler(dataset)
+
+    loader = torch.utils.data.DataLoader(
+        dataset,
+        batch_size=batch_size,
+        sampler=sampler,
+        collate_fn=collate_fn,
+        num_workers=num_workers,
+    )
+
+    results = {}
+
+    with tqdm.tqdm(
+        loader,
+        desc=(f"Epoch {epoch} - Tune"),
+        unit=" slide",
+        ncols=80,
+        unit_scale=batch_size,
+        leave=False,
+    ) as t:
+        with torch.no_grad():
+            for i, batch in enumerate(t):
+                idx, x, M, label = batch
+                x, label = x.to(device, non_blocking=True), label.to(
+                    device, non_blocking=True
+                )
+                logits = model(x)
+                loss = criterion(logits, label)
+
+                pred = torch.topk(logits, 1, dim=1)[1]
+                preds.extend(pred[:, 0].clone().tolist())
+
+                prob = F.softmax(logits, dim=1).cpu().detach().numpy()
+                probs = np.append(probs, prob, axis=0)
+
+                labels.extend(label.clone().tolist())
+                idxs.extend(list(idx))
+                num_regions.extend(list(M))
+
+                epoch_loss += loss.item()
+
+    # TODO: what happens if idxs is not made of unique index values?
+    for class_idx, p in enumerate(probs.T):
+        dataset.df.loc[idxs, f"prob_{class_idx}"] = p.tolist()
+    dataset.df.loc[idxs, f"pred"] = preds
+    dataset.df.loc[idxs, f"num_regions_sampled"] = [int(m) for m in num_regions]
+
+    if dataset.num_classes == 2:
+        metrics = get_binary_metrics(preds, labels, probs[:, 1])
+        # roc_auc_curve = get_roc_auc_curve(probs[:, 1], labels)
+        # results.update({"roc_auc_curve": roc_auc_curve})
+    else:
+        metrics = get_metrics(
+            preds,
+            labels,
+            probs,
+            class_names=[f"isup_{i}" for i in range(dataset.num_classes)],
+            use_wandb=use_wandb,
+        )
+
+    results.update(metrics)
+
+    tune_loss = epoch_loss / len(loader)
+    results["loss"] = tune_loss
+
+    return results
+
+
+def test_on_regions(
+    model: nn.Module,
+    dataset: torch.utils.data.Dataset,
+    collate_fn: Callable = partial(collate_features_and_num_regions, label_type="int"),
+    batch_size: Optional[int] = 1,
+    num_workers: int = 0,
+    use_wandb: bool = False,
+):
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    model.eval()
+    probs = np.empty((0, dataset.num_classes))
+    preds, labels = [], []
+    idxs, num_regions = [], []
+
+    sampler = torch.utils.data.SequentialSampler(dataset)
+
+    loader = torch.utils.data.DataLoader(
+        dataset,
+        batch_size=batch_size,
+        sampler=sampler,
+        collate_fn=collate_fn,
+        num_workers=num_workers,
+    )
+
+    results = {}
+
+    with tqdm.tqdm(
+        loader,
+        desc=(f"Test"),
+        unit=" slide",
+        ncols=80,
+        unit_scale=batch_size,
+        leave=True,
+    ) as t:
+        with torch.no_grad():
+            for i, batch in enumerate(t):
+                idx, x, M, label = batch
+                x, label = x.to(device, non_blocking=True), label.to(
+                    device, non_blocking=True
+                )
+                logits = model(x)
+
+                pred = torch.topk(logits, 1, dim=1)[1]
+                preds.extend(pred[:, 0].clone().tolist())
+
+                prob = F.softmax(logits, dim=1).cpu().detach().numpy()
+                probs = np.append(probs, prob, axis=0)
+
+                labels.extend(label.clone().tolist())
+                idxs.extend(list(idx))
+                num_regions.extend(list(M))
+
+    # TODO: what happens if idxs is not made of unique index values?
+    for class_idx, p in enumerate(probs.T):
+        dataset.df.loc[idxs, f"prob_{class_idx}"] = p.tolist()
+    dataset.df.loc[idxs, f"pred"] = preds
+    dataset.df.loc[idxs, f"num_regions_sampled"] = [int(m) for m in num_regions]
+
+    if dataset.num_classes == 2:
+        metrics = get_binary_metrics(preds, labels, probs[:, 1])
+        # roc_auc_curve = get_roc_auc_curve(probs[:, 1], labels)
+        # results.update({"roc_auc_curve": roc_auc_curve})
+    else:
+        metrics = get_metrics(
+            preds,
+            labels,
+            probs,
+            class_names=[f"isup_{i}" for i in range(dataset.num_classes)],
+            use_wandb=use_wandb,
+        )
+
+    results.update(metrics)
 
     return results
