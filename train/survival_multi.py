@@ -8,6 +8,7 @@ import datetime
 import statistics
 import numpy as np
 import pandas as pd
+import multiprocessing as mp
 import matplotlib.pyplot as plt
 
 from pathlib import Path
@@ -59,6 +60,10 @@ def main(cfg: DictConfig):
     result_root_dir.mkdir(parents=True, exist_ok=True)
 
     features_dir = Path(cfg.features_dir)
+
+    num_workers = min(mp.cpu_count(), cfg.speed.num_workers)
+    if "SLURM_JOB_CPUS_PER_NODE" in os.environ:
+        num_workers = min(num_workers, int(os.environ['SLURM_JOB_CPUS_PER_NODE']))
 
     tiles_df = None
     if (
@@ -195,7 +200,7 @@ def main(cfg: DictConfig):
                     batch_size=cfg.training.batch_size,
                     weighted_sampling=cfg.training.weighted_sampling,
                     gradient_accumulation=cfg.training.gradient_accumulation,
-                    num_workers=cfg.speed.num_workers,
+                    num_workers=num_workers,
                 )
 
                 if cfg.wandb.enable:
@@ -219,7 +224,7 @@ def main(cfg: DictConfig):
                         criterion,
                         agg_method=cfg.model.agg_method,
                         batch_size=cfg.tuning.batch_size,
-                        num_workers=cfg.speed.num_workers,
+                        num_workers=num_workers,
                     )
 
                     auc, mean_auc, times = None, None, None
@@ -300,7 +305,7 @@ def main(cfg: DictConfig):
             test_dataset,
             agg_method=cfg.model.agg_method,
             batch_size=1,
-            num_workers=cfg.speed.num_workers,
+            num_workers=num_workers,
         )
         test_dataset.df.to_csv(Path(result_dir, f"test.csv"), index=False)
 

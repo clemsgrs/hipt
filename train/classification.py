@@ -66,6 +66,8 @@ def main(cfg: DictConfig):
     region_features_dir = Path(features_root_dir, f"region_features")
 
     num_workers = min(mp.cpu_count(), cfg.speed.num_workers)
+    if "SLURM_JOB_CPUS_PER_NODE" in os.environ:
+        num_workers = min(num_workers, int(os.environ['SLURM_JOB_CPUS_PER_NODE']))
 
     assert (cfg.task != "classification" and cfg.label_encoding != "ordinal") or (
         cfg.task == "classification"
@@ -96,7 +98,7 @@ def main(cfg: DictConfig):
         aug_options = AugmentationOptions(
             name=cfg.augmentation.name,
             output_dir=aug_dir,
-            features_dir=region_features_dir,
+            region_features_dir=region_features_dir,
             region_df=region_df,
             label_df=train_df,
             level=cfg.level,

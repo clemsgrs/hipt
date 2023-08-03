@@ -1,4 +1,4 @@
-region_dir: '/home/user/code/git/clemsgrs/hs2p/output/tcga_brca_survival_debug/patches/'
+region_dir: '/data/pathology/projeccode/git/clemsgrs/hs2p/output/tcga_brca_survival_debug/patches/'
 
 output_dir: 'output/tcga_brca_survival_debug'
 experiment_name: 'feature_extraction'

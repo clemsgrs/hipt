@@ -9,6 +9,7 @@ import matplotlib
 import statistics
 import numpy as np
 import pandas as pd
+import multiprocessing as mp
 import matplotlib.pyplot as plt
 
 from pathlib import Path
@@ -71,6 +72,8 @@ def main(cfg: DictConfig):
     features_root_dir = Path(cfg.features_root_dir)
 
     num_workers = min(mp.cpu_count(), cfg.speed.num_workers)
+    if "SLURM_JOB_CPUS_PER_NODE" in os.environ:
+        num_workers = min(num_workers, int(os.environ['SLURM_JOB_CPUS_PER_NODE']))
 
     assert (cfg.task != "classification" and cfg.label_encoding != "ordinal") or (
         cfg.task == "classification"
@@ -123,7 +126,7 @@ def main(cfg: DictConfig):
             aug_options = AugmentationOptions(
                 name=cfg.augmentation.name,
                 output_dir=aug_dir,
-                features_dir=region_features_dir,
+                region_features_dir=region_features_dir,
                 region_df=region_df,
                 label_df=train_df,
                 label_name=cfg.label_name,

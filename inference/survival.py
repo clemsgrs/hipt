@@ -5,6 +5,7 @@ import hydra
 import torch
 import datetime
 import pandas as pd
+import multiprocessing as mp
 
 from pathlib import Path
 from omegaconf import DictConfig
@@ -48,6 +49,10 @@ def main(cfg: DictConfig):
     result_dir.mkdir(parents=True, exist_ok=True)
 
     features_dir = Path(cfg.features_dir)
+
+    num_workers = min(mp.cpu_count(), cfg.speed.num_workers)
+    if "SLURM_JOB_CPUS_PER_NODE" in os.environ:
+        num_workers = min(num_workers, int(os.environ['SLURM_JOB_CPUS_PER_NODE']))
 
     tiles_df = None
     if (
@@ -101,6 +106,7 @@ def main(cfg: DictConfig):
         test_dataset,
         agg_method=cfg.model.agg_method,
         batch_size=1,
+        num_workers=num_workers,
     )
     test_dataset.df.to_csv(Path(result_dir, f"test.csv"), index=False)
 
