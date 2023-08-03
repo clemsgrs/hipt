@@ -1,0 +1,33 @@
+output_dir: 'output/debug'
+experiment_name: 'knn_search'
+
+fold: 0
+region_size: 1024
+
+label_csv: '/data/pathology/projects/ais-cap/dataset/panda/5-fold_cleaned/fold_${fold}/train.csv'
+# features_root_dir: '/data/pathology/projects/ais-cap/dataset/panda/hipt/feature_extraction/5-fold/${level}/${region_size}/fold_${fold}'
+features_root_dir: '/data/pathology/projects/ais-cap/code/git/clemsgrs/hipt/output/panda/feature_extraction/fyj8xldd'
+
+level: 'global'
+label_name: 'isup_grade'
+
+K: 10
+threshold:
+
+speed:
+  multiprocessing: False
+  num_workers: 32
+
+wandb:
+  enable: False
+  project: 'hipt'
+  username: 'clemsg'
+  exp_name: '${experiment_name}'
+  tags:
+  dir: '/home/user'
+  group:
+  resume_id:
+
+hydra:
+  run:
+    dir: /tmp/hydra_output
