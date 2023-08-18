@@ -427,6 +427,7 @@ class VisionTransformer4K(nn.Module):
         attn_drop_rate: float = 0.0,
         drop_path_rate: float = 0.0,
         norm_layer: Callable = nn.LayerNorm,
+        img_size_pretrained: Optional[int] = None,
     ):
         super().__init__()
         self.embed_dim = output_embed_dim
@@ -440,6 +441,8 @@ class VisionTransformer4K(nn.Module):
             ]
         )
         num_patches = int(img_size * dino_max_crop_scale // patch_size) ** 2
+        if img_size_pretrained:
+            num_patches = int(img_size_pretrained * dino_max_crop_scale // patch_size) ** 2
 
         self.cls_token = nn.Parameter(torch.zeros(1, 1, self.embed_dim))
         self.pos_embed = nn.Parameter(
@@ -487,15 +490,15 @@ class VisionTransformer4K(nn.Module):
             nn.init.constant_(m.weight, 1.0)
 
     def interpolate_pos_encoding(self, x, w, h):
-        npatch = x.shape[1] - 1  # x = [M, 1+256, 192] -> npatch = 256
-        N = self.pos_embed.shape[1] - 1  # self.pos_embed = [1, 1+196, 192] -> N = 196
-        if npatch == N and w == h:
+        npatch_sq = x.shape[1] - 1  # x = [M, npatch**2+1, 192] where npatch = number of (patch_size, patch_size) patches fitting along img_size
+        N = self.pos_embed.shape[1] - 1  # self.pos_embed = [1, 1+196, 192] -> N = 196 (when patch_size = 256 and img_size = 4096)
+        if npatch_sq == N and w == h:
             return self.pos_embed
         class_pos_embed = self.pos_embed[:, 0]  # [1, 192]
-        patch_pos_embed = self.pos_embed[:, 1:]  # [1, 196, 192]
+        patch_pos_embed = self.pos_embed[:, 1:]  # [1, N, 192]
         dim = x.shape[-1]  # dim = 192
-        w0 = w // 1  # w = 16
-        h0 = h // 1  # h = 16
+        w0 = w // 1  # w = npatch
+        h0 = h // 1  # h = npatch
         # we add a small number to avoid floating point error in the interpolation
         # see discussion at https://github.com/facebookresearch/dino/issues/8
         w0, h0 = w0 + 0.1, h0 + 0.1
@@ -507,7 +510,7 @@ class VisionTransformer4K(nn.Module):
             mode="bicubic",
             align_corners=False,
             recompute_scale_factor=True,
-        )  # [1, 192, 16, 16]
+        )  # [1, N, 192] -> [1, sqrt(N), sqrt(N), 192] -> [1, 192, sqrt(N), sqrt(N)] -> [1, 192, npatch, npatch]
         assert (
             int(w0) == patch_pos_embed.shape[-2]
             and int(h0) == patch_pos_embed.shape[-1]
@@ -520,8 +523,8 @@ class VisionTransformer4K(nn.Module):
         )  # [1, 1+256, 192]
 
     def prepare_tokens(self, x):
-        # x = [M, 384, 16, 16]
-        B, embed_dim, w, h = x.shape
+        # x = [M, 384, npatch, npatch] where npatch = number of (patch_size, patch_size) patches fitting along img_size
+        B, _, w, h = x.shape
         x = x.flatten(2, 3).transpose(1, 2)  # [M, npatch**2, 384]
         x = self.phi(x)  # [M, npatch**2, 192]
 
