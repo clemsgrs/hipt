@@ -18,6 +18,7 @@ model:
   dropout: 0.25
   embed_dim_patch: 384
   embed_dim_region: 192
+  embed_dim_slide: 192
   region_size: 4096
   patch_size: 256
   mini_patch_size: 16

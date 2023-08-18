@@ -80,6 +80,7 @@ def main(cfg: DictConfig):
             mini_patch_size=cfg.mini_patch_size,
             pretrain_vit_patch=cfg.pretrain_vit_patch,
             pretrain_vit_region=cfg.pretrain_vit_region,
+            img_size_pretrained=cfg.img_size_pretrained,
             verbose=(gpu_id in [-1, 0]),
         )
     elif cfg.level == "local":

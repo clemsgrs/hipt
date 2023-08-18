@@ -8,11 +8,11 @@ data:
   test_csv:
 
 region_dir: '/data/pathology/projects/ais-cap/dataset/panda/hs2p/patches/otsu/${model.region_size}/${region_fmt}'
-output_dir: 'output/panda'
+output_dir: '/data/pathology/projects/ais-cap/code/git/clemsgrs/hipt/output/panda'
 experiment_name: 'classification'
 level: 'region'
 
-M_max: 250
+M_max: 82
 region_fmt: 'jpg'
 
 task: 'classification'

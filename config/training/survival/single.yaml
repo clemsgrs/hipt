@@ -36,6 +36,7 @@ model:
   freeze_vit_patch_pos_embed: True
   embed_dim_region: 192
   pretrain_vit_region: 'checkpoints/vit_4096_xs_dino.pth'
+  img_size_pretrained:
   freeze_vit_region: True
   freeze_vit_region_pos_embed: True
   region_size: 4096

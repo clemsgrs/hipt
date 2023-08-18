@@ -17,6 +17,7 @@ num_workers: 4
 
 pretrain_vit_patch: 'checkpoints/vit_256_small_dino.pth'
 pretrain_vit_region: 'checkpoints/vit_4096_xs_dino.pth'
+img_size_pretrained:
 
 wandb:
   enable: False
