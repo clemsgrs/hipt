@@ -68,6 +68,8 @@ class ModelFactory:
                     else:
                         self.model = GlobalHIPT(
                             num_classes=num_classes,
+                            embed_dim_region=model_options.embed_dim_region,
+                            d_model=model_options.embed_dim_slide,
                             dropout=model_options.dropout,
                             slide_pos_embed=model_options.slide_pos_embed,
                         )
@@ -111,6 +113,7 @@ class ModelFactory:
                         freeze_vit_region_pos_embed=model_options.freeze_vit_region_pos_embed,
                         dropout=model_options.dropout,
                         slide_pos_embed=model_options.slide_pos_embed,
+                        img_size_pretrained=model_options.img_size_pretrained,
                     )
             else:
                 self.model = HIPT(
@@ -126,6 +129,7 @@ class ModelFactory:
                     freeze_vit_region_pos_embed=model_options.freeze_vit_region_pos_embed,
                     dropout=model_options.dropout,
                     slide_pos_embed=model_options.slide_pos_embed,
+                    img_size_pretrained=model_options.img_size_pretrained,
                 )
         elif task == "regression":
             if level == "global":
@@ -178,7 +182,7 @@ class GlobalHIPT(nn.Module):
 
         # Global Aggregation
         self.global_phi = nn.Sequential(
-            nn.Linear(embed_dim_region, 192), nn.ReLU(), nn.Dropout(dropout)
+            nn.Linear(embed_dim_region, d_model), nn.ReLU(), nn.Dropout(dropout)
         )
 
         if self.slide_pos_embed.use:
@@ -198,26 +202,26 @@ class GlobalHIPT(nn.Module):
 
         self.global_transformer = nn.TransformerEncoder(
             nn.TransformerEncoderLayer(
-                d_model=192,
+                d_model=d_model,
                 nhead=3,
-                dim_feedforward=192,
+                dim_feedforward=d_model,
                 dropout=dropout,
                 activation="relu",
             ),
             num_layers=2,
         )
         self.global_attn_pool = Attn_Net_Gated(
-            L=192, D=192, dropout=dropout, num_classes=1
+            L=d_model, D=d_model, dropout=dropout, num_classes=1
         )
         self.global_rho = nn.Sequential(
-            *[nn.Linear(192, 192), nn.ReLU(), nn.Dropout(dropout)]
+            *[nn.Linear(d_model, d_model), nn.ReLU(), nn.Dropout(dropout)]
         )
 
-        self.classifier = nn.Linear(192, num_classes)
+        self.classifier = nn.Linear(d_model, num_classes)
 
     def forward(self, x):
-        # x = [M, 192]
-        x = self.global_phi(x)
+        # x = [M, embed_dim_region]
+        x = self.global_phi(x) # (M, d_model)
 
         if self.slide_pos_embed.use:
             x = self.pos_encoder(x)
@@ -272,6 +276,7 @@ class LocalGlobalHIPT(nn.Module):
         freeze_vit_region_pos_embed: bool = True,
         dropout: float = 0.25,
         slide_pos_embed: Optional[DictConfig] = None,
+        img_size_pretrained: Optional[int] = None,
     ):
         super(LocalGlobalHIPT, self).__init__()
         self.npatch = int(region_size // patch_size)
@@ -284,6 +289,7 @@ class LocalGlobalHIPT(nn.Module):
             patch_size=patch_size,
             input_embed_dim=embed_dim_patch,
             output_embed_dim=embed_dim_region,
+            img_size_pretrained=img_size_pretrained,
         )
 
         if pretrain_vit_region and Path(pretrain_vit_region).is_file():
@@ -425,6 +431,7 @@ class HIPT(nn.Module):
         split_across_gpus: bool = False,
         dropout: float = 0.25,
         slide_pos_embed: Optional[DictConfig] = None,
+        img_size_pretrained: Optional[int] = None,
     ):
         super(HIPT, self).__init__()
         self.npatch = int(region_size // patch_size)
@@ -485,6 +492,7 @@ class HIPT(nn.Module):
             patch_size=patch_size,
             input_embed_dim=embed_dim_patch,
             output_embed_dim=embed_dim_region,
+            img_size_pretrained=img_size_pretrained,
         )
 
         if pretrain_vit_region and Path(pretrain_vit_region).is_file():
@@ -646,6 +654,7 @@ class GlobalFeatureExtractor(nn.Module):
         embed_dim_region: int = 192,
         split_across_gpus: bool = False,
         verbose: bool = True,
+        img_size_pretrained: Optional[int] = None,
     ):
         super(GlobalFeatureExtractor, self).__init__()
         checkpoint_key = "teacher"
@@ -702,6 +711,7 @@ class GlobalFeatureExtractor(nn.Module):
             patch_size=patch_size,
             input_embed_dim=embed_dim_patch,
             output_embed_dim=embed_dim_region,
+            img_size_pretrained=img_size_pretrained,
         )
 
         if Path(pretrain_vit_region).is_file():
@@ -825,6 +835,61 @@ class LocalFeatureExtractor(nn.Module):
         patch_feature = self.vit_patch(x).detach().cpu()  # [num_patches, 384]
 
         return patch_feature
+
+
+class FeatureExtractor(nn.Module):
+    def __init__(
+        self,
+        img_size: int = 256,
+        mini_patch_size: int = 16,
+        pretrain_vit_patch: str = "path/to/pretrained/vit_patch/weights.pth",
+        embed_dim: int = 384,
+        verbose: bool = True,
+    ):
+        super(FeatureExtractor, self).__init__()
+        checkpoint_key = "teacher"
+
+        self.vit_patch = vit_small(
+            img_size=img_size,
+            patch_size=mini_patch_size,
+            embed_dim=embed_dim,
+        )
+
+        if Path(pretrain_vit_patch).is_file():
+            if verbose:
+                print("Loading pretrained weights for patch-level Transformer")
+            state_dict = torch.load(pretrain_vit_patch, map_location="cpu")
+            if checkpoint_key is not None and checkpoint_key in state_dict:
+                if verbose:
+                    print(f"Take key {checkpoint_key} in provided checkpoint dict")
+                state_dict = state_dict[checkpoint_key]
+            # remove `module.` prefix
+            state_dict = {k.replace("module.", ""): v for k, v in state_dict.items()}
+            # remove `backbone.` prefix induced by multicrop wrapper
+            state_dict = {k.replace("backbone.", ""): v for k, v in state_dict.items()}
+            state_dict, msg = update_state_dict(self.vit_patch.state_dict(), state_dict)
+            self.vit_patch.load_state_dict(state_dict, strict=False)
+            if verbose:
+                print(f"Pretrained weights found at {pretrain_vit_patch}")
+                print(msg)
+
+        elif verbose:
+            print(
+                f"{pretrain_vit_patch} doesnt exist ; please provide path to existing file"
+            )
+
+        if verbose:
+            print("Freezing pretrained patch-level Transformer")
+        for param in self.vit_patch.parameters():
+            param.requires_grad = False
+        if verbose:
+            print("Done")
+
+    def forward(self, x):
+        # x = [B, 3, img_size, img_size]
+        # TODO: add prepare_img_tensor method
+        feature = self.vit_patch(x).detach().cpu()  # [B, 384]
+        return feature
 
 
 class GlobalPatientLevelHIPT(nn.Module):
