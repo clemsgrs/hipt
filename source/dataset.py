@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 from PIL import Image
 from pathlib import Path
-from torchvision import transforms
+from torchvision import transforms, datasets
 from typing import Callable, Dict, Optional, Any
 from collections import defaultdict
 from omegaconf import DictConfig
@@ -748,3 +748,31 @@ class ImagePretrainingDataset(torch.utils.data.Dataset):
 
     def __len__(self):
         return len(self.df)
+
+
+class ImageFolderWithNameDataset(datasets.ImageFolder):
+    def __init__(
+        self,
+        root: str,
+        transform: Optional[Callable] = None,
+    ):
+        super().__init__(
+            root,
+            transform,
+        )
+
+    def __getitem__(self, idx: int):
+        """
+        Args:
+            idx (int): index
+
+        Returns:
+            tuple: (sample, target) where target is class_index of the target class.
+        """
+        path, target = self.samples[idx]
+        fname = Path(path).stem
+        sample = self.loader(path)
+        if self.transform is not None:
+            sample = self.transform(sample)
+
+        return sample, fname

@@ -4,7 +4,6 @@ data:
   test_csv:
 
 features_root_dir: '/data/pathology/projects/ais-cap/code/git/clemsgrs/hipt/output/panda/feature_extraction/rqvqzwur'
-features_dir: '${features_root_dir}/slide'
 output_dir: 'output'
 experiment_name: 'debug'
 level: 'global'

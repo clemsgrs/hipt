@@ -837,7 +837,7 @@ class LocalFeatureExtractor(nn.Module):
         return patch_feature
 
 
-class FeatureExtractor(nn.Module):
+class PatchEmbedder(nn.Module):
     def __init__(
         self,
         img_size: int = 256,
@@ -845,14 +845,16 @@ class FeatureExtractor(nn.Module):
         pretrain_vit_patch: str = "path/to/pretrained/vit_patch/weights.pth",
         embed_dim: int = 384,
         verbose: bool = True,
+        img_size_pretrained: Optional[int] = None,
     ):
-        super(FeatureExtractor, self).__init__()
+        super(PatchEmbedder, self).__init__()
         checkpoint_key = "teacher"
 
         self.vit_patch = vit_small(
             img_size=img_size,
             patch_size=mini_patch_size,
             embed_dim=embed_dim,
+            img_size_pretrained=img_size_pretrained,
         )
 
         if Path(pretrain_vit_patch).is_file():

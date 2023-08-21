@@ -217,12 +217,15 @@ class VisionTransformer(nn.Module):
         attn_drop_rate: float = 0.0,
         drop_path_rate: float = 0.0,
         norm_layer: Callable = nn.LayerNorm,
+        img_size_pretrained: Optional[int] = None,
     ):
         super().__init__()
         self.embed_dim = embed_dim
         self.num_heads = num_heads
 
         num_patches = int(img_size * dino_max_crop_scale // patch_size) ** 2
+        if img_size_pretrained:
+            num_patches = int(img_size_pretrained * dino_max_crop_scale // patch_size) ** 2
 
         self.patch_embed = PatchEmbed(
             patch_size=patch_size,
