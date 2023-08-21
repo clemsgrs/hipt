@@ -8,6 +8,8 @@ import shutil
 import datetime
 import subprocess
 import pandas as pd
+import multiprocessing as mp
+
 from pathlib import Path
 from omegaconf import DictConfig
 from torchvision import transforms
@@ -65,7 +67,7 @@ def main(cfg: DictConfig):
             output_dir.mkdir(parents=True, exist_ok=True)
             features_dir.mkdir(exist_ok=True)
 
-    model = FeatureExtractor(
+    model = PatchEmbedder(
         img_size=cfg.patch_size,
         mini_patch_size=cfg.mini_patch_size,
         pretrain_vit_patch=cfg.pretrain_vit_patch,
