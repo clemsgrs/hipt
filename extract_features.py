@@ -130,11 +130,15 @@ def main(cfg: DictConfig):
     else:
         sampler = torch.utils.data.RandomSampler(dataset)
 
+    num_workers = min(mp.cpu_count(), cfg.num_workers)
+    if "SLURM_JOB_CPUS_PER_NODE" in os.environ:
+        num_workers = min(num_workers, int(os.environ['SLURM_JOB_CPUS_PER_NODE']))
+
     loader = torch.utils.data.DataLoader(
         dataset,
         sampler=sampler,
         batch_size=1,
-        num_workers=cfg.num_workers,
+        num_workers=num_workers,
         shuffle=False,
         drop_last=False,
         collate_fn=collate_region_filepaths,
