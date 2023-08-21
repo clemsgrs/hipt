@@ -7,7 +7,6 @@ resume: False
 patch_size: 512
 mini_patch_size: 16
 
-format: 'jpg'
 num_workers: 4
 batch_size: 1
 
