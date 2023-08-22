@@ -1,9 +1,10 @@
+import cv2
 import numpy as np
 import wholeslidedata as wsd
 
 from PIL import Image
 from pathlib import Path
-from typing import Optional
+from typing import Dict, List, Tuple, Optional
 
 
 Image.MAX_IMAGE_PIXELS = 933120000
@@ -94,3 +95,133 @@ class WholeSlideImage(object):
             return level, above_tol
         else:
             return level
+
+    def segmentTissue(
+        self,
+        spacing: float,
+        seg_level: int = 0,
+        sthresh: int = 20,
+        sthresh_up: int = 255,
+        mthresh: int = 7,
+        close: int = 0,
+        use_otsu: bool = False,
+        filter_params: Dict[str, int] = {"ref_patch_size": 512, "a_t": 1, "a_h": 1},
+    ):
+        """
+        Segment the tissue via HSV -> Median thresholding -> Binary threshold
+        """
+
+        seg_spacing = self.spacings[seg_level]
+        s = self.spacing_mapping[seg_spacing]
+        width, height = self.level_dimensions[seg_level]
+        img = self.wsi.get_patch(0, 0, width, height, spacing=s, center=False)
+        img = np.array(Image.fromarray(img).convert("RGBA"))
+        img_hsv = cv2.cvtColor(img, cv2.COLOR_RGB2HSV)  # Convert to HSV space
+        img_med = cv2.medianBlur(img_hsv[:, :, 1], mthresh)  # Apply median blurring
+
+        # Thresholding
+        if use_otsu:
+            _, img_thresh = cv2.threshold(
+                img_med, 0, sthresh_up, cv2.THRESH_OTSU + cv2.THRESH_BINARY
+            )
+        else:
+            _, img_thresh = cv2.threshold(
+                img_med, sthresh, sthresh_up, cv2.THRESH_BINARY
+            )
+
+        # Morphological closing
+        if close > 0:
+            kernel = np.ones((close, close), np.uint8)
+            img_thresh = cv2.morphologyEx(img_thresh, cv2.MORPH_CLOSE, kernel)
+
+        self.binary_mask = img_thresh
+        self.detect_contours(img_thresh, spacing, seg_level, filter_params)
+
+    def detect_contours(
+        self, img_thresh, spacing: float, seg_level: int, filter_params: Dict[str, int]
+    ):
+        def _filter_contours(contours, hierarchy, filter_params):
+            """
+            Filter contours by: area.
+            """
+            filtered = []
+
+            # find indices of foreground contours (parent == -1)
+            hierarchy_1 = np.flatnonzero(hierarchy[:, 1] == -1)
+            all_holes = []
+
+            # loop through foreground contour indices
+            for cont_idx in hierarchy_1:
+                # actual contour
+                cont = contours[cont_idx]
+                # indices of holes contained in this contour (children of parent contour)
+                holes = np.flatnonzero(hierarchy[:, 1] == cont_idx)
+                # take contour area (includes holes)
+                a = cv2.contourArea(cont)
+                # calculate the contour area of each hole
+                hole_areas = [cv2.contourArea(contours[hole_idx]) for hole_idx in holes]
+                # actual area of foreground contour region
+                a = a - np.array(hole_areas).sum()
+                if a == 0:
+                    continue
+                if a > filter_params["a_t"]:
+                    filtered.append(cont_idx)
+                    all_holes.append(holes)
+
+            foreground_contours = [contours[cont_idx] for cont_idx in filtered]
+
+            hole_contours = []
+            for hole_ids in all_holes:
+                unfiltered_holes = [contours[idx] for idx in hole_ids]
+                unfilered_holes = sorted(
+                    unfiltered_holes, key=cv2.contourArea, reverse=True
+                )
+                # take max_n_holes largest holes by area
+                unfilered_holes = unfilered_holes[: filter_params["max_n_holes"]]
+                filtered_holes = []
+
+                # filter these holes
+                for hole in unfilered_holes:
+                    if cv2.contourArea(hole) > filter_params["a_h"]:
+                        filtered_holes.append(hole)
+
+                hole_contours.append(filtered_holes)
+
+            return foreground_contours, hole_contours
+
+        spacing_level = self.get_best_level_for_spacing(spacing)
+        current_scale = self.level_downsamples[spacing_level]
+        target_scale = self.level_downsamples[seg_level]
+        scale = tuple(a / b for a, b in zip(target_scale, current_scale))
+        ref_patch_size = filter_params["ref_patch_size"]
+        scaled_ref_patch_area = int(ref_patch_size**2 / (scale[0] * scale[1]))
+
+        filter_params = filter_params.copy()
+        filter_params["a_t"] = filter_params["a_t"] * scaled_ref_patch_area
+        filter_params["a_h"] = filter_params["a_h"] * scaled_ref_patch_area
+
+        # Find and filter contours
+        contours, hierarchy = cv2.findContours(
+            img_thresh, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_NONE
+        )  # Find contours
+        hierarchy = np.squeeze(hierarchy, axis=(0,))[:, 2:]
+        if filter_params:
+            # Necessary for filtering out artifacts
+            foreground_contours, hole_contours = _filter_contours(
+                contours, hierarchy, filter_params
+            )
+
+        # scale detected contours to level 0
+        self.contours_tissue = self.scaleContourDim(foreground_contours, target_scale)
+        self.holes_tissue = self.scaleHolesDim(hole_contours, target_scale)
+
+    @staticmethod
+    def scaleContourDim(contours, scale):
+        return [np.array(cont * scale, dtype="int32") for cont in contours]
+
+    @staticmethod
+    def scaleHolesDim(contours, scale):
+        return [
+            [np.array(hole * scale, dtype="int32") for hole in holes]
+            for holes in contours
+        ]
