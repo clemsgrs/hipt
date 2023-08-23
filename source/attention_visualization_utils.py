@@ -1693,6 +1693,7 @@ def get_slide_heatmaps_patch_level(
     cmap: matplotlib.colors.LinearSegmentedColormap = plt.get_cmap("coolwarm"),
     threshold: Optional[float] = None,
     highlight: Optional[float] = None,
+    opacity: float = 0.3,
     region_fmt: str = "jpg",
     save_to_disk: bool = False,
     granular: bool = False,
@@ -1718,6 +1719,7 @@ def get_slide_heatmaps_patch_level(
     - cmap (matplotlib.pyplot): colormap for creating heatmaps
     - threshold (float): filter out regions with attention scores lower than this value (set to None to disbale heatmap thresholding)
     - highlight (float): filter out regions with attention scores lower than this value (set to None to disbale heatmap highlighting)
+    - opacity (float): if highlight, set opacity for non-highlighted regions on stitched heatmap
     - region_fmt (str): file format used for extracted regions
     - save_to_disk (bool): whether to save individual region heatmaps to disk
     - granular (bool): create additional offset regions to get more granular heatmaps
@@ -1798,7 +1800,7 @@ def get_slide_heatmaps_patch_level(
                 range(nhead_patch),
                 desc=f"Processing region [{k+1}/{nregions}]",
                 unit=" head",
-                leave=True,
+                leave=False,
                 disable=not main_process,
             ) as t2:
                 for i in t2:
@@ -1867,12 +1869,23 @@ def get_slide_heatmaps_patch_level(
                             img.save(Path(thresh_patch_hm_output_dir, f"{x}_{y}.png"))
 
                     if highlight != None:
+                        highlight_patch_hm_output_dir = Path(
+                            patch_output_dir, f"{patch_size}", f"head_{i}_highlight"
+                        )
+                        highlight_patch_hm_output_dir.mkdir(exist_ok=True, parents=True)
                         save_region = np.array(region.resize((s, s)))
+                        rgba_region = np.dstack((save_region, np.zeros((s,s), dtype=np.uint8)+255))
                         att_mask = patch_att_scores.copy()
                         att_mask[att_mask < highlight] = 0
                         att_mask[att_mask >= highlight] = 1
-                        highlighted_img = save_region * (att_mask >= highlight)[..., np.newaxis]
-                        patch_heatmaps_highlight[i].append(highlighted_img)
+                        highlighted_hm = rgba_region * (att_mask >= highlight)[..., np.newaxis]
+                        m_black = (highlighted_hm[:, :, 0:3] == [0,0,0]).all(2)
+                        transparent_region = np.dstack((save_region, np.zeros((s,s), dtype=np.uint8)+int(255*opacity)))
+                        highlighted_hm[m_black] = transparent_region[m_black]
+                        patch_heatmaps_highlight[i].append(highlighted_hm)
+                        if save_to_disk:
+                            img = Image.fromarray(highlighted_hm, mode='RGBA')
+                            img.save(Path(highlight_patch_hm_output_dir, f"{x}_{y}.png"))
 
                     patch_color_block = (cmap(patch_att_scores) * 255)[:, :, :3].astype(
                         np.uint8
@@ -1906,6 +1919,7 @@ def get_slide_heatmaps_region_level(
     cmap: matplotlib.colors.LinearSegmentedColormap = plt.get_cmap("coolwarm"),
     threshold: Optional[float] = None,
     highlight: Optional[float] = None,
+    opacity: float = 0.3,
     region_fmt: str = "jpg",
     save_to_disk: bool = False,
     granular: bool = False,
@@ -1932,6 +1946,7 @@ def get_slide_heatmaps_region_level(
     - cmap (matplotlib.pyplot): colormap for creating heatmaps
     - threshold (float): filter out regions with attention scores lower than this value (set to None to disbale heatmap thresholding)
     - highlight (float): filter out regions with attention scores lower than this value (set to None to disbale heatmap highlighting)
+    - opacity (float): if highlight, set opacity for non-highlighted regions on stitched heatmap
     - region_fmt (str): file format used for extracted regions
     - save_to_disk (bool): whether to save individual region heatmaps to disk
     - granular (bool): create additional offset regions to get more granular heatmaps
@@ -2133,12 +2148,23 @@ def get_slide_heatmaps_region_level(
                             img.save(Path(thresh_region_hm_output_dir, f"{x}_{y}.png"))
 
                     if highlight != None:
+                        highlight_region_hm_output_dir = Path(
+                            region_output_dir, f"{region_size}", f"head_{j}_highlight"
+                        )
+                        highlight_region_hm_output_dir.mkdir(exist_ok=True, parents=True)
                         save_region = np.array(region.resize((s, s)))
+                        rgba_region = np.dstack((save_region, np.zeros((s,s), dtype=np.uint8)+255))
                         att_mask = region_att_scores.copy()
                         att_mask[att_mask < highlight] = 0
                         att_mask[att_mask >= highlight] = 1
-                        highlighted_img = save_region * (att_mask >= highlight)[..., np.newaxis]
-                        region_heatmaps_highlight[j].append(highlighted_img)
+                        highlighted_hm = rgba_region * (att_mask >= highlight)[..., np.newaxis]
+                        m_black = (highlighted_hm[:, :, 0:3] == [0,0,0]).all(2)
+                        transparent_region = np.dstack((save_region, np.zeros((s,s), dtype=np.uint8)+int(255*opacity)))
+                        highlighted_hm[m_black] = transparent_region[m_black]
+                        region_heatmaps_highlight[j].append(highlighted_hm)
+                        if save_to_disk:
+                            img = Image.fromarray(highlighted_hm, mode='RGBA')
+                            img.save(Path(highlight_region_hm_output_dir, f"{x}_{y}.png"))
 
                     region_color_block = (cmap(region_att_scores) * 255)[
                         :, :, :3
@@ -2349,6 +2375,7 @@ def get_slide_heatmaps_slide_level(
     cmap: matplotlib.colors.LinearSegmentedColormap = plt.get_cmap("coolwarm"),
     threshold: Optional[float] = None,
     highlight: Optional[float] = None,
+    opacity: float = 0.3,
     region_fmt: str = "jpg",
     patch_device: torch.device = torch.device("cuda:0"),
     region_device: torch.device = torch.device("cuda:0"),
@@ -2371,6 +2398,7 @@ def get_slide_heatmaps_slide_level(
     - cmap (matplotlib.pyplot): colormap for creating heatmaps
     - threshold (float): filter out regions with attention scores lower than this value (set to None to disbale heatmap thresholding)
     - highlight (float): filter out regions with attention scores lower than this value (set to None to disbale heatmap highlighting)
+    - opacity (float): if highlight, set opacity for non-highlighted regions on stitched heatmap
     - region_fmt (str): file format used for extracted regions
     - patch_device (torch.device): device on which patch_model is
     - region_device (torch.device): device on which region_model is
@@ -2434,11 +2462,12 @@ def get_slide_heatmaps_slide_level(
 
             if highlight != None:
                 save_region = np.array(region.resize((s, s)))
+                rgba_region = np.dstack((save_region, np.zeros((s,s), dtype=np.uint8)+255))
                 att_mask = att[k].copy()
                 att_mask[att_mask < highlight] = 0
                 att_mask[att_mask >= highlight] = 1
-                highlighted_img = save_region * (att_mask >= highlight)[..., np.newaxis]
-                highlighted_regions.append(highlighted_img)
+                highlighted_hm = rgba_region * (att_mask >= highlight)[..., np.newaxis]
+                highlighted_regions.append(highlighted_hm)
 
             # given region is an RGB image, so the default filter for resizing is Resampling.BICUBIC
             # which is fine as we're resizing the image here, not attention scores
@@ -2682,7 +2711,7 @@ def get_slide_hierarchical_heatmaps_region(
                             x, y = int(fp.stem.split("_")[0]), int(
                                 fp.stem.split("_")[1]
                             )
-                            coord_dict[i].append((x, y))
+                            coord_dict[j].append((x, y))
 
                             patch_att_scores = concat_patch_scores(
                                 patch_att[:, i, :, :],
@@ -2774,7 +2803,7 @@ def get_slide_hierarchical_heatmaps_region(
                                 0,
                                 save_region.copy(),
                             )
-                            hm_dict[i].append(region_hm)
+                            hm_dict[j].append(region_hm)
                             if save_to_disk:
                                 img = Image.fromarray(region_hm)
                                 img.save(
@@ -2864,11 +2893,6 @@ def get_slide_blended_heatmaps(
     nregions = len(region_paths)
 
     blended_heatmaps, blended_heatmaps_thresh, coords = (
-        defaultdict(dict),
-        defaultdict(dict),
-        defaultdict(dict),
-    )
-    hm_dict, hm_dict_thresh, coord_dict = (
         defaultdict(list),
         defaultdict(list),
         defaultdict(list),
@@ -2978,6 +3002,7 @@ def get_slide_blended_heatmaps(
                 disable=not main_process,
             ) as t2:
                 for j in t2:
+
                     region_att_scores = normalize_region_scores(
                         region_att[j], size=(s,) * 2
                     )
@@ -3027,19 +3052,11 @@ def get_slide_blended_heatmaps(
                         disable=not main_process,
                     ) as t3:
                         for i in t3:
-                            blended_hm_output_dir = Path(
-                                output_dir,
-                                f"blended_{region_size}_{patch_size}",
-                                f"rhead_{j}_phead_{i}",
-                            )
-                            blended_hm_output_dir.mkdir(
-                                exist_ok=True, parents=True
-                            )
 
                             x, y = int(fp.stem.split("_")[0]), int(
                                 fp.stem.split("_")[1]
                             )
-                            coord_dict[i].append((x, y))
+                            coords[(j,i)].append((x, y))
 
                             patch_att_scores = concat_patch_scores(
                                 patch_att[:, i, :, :],
@@ -3113,14 +3130,6 @@ def get_slide_blended_heatmaps(
                             score = score / (n*(1-gamma)+(3-n)*gamma)
 
                             if threshold != None:
-                                thresh_blended_hm_output_dir = Path(
-                                    output_dir,
-                                    f"blended_{region_size}_{patch_size}",
-                                    f"rhead_{j}_phead_{i}_thresh",
-                                )
-                                thresh_blended_hm_output_dir.mkdir(
-                                    exist_ok=True, parents=True
-                                )
 
                                 att_mask = score.copy()
                                 att_mask[att_mask < threshold] = 0
@@ -3141,8 +3150,16 @@ def get_slide_blended_heatmaps(
                                 img_inverse = save_region.copy()
                                 img_inverse[att_mask == 0.95] = 0
                                 region_hm = region_hm + img_inverse
-                                hm_dict_thresh[j].append(region_hm)
+                                blended_heatmaps_thresh[(j,i)].append(region_hm)
                                 if save_to_disk:
+                                    thresh_blended_hm_output_dir = Path(
+                                        output_dir,
+                                        f"blended_{region_size}_{patch_size}",
+                                        f"rhead_{j}_phead_{i}_thresh",
+                                    )
+                                    thresh_blended_hm_output_dir.mkdir(
+                                        exist_ok=True, parents=True
+                                    )
                                     img = Image.fromarray(region_hm)
                                     img.save(
                                         Path(
@@ -3160,8 +3177,16 @@ def get_slide_blended_heatmaps(
                                 0,
                                 save_region.copy(),
                             )
-                            hm_dict[i].append(region_hm)
+                            blended_heatmaps[(j,i)].append(region_hm)
                             if save_to_disk:
+                                blended_hm_output_dir = Path(
+                                    output_dir,
+                                    f"blended_{region_size}_{patch_size}",
+                                    f"rhead_{j}_phead_{i}",
+                                )
+                                blended_hm_output_dir.mkdir(
+                                    exist_ok=True, parents=True
+                                )
                                 img = Image.fromarray(region_hm)
                                 img.save(
                                     Path(
@@ -3169,10 +3194,6 @@ def get_slide_blended_heatmaps(
                                         f"{x}_{y}.png",
                                     )
                                 )
-
-                    blended_heatmaps[j] = hm_dict
-                    blended_heatmaps_thresh[j] = hm_dict_thresh
-                    coords[j] = coord_dict
 
     return blended_heatmaps, blended_heatmaps_thresh, coords
 
@@ -3259,12 +3280,14 @@ def stitch_slide_heatmaps(
         # hm is a RGB array so the default filter for resizing is Image.BICUBIC
         # which is NOT fine as we're dealing with a color palette
         # instead, we should use Image.NEAREST (i guess?)
-        hm_downsampled = np.array(
-            Image.fromarray(hm).resize((w_downsampled, h_downsampled), resample=Image.NEAREST)
-        )
-
         if highlight:
-            hm_downsampled = np.dstack((hm_downsampled, np.zeros((h_downsampled,w_downsampled),dtype=np.uint8)+255))
+            hm_downsampled = np.array(
+                Image.fromarray(hm, mode="RGBA").resize((w_downsampled, h_downsampled), resample=Image.NEAREST)
+            )
+        else:
+            hm_downsampled = np.array(
+                Image.fromarray(hm).resize((w_downsampled, h_downsampled), resample=Image.NEAREST)
+            )
 
         canvas[
             y_downsampled : min(y_downsampled + h_downsampled, height),
@@ -3370,8 +3393,12 @@ def display_stitched_heatmaps(
 
     nhm = len(heatmaps)
     pad = 20
+    modes = set([hm.mode for hm in heatmaps.values()])
+    mode = "RGB"
+    if len(modes) > 1:
+        mode = "RGBA"
     canvas = Image.new(
-        size=(w * nhm + pad * (nhm + 1), h + 2 * pad), mode="RGB", color=(255,) * 3
+        size=(w * nhm + pad * (nhm + 1), h + 2 * pad), mode=mode, color=(255,) * len(mode)
     )
 
     font = None
