@@ -1692,6 +1692,7 @@ def get_slide_heatmaps_patch_level(
     alpha: float = 0.5,
     cmap: matplotlib.colors.LinearSegmentedColormap = plt.get_cmap("coolwarm"),
     threshold: Optional[float] = None,
+    highlight: Optional[float] = None,
     region_fmt: str = "jpg",
     save_to_disk: bool = False,
     granular: bool = False,
@@ -1716,6 +1717,7 @@ def get_slide_heatmaps_patch_level(
     - alpha (float): image blending factor for cv2.addWeighted
     - cmap (matplotlib.pyplot): colormap for creating heatmaps
     - threshold (float): filter out regions with attention scores lower than this value (set to None to disbale heatmap thresholding)
+    - highlight (float): filter out regions with attention scores lower than this value (set to None to disbale heatmap highlighting)
     - region_fmt (str): file format used for extracted regions
     - save_to_disk (bool): whether to save individual region heatmaps to disk
     - granular (bool): create additional offset regions to get more granular heatmaps
@@ -1736,6 +1738,7 @@ def get_slide_heatmaps_patch_level(
         defaultdict(list),
         defaultdict(list),
     )
+    patch_heatmaps_highlight = defaultdict(list)
 
     nhead_patch = patch_model.num_heads
     offset_ = offset
@@ -1863,6 +1866,14 @@ def get_slide_heatmaps_patch_level(
                             img = Image.fromarray(patch_hm)
                             img.save(Path(thresh_patch_hm_output_dir, f"{x}_{y}.png"))
 
+                    if highlight != None:
+                        save_region = np.array(region.resize((s, s)))
+                        att_mask = patch_att_scores.copy()
+                        att_mask[att_mask < highlight] = 0
+                        att_mask[att_mask >= highlight] = 1
+                        highlighted_img = save_region * (att_mask >= highlight)[..., np.newaxis]
+                        patch_heatmaps_highlight[i].append(highlighted_img)
+
                     patch_color_block = (cmap(patch_att_scores) * 255)[:, :, :3].astype(
                         np.uint8
                     )
@@ -1879,7 +1890,7 @@ def get_slide_heatmaps_patch_level(
                         img = Image.fromarray(patch_hm)
                         img.save(Path(patch_hm_output_dir, f"{x}_{y}.png"))
 
-    return patch_heatmaps, patch_heatmaps_thresh, coords
+    return patch_heatmaps, patch_heatmaps_thresh, patch_heatmaps_highlight, coords
 
 
 def get_slide_heatmaps_region_level(
@@ -1894,6 +1905,7 @@ def get_slide_heatmaps_region_level(
     alpha: float = 0.5,
     cmap: matplotlib.colors.LinearSegmentedColormap = plt.get_cmap("coolwarm"),
     threshold: Optional[float] = None,
+    highlight: Optional[float] = None,
     region_fmt: str = "jpg",
     save_to_disk: bool = False,
     granular: bool = False,
@@ -1919,6 +1931,7 @@ def get_slide_heatmaps_region_level(
     - alpha (float): image blending factor for cv2.addWeighted
     - cmap (matplotlib.pyplot): colormap for creating heatmaps
     - threshold (float): filter out regions with attention scores lower than this value (set to None to disbale heatmap thresholding)
+    - highlight (float): filter out regions with attention scores lower than this value (set to None to disbale heatmap highlighting)
     - region_fmt (str): file format used for extracted regions
     - save_to_disk (bool): whether to save individual region heatmaps to disk
     - granular (bool): create additional offset regions to get more granular heatmaps
@@ -1939,6 +1952,7 @@ def get_slide_heatmaps_region_level(
         defaultdict(list),
         defaultdict(list),
     )
+    region_heatmaps_highlight = defaultdict(list)
 
     nhead_region = region_model.num_heads
     offset_ = offset
@@ -2117,6 +2131,14 @@ def get_slide_heatmaps_region_level(
                         if save_to_disk:
                             img = Image.fromarray(region_hm)
                             img.save(Path(thresh_region_hm_output_dir, f"{x}_{y}.png"))
+
+                    if highlight != None:
+                        save_region = np.array(region.resize((s, s)))
+                        att_mask = region_att_scores.copy()
+                        att_mask[att_mask < highlight] = 0
+                        att_mask[att_mask >= highlight] = 1
+                        highlighted_img = save_region * (att_mask >= highlight)[..., np.newaxis]
+                        region_heatmaps_highlight[j].append(highlighted_img)
 
                     region_color_block = (cmap(region_att_scores) * 255)[
                         :, :, :3
@@ -2312,7 +2334,7 @@ def get_slide_heatmaps_region_level(
                         )
                         region_heatmaps[j].append(region_hm)
 
-    return region_heatmaps, region_heatmaps_thresh, coords
+    return region_heatmaps, region_heatmaps_thresh, region_heatmaps_highlight, coords
 
 
 def get_slide_heatmaps_slide_level(
