@@ -23,14 +23,13 @@ from source.attention_visualization_utils import (
     get_slide_model,
     create_patch_heatmaps_indiv,
     create_patch_heatmaps_concat,
-    create_hierarchical_heatmaps_indiv,
-    create_hierarchical_heatmaps_concat,
-    create_blended_heatmaps_indiv,
-    get_slide_patch_level_heatmaps,
-    get_slide_region_level_heatmaps,
-    get_slide_hierarchical_heatmaps,
+    create_region_heatmaps_indiv,
+    create_region_heatmaps_concat,
+    get_slide_heatmaps_patch_level,
+    get_slide_heatmaps_region_level,
+    get_slide_heatmaps_slide_level,
+    get_slide_hierarchical_heatmaps_region,
     get_slide_blended_heatmaps,
-    get_slide_level_heatmaps,
     stitch_slide_heatmaps,
     display_stitched_heatmaps,
 )
@@ -135,7 +134,7 @@ def main(cfg: DictConfig):
         print(f"Computing individual region-level attention heatmaps")
         output_dir_region = Path(output_dir, "region_indiv")
         output_dir_region.mkdir(exist_ok=True, parents=True)
-        create_hierarchical_heatmaps_indiv(
+        create_region_heatmaps_indiv(
             region,
             patch_model,
             region_model,
@@ -153,7 +152,7 @@ def main(cfg: DictConfig):
         print(f"Computing concatenated region-level attention heatmaps")
         output_dir_region_concat = Path(output_dir, "region_concat")
         output_dir_region_concat.mkdir(exist_ok=True, parents=True)
-        create_hierarchical_heatmaps_concat(
+        create_region_heatmaps_concat(
             region,
             patch_model,
             region_model,
@@ -174,91 +173,15 @@ def main(cfg: DictConfig):
 
         output_dir_slide = Path(output_dir, slide_id)
 
-        #########################
-        # REGION-LEVEL HEATMAPS #
-        #########################
-
-        hms, hms_thresh, coords = get_slide_region_level_heatmaps(
-            slide_id,
-            patch_model,
-            region_model,
-            region_dir,
-            output_dir_slide,
-            downscale=cfg.downscale,
-            cmap=light_jet,
-            save_to_disk=True,
-            threshold=cfg.threshold,
-            granular=cfg.granular,
-            smoothing=cfg.smoothing,
-            patch_device=device,
-            region_device=device,
-        )
-
-        stitched_hms = {}
-        for head_num, heatmaps in hms.items():
-            stitched_hm = stitch_slide_heatmaps(
-                slide_path,
-                heatmaps,
-                coords[head_num],
-                output_dir_slide,
-                fname=f"region_head_{head_num}",
-                spacing=cfg.spacing,
-                downsample=cfg.downsample,
-                downscale=cfg.downscale,
-                save_to_disk=True,
-            )
-            stitched_hms[f"Head {head_num}"] = stitched_hm
-
-        stitched_hms_thresh = {}
-        if len(hms_thresh) > 0:
-            for head_num, heatmaps in hms_thresh.items():
-                stitched_hm = stitch_slide_heatmaps(
-                    slide_path,
-                    heatmaps,
-                    coords[head_num],
-                    output_dir_slide,
-                    fname=f"region_head_{head_num}_thresh",
-                    spacing=cfg.spacing,
-                    downsample=cfg.downsample,
-                    downscale=cfg.downscale,
-                    save_to_disk=True,
-                )
-                stitched_hms_thresh[f"Head {head_num}"] = stitched_hm
-
-        if cfg.display:
-            display_stitched_heatmaps(
-                slide_path,
-                stitched_hms,
-                output_dir_slide,
-                fname=f"region",
-                display_patching=True,
-                region_dir=region_dir,
-                region_size=cfg.region_size,
-                downsample=cfg.downsample,
-                font_fp=cfg.font_fp,
-            )
-            if len(stitched_hms_thresh) > 0:
-                display_stitched_heatmaps(
-                    slide_path,
-                    stitched_hms_thresh,
-                    output_dir_slide,
-                    fname=f"region_thresh",
-                    display_patching=True,
-                    region_dir=region_dir,
-                    region_size=cfg.region_size,
-                    downsample=cfg.downsample,
-                    font_fp=cfg.font_fp,
-                )
-
         ########################
         # PATCH-LEVEL HEATMAPS #
         ########################
 
-        hms, hms_thresh, coords = get_slide_patch_level_heatmaps(
+        hms, hms_thresh, coords = get_slide_heatmaps_patch_level(
             slide_id,
+            region_dir,
             patch_model,
             region_model,
-            region_dir,
             output_dir_slide,
             downscale=cfg.downscale,
             cmap=light_jet,
@@ -326,10 +249,86 @@ def main(cfg: DictConfig):
                 )
 
         #########################
-        # HIERARCHICAL HEATMAPS #
+        # REGION-LEVEL HEATMAPS #
         #########################
 
-        hms, hms_thresh, coords = get_slide_hierarchical_heatmaps(
+        hms, hms_thresh, coords = get_slide_heatmaps_region_level(
+            slide_id,
+            region_dir,
+            patch_model,
+            region_model,
+            output_dir_slide,
+            downscale=cfg.downscale,
+            cmap=light_jet,
+            save_to_disk=True,
+            threshold=cfg.threshold,
+            granular=cfg.granular,
+            smoothing=cfg.smoothing,
+            patch_device=device,
+            region_device=device,
+        )
+
+        stitched_hms = {}
+        for head_num, heatmaps in hms.items():
+            stitched_hm = stitch_slide_heatmaps(
+                slide_path,
+                heatmaps,
+                coords[head_num],
+                output_dir_slide,
+                fname=f"region_head_{head_num}",
+                spacing=cfg.spacing,
+                downsample=cfg.downsample,
+                downscale=cfg.downscale,
+                save_to_disk=True,
+            )
+            stitched_hms[f"Head {head_num}"] = stitched_hm
+
+        stitched_hms_thresh = {}
+        if len(hms_thresh) > 0:
+            for head_num, heatmaps in hms_thresh.items():
+                stitched_hm = stitch_slide_heatmaps(
+                    slide_path,
+                    heatmaps,
+                    coords[head_num],
+                    output_dir_slide,
+                    fname=f"region_head_{head_num}_thresh",
+                    spacing=cfg.spacing,
+                    downsample=cfg.downsample,
+                    downscale=cfg.downscale,
+                    save_to_disk=True,
+                )
+                stitched_hms_thresh[f"Head {head_num}"] = stitched_hm
+
+        if cfg.display:
+            display_stitched_heatmaps(
+                slide_path,
+                stitched_hms,
+                output_dir_slide,
+                fname=f"region",
+                display_patching=True,
+                region_dir=region_dir,
+                region_size=cfg.region_size,
+                downsample=cfg.downsample,
+                font_fp=cfg.font_fp,
+            )
+            if len(stitched_hms_thresh) > 0:
+                display_stitched_heatmaps(
+                    slide_path,
+                    stitched_hms_thresh,
+                    output_dir_slide,
+                    fname=f"region_thresh",
+                    display_patching=True,
+                    region_dir=region_dir,
+                    region_size=cfg.region_size,
+                    downsample=cfg.downsample,
+                    font_fp=cfg.font_fp,
+                )
+
+        ##################################
+        # HIERARCHICAL HEATMAPS (REGION) #
+        ##################################
+
+        hms, hms_thresh, coords = get_slide_hierarchical_heatmaps_region(
             slide_id,
             patch_model,
             region_model,
@@ -417,21 +416,21 @@ def main(cfg: DictConfig):
             # SLIDE-LEVEL HEATMAPS #
             ########################
 
-            hms, thresh_hms, highlight, coords = get_slide_level_heatmaps(
+            hms, thresh_hms, highlight_hms, coords = get_slide_heatmaps_slide_level(
                 slide_id,
+                region_dir,
                 patch_model,
                 region_model,
                 slide_model,
-                region_dir,
-                region_size=cfg.region_size,
                 patch_size=256,
                 downscale=cfg.downscale,
                 threshold=cfg.threshold,
                 highlight=cfg.highlight,
                 cmap=light_jet,
                 region_fmt="jpg",
-                patch_device=torch.device("cuda:0"),
-                region_device=torch.device("cuda:0"),
+                patch_device=device,
+                region_device=device,
+                slide_device=device,
             )
 
             stitched_hms = {}
@@ -448,20 +447,21 @@ def main(cfg: DictConfig):
             )
             stitched_hms[f"slide-level"] = stitched_hm
 
-            stitched_highlight = stitch_slide_heatmaps(
-                slide_path,
-                highlight,
-                coords,
-                output_dir_slide,
-                fname=f"wsi_highlight",
-                spacing=cfg.spacing,
-                downsample=cfg.downsample,
-                downscale=cfg.downscale,
-                save_to_disk=True,
-                highlight=(cfg.highlight > 0),
-                opacity=cfg.opacity,
-                restrict_to_tissue=cfg.restrict_to_tissue,
-                seg_params=cfg.seg_params,
+            if len(highlight_hms) > 0:
+                stitched_highlight = stitch_slide_heatmaps(
+                    slide_path,
+                    highlight_hms,
+                    coords,
+                    output_dir_slide,
+                    fname=f"wsi_highlight",
+                    spacing=cfg.spacing,
+                    downsample=cfg.downsample,
+                    downscale=cfg.downscale,
+                    save_to_disk=True,
+                    highlight=(cfg.highlight > 0),
+                    opacity=cfg.opacity,
+                    restrict_to_tissue=cfg.restrict_to_tissue,
+                    seg_params=cfg.seg_params,
             )
 
             if len(thresh_hms) > 0:
@@ -497,24 +497,24 @@ def main(cfg: DictConfig):
 
             hms, thresh_hms, coords = get_slide_blended_heatmaps(
                 slide_id,
+                region_dir,
                 patch_model,
                 region_model,
                 slide_model,
                 cfg.level,
-                region_dir,
                 output_dir_slide,
-                region_size=cfg.region_size,
+                gamma=cfg.gamma,
                 patch_size=256,
                 mini_patch_size=16,
                 downscale=cfg.downscale,
-                beta=cfg.beta,
                 threshold=cfg.threshold,
                 cmap=light_jet,
                 region_fmt="jpg",
-                save_to_disk=False,
+                save_to_disk=True,
                 granular=cfg.granular,
-                patch_device=torch.device("cuda:0"),
-                region_device=torch.device("cuda:0"),
+                patch_device=device,
+                region_device=device,
+                slide_device=device,
             )
 
             stitched_hms = defaultdict(list)
@@ -605,11 +605,11 @@ def main(cfg: DictConfig):
 
                 output_dir_slide = Path(output_dir, slide_id)
 
-                hms, hms_thresh, coords = get_slide_region_level_heatmaps(
+                hms, hms_thresh, coords = get_slide_heatmaps_region_level(
                     slide_id,
+                    region_dir,
                     patch_model,
                     region_model,
-                    region_dir,
                     output_dir_slide,
                     downscale=cfg.downscale,
                     cmap=light_jet,
@@ -676,11 +676,11 @@ def main(cfg: DictConfig):
                             font_fp=cfg.font_fp,
                         )
 
-                hms, hms_thresh, coords = get_slide_patch_level_heatmaps(
+                hms, hms_thresh, coords = get_slide_heatmaps_patch_level(
                     slide_id,
+                    region_dir,
                     patch_model,
                     region_model,
-                    region_dir,
                     output_dir_slide,
                     downscale=cfg.downscale,
                     cmap=light_jet,
@@ -748,7 +748,7 @@ def main(cfg: DictConfig):
                             font_fp=cfg.font_fp,
                         )
 
-                hms, hms_thresh, coords = get_slide_hierarchical_heatmaps(
+                hms, hms_thresh, coords = get_slide_hierarchical_heatmaps_region(
                     slide_id,
                     patch_model,
                     region_model,

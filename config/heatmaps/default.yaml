@@ -25,7 +25,7 @@ threshold: 0.5 # threshold attention heatmaps to keep regions with attention sco
 granular: True  # whether to compute attention scores using an overlapping stride to obtain more granular heatmaps
 highlight: 0.5 # highlight regions with attention score above this value (similar to threshold, but different visualization) (set to 0 to turn off highlighting)
 opacity: 0.5  # opacity of non-highlighted regions
-restrict_to_tissue: True # when producing highlighted heatmaps, decides to restrict highlighted regions to tissue content only
+restrict_to_tissue: True # when producing thresholded/highlighted heatmaps, decides to restrict highlighted regions to tissue content only
 font_fp: 'data/arial.ttf' # if display = True, path to font used to display figure titles
 
 seg_params:
