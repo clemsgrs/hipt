@@ -1962,6 +1962,7 @@ def get_slide_heatmaps_region_level(
         fp for fp in Path(region_dir, slide_id, "imgs").glob(f"*.{region_fmt}")
     ])
     nregions = len(region_paths)
+    region_coords = [(int(fp.stem.split("_")[0]), int(fp.stem.split("_")[1])) for fp in region_paths]
     region_heatmaps, region_heatmaps_thresh, coords = (
         defaultdict(list),
         defaultdict(list),
@@ -1983,6 +1984,7 @@ def get_slide_heatmaps_region_level(
         for k, fp in enumerate(t1):
             region = Image.open(fp)
             region_size = region.size[0]
+            x, y = int(fp.stem.split("_")[0]), int(fp.stem.split("_")[1])
 
             _, _, region_att = get_region_attention_scores(
                 region,
@@ -2075,7 +2077,6 @@ def get_slide_heatmaps_region_level(
                     )
                     region_hm_output_dir.mkdir(exist_ok=True, parents=True)
 
-                    x, y = int(fp.stem.split("_")[0]), int(fp.stem.split("_")[1])
                     coords[j].append((x, y))
 
                     region_att_scores = normalize_region_scores(
@@ -2118,6 +2119,168 @@ def get_slide_heatmaps_region_level(
                             + new_region_att_scores_3
                             + new_region_att_scores_4
                         ) / region_overlay
+
+                    if smoothing:
+
+                        overlap_regions, overlap_coords = create_overlap_regions((x,y), region_coords, Path(region_dir, slide_id, "imgs"), region_size)
+                        n_overlap_regions = len(overlap_regions)
+
+                        region_overlay = np.ones_like(region_att_scores) * 100
+
+                        with tqdm.tqdm(
+                            overlap_regions,
+                            desc=f"Smoothing region [{k+1}/{nregions}]",
+                            unit=" region",
+                            leave=False,
+                            disable=(not main_process) or (len(overlap_regions) == 0),
+                        ) as t2:
+                            for m, region_ov in enumerate(t2):
+
+                                if m == 0:
+                                    region_att_scores *= 100
+
+                                x_ov, y_ov = overlap_coords[m]
+
+                                _, _, region_ov_att = get_region_attention_scores(
+                                    region_ov,
+                                    patch_model,
+                                    region_model,
+                                    patch_size=patch_size,
+                                    mini_patch_size=mini_patch_size,
+                                    downscale=downscale,
+                                    patch_device=patch_device,
+                                    region_device=region_device,
+                                )
+
+                                if granular:
+                                    offset = int(offset_ * region_size / 4096)
+                                    region_ov2 = add_margin(
+                                        region_ov.crop((offset, offset, region_size, region_size)),
+                                        top=0,
+                                        left=0,
+                                        bottom=offset,
+                                        right=offset,
+                                        color=(255, 255, 255),
+                                    )
+                                    region_ov3 = add_margin(
+                                        region_ov.crop((offset * 2, offset * 2, region_size, region_size)),
+                                        top=0,
+                                        left=0,
+                                        bottom=offset * 2,
+                                        right=offset * 2,
+                                        color=(255, 255, 255),
+                                    )
+                                    region_ov4 = add_margin(
+                                        region_ov.crop((offset * 3, offset * 3, region_size, region_size)),
+                                        top=0,
+                                        left=0,
+                                        bottom=offset * 3,
+                                        right=offset * 3,
+                                        color=(255, 255, 255),
+                                    )
+
+                                    _, _, region_ov_att_2 = get_region_attention_scores(
+                                        region_ov2,
+                                        patch_model,
+                                        region_model,
+                                        patch_size=patch_size,
+                                        mini_patch_size=mini_patch_size,
+                                        downscale=downscale,
+                                        patch_device=patch_device,
+                                        region_device=region_device,
+                                    )
+                                    _, _, region_ov_att_3 = get_region_attention_scores(
+                                        region_ov3,
+                                        patch_model,
+                                        region_model,
+                                        patch_size=patch_size,
+                                        mini_patch_size=mini_patch_size,
+                                        downscale=downscale,
+                                        patch_device=patch_device,
+                                        region_device=region_device,
+                                    )
+                                    _, _, region_ov_att_4 = get_region_attention_scores(
+                                        region_ov4,
+                                        patch_model,
+                                        region_model,
+                                        patch_size=patch_size,
+                                        mini_patch_size=mini_patch_size,
+                                        downscale=downscale,
+                                        patch_device=patch_device,
+                                        region_device=region_device,
+                                    )
+
+                                    offset_2 = offset // downscale
+                                    offset_3 = (offset * 2) // downscale
+                                    offset_4 = (offset * 3) // downscale
+
+                                region_ov_att_scores = normalize_region_scores(
+                                    region_ov_att[j], size=(s,) * 2
+                                )
+
+                                if granular:
+                                    region_ov_att_scores_2 = normalize_region_scores(
+                                        region_ov_att_2[j], size=(s,) * 2
+                                    )
+                                    region_ov_att_scores_3 = normalize_region_scores(
+                                        region_ov_att_3[j], size=(s,) * 2
+                                    )
+                                    region_ov_att_scores_4 = normalize_region_scores(
+                                        region_ov_att_4[j], size=(s,) * 2
+                                    )
+                                    region_ov_att_scores *= 100
+                                    region_ov_att_scores_2 *= 100
+                                    region_ov_att_scores_3 *= 100
+                                    region_ov_att_scores_4 *= 100
+                                    new_region_ov_att_scores_2 = np.zeros_like(region_ov_att_scores_2)
+                                    new_region_ov_att_scores_2[
+                                        offset_2:s, offset_2:s
+                                    ] = region_ov_att_scores_2[: (s - offset_2), : (s - offset_2)]
+                                    new_region_ov_att_scores_3 = np.zeros_like(region_ov_att_scores_3)
+                                    new_region_ov_att_scores_3[
+                                        offset_3:s, offset_3:s
+                                    ] = region_ov_att_scores_3[: (s - offset_3), : (s - offset_3)]
+                                    new_region_ov_att_scores_4 = np.zeros_like(region_ov_att_scores_4)
+                                    new_region_ov_att_scores_4[
+                                        offset_4:s, offset_4:s
+                                    ] = region_ov_att_scores_4[: (s - offset_4), : (s - offset_4)]
+                                    region_ov_overlay = np.ones_like(new_region_ov_att_scores_2) * 100
+                                    region_ov_overlay[offset_2:s, offset_2:s] += 100
+                                    region_ov_overlay[offset_3:s, offset_3:s] += 100
+                                    region_ov_overlay[offset_4:s, offset_4:s] += 100
+                                    region_ov_att_scores = (
+                                        region_ov_att_scores
+                                        + new_region_ov_att_scores_2
+                                        + new_region_ov_att_scores_3
+                                        + new_region_ov_att_scores_4
+                                    ) / region_ov_overlay
+
+                                new_region_ov_att_scores = np.zeros_like(region_ov_att_scores)
+                                region_ov_att_scores *= 100
+                                new_region_ov_att_scores[
+                                    (x_ov-x):s, (y_ov-y):s
+                                ] = region_ov_att_scores[:(s-(x_ov-x)), :(s-(y_ov-y))]
+                                region_overlay[x_ov:x+s, y_ov:y+s] += 100
+                                region_att_scores = region_att_scores + new_region_ov_att_scores
+                                if (n_overlap_regions == 1) or (n_overlap_regions == 2 and m == 1):
+                                    region_att_scores = region_att_scores / region_overlay
+
+                    region_color_block = (cmap(region_att_scores) * 255)[
+                        :, :, :3
+                    ].astype(np.uint8)
+                    region_hm = cv2.addWeighted(
+                        region_color_block,
+                        alpha,
+                        save_region.copy(),
+                        1 - alpha,
+                        0,
+                        save_region.copy(),
+                    )
+                    region_heatmaps[j].append(region_hm)
+
+                    if save_to_disk:
+                        img = Image.fromarray(region_hm)
+                        img.save(Path(region_hm_output_dir, f"{x}_{y}.png"))
 
                     if threshold != None:
                         thresh_region_hm_output_dir = Path(
@@ -2165,200 +2328,6 @@ def get_slide_heatmaps_region_level(
                         if save_to_disk:
                             img = Image.fromarray(highlighted_hm, mode='RGBA')
                             img.save(Path(highlight_region_hm_output_dir, f"{x}_{y}.png"))
-
-                    region_color_block = (cmap(region_att_scores) * 255)[
-                        :, :, :3
-                    ].astype(np.uint8)
-                    region_hm = cv2.addWeighted(
-                        region_color_block,
-                        alpha,
-                        save_region.copy(),
-                        1 - alpha,
-                        0,
-                        save_region.copy(),
-                    )
-                    region_heatmaps[j].append(region_hm)
-                    if save_to_disk:
-                        img = Image.fromarray(region_hm)
-                        img.save(Path(region_hm_output_dir, f"{x}_{y}.png"))
-
-    if smoothing:
-        overlap_regions, overlap_coords = create_overlap_regions(coords[0], Path(region_dir, slide_id, "imgs"), region_size)
-        n_overlap_regions = len(overlap_regions)
-        with tqdm.tqdm(
-            overlap_regions,
-            desc=f"Smoothing {slide_id}",
-            unit=" region",
-            leave=False,
-            disable=not main_process,
-        ) as t1:
-            for k, region in enumerate(t1):
-                region_size = region.size[0]
-
-                _, _, region_att = get_region_attention_scores(
-                    region,
-                    patch_model,
-                    region_model,
-                    patch_size=patch_size,
-                    mini_patch_size=mini_patch_size,
-                    downscale=downscale,
-                    patch_device=patch_device,
-                    region_device=region_device,
-                )
-
-                if granular:
-                    offset = int(offset_ * region_size / 4096)
-                    region2 = add_margin(
-                        region.crop((offset, offset, region_size, region_size)),
-                        top=0,
-                        left=0,
-                        bottom=offset,
-                        right=offset,
-                        color=(255, 255, 255),
-                    )
-                    region3 = add_margin(
-                        region.crop((offset * 2, offset * 2, region_size, region_size)),
-                        top=0,
-                        left=0,
-                        bottom=offset * 2,
-                        right=offset * 2,
-                        color=(255, 255, 255),
-                    )
-                    region4 = add_margin(
-                        region.crop((offset * 3, offset * 3, region_size, region_size)),
-                        top=0,
-                        left=0,
-                        bottom=offset * 3,
-                        right=offset * 3,
-                        color=(255, 255, 255),
-                    )
-
-                    _, _, region_att_2 = get_region_attention_scores(
-                        region2,
-                        patch_model,
-                        region_model,
-                        patch_size=patch_size,
-                        mini_patch_size=mini_patch_size,
-                        downscale=downscale,
-                        patch_device=patch_device,
-                        region_device=region_device,
-                    )
-                    _, _, region_att_3 = get_region_attention_scores(
-                        region3,
-                        patch_model,
-                        region_model,
-                        patch_size=patch_size,
-                        mini_patch_size=mini_patch_size,
-                        downscale=downscale,
-                        patch_device=patch_device,
-                        region_device=region_device,
-                    )
-                    _, _, region_att_4 = get_region_attention_scores(
-                        region4,
-                        patch_model,
-                        region_model,
-                        patch_size=patch_size,
-                        mini_patch_size=mini_patch_size,
-                        downscale=downscale,
-                        patch_device=patch_device,
-                        region_device=region_device,
-                    )
-
-                    offset_2 = offset // downscale
-                    offset_3 = (offset * 2) // downscale
-                    offset_4 = (offset * 3) // downscale
-
-                s = region_size // downscale
-                # given region is an RGB image, so the default filter for resizing is Resampling.BICUBIC
-                # which is fine as we're resizing the image here, not attention scores
-                save_region = np.array(region.resize((s, s)))
-
-                with tqdm.tqdm(
-                    range(nhead_region),
-                    desc=f"Processing region [{k+1}/{n_overlap_regions}]",
-                    unit=" head",
-                    leave=False,
-                    disable=not main_process,
-                ) as t2:
-                    for j in t2:
-
-                        x, y = overlap_coords[k]
-                        coords[j].append((x, y))
-
-                        region_att_scores = normalize_region_scores(
-                            region_att[j], size=(s,) * 2
-                        )
-
-                        if granular:
-                            region_att_scores_2 = normalize_region_scores(
-                                region_att_2[j], size=(s,) * 2
-                            )
-                            region_att_scores_3 = normalize_region_scores(
-                                region_att_3[j], size=(s,) * 2
-                            )
-                            region_att_scores_4 = normalize_region_scores(
-                                region_att_4[j], size=(s,) * 2
-                            )
-                            region_att_scores *= 100
-                            region_att_scores_2 *= 100
-                            region_att_scores_3 *= 100
-                            region_att_scores_4 *= 100
-                            new_region_att_scores_2 = np.zeros_like(region_att_scores_2)
-                            new_region_att_scores_2[
-                                offset_2:s, offset_2:s
-                            ] = region_att_scores_2[: (s - offset_2), : (s - offset_2)]
-                            new_region_att_scores_3 = np.zeros_like(region_att_scores_3)
-                            new_region_att_scores_3[
-                                offset_3:s, offset_3:s
-                            ] = region_att_scores_3[: (s - offset_3), : (s - offset_3)]
-                            new_region_att_scores_4 = np.zeros_like(region_att_scores_4)
-                            new_region_att_scores_4[
-                                offset_4:s, offset_4:s
-                            ] = region_att_scores_4[: (s - offset_4), : (s - offset_4)]
-                            region_overlay = np.ones_like(new_region_att_scores_2) * 100
-                            region_overlay[offset_2:s, offset_2:s] += 100
-                            region_overlay[offset_3:s, offset_3:s] += 100
-                            region_overlay[offset_4:s, offset_4:s] += 100
-                            region_att_scores = (
-                                region_att_scores
-                                + new_region_att_scores_2
-                                + new_region_att_scores_3
-                                + new_region_att_scores_4
-                            ) / region_overlay
-
-                        if threshold != None:
-
-                            att_mask = region_att_scores.copy()
-                            att_mask[att_mask < threshold] = 0
-                            att_mask[att_mask >= threshold] = 0.95
-
-                            color_block = (cmap(att_mask) * 255)[:, :, :3].astype(np.uint8)
-                            region_hm = cv2.addWeighted(
-                                color_block,
-                                alpha,
-                                save_region.copy(),
-                                1 - alpha,
-                                0,
-                                save_region.copy(),
-                            )
-                            region_hm[att_mask == 0] = 0
-                            img_inverse = save_region.copy()
-                            img_inverse[att_mask == 0.95] = 0
-                            region_hm = region_hm + img_inverse
-                            region_heatmaps_thresh[j].append(region_hm)
-
-                        region_color_block = (cmap(region_att_scores) * 255)[
-                            :, :, :3
-                        ].astype(np.uint8)
-                        region_hm = cv2.addWeighted(
-                            region_color_block,
-                            alpha,
-                            save_region.copy(),
-                            1 - alpha,
-                            0,
-                            save_region.copy(),
-                        )
-                        region_heatmaps[j].append(region_hm)
 
     return region_heatmaps, region_heatmaps_thresh, region_heatmaps_highlight, coords
 
@@ -3431,35 +3400,37 @@ def display_stitched_heatmaps(
 
 # Smoothing utility functions
 
-def find_t2b_neighbors(coords, region_size):
-    t2b_pairs = []
-    for (x,y) in coords:
-        neigh = (x,y+region_size)
-        if neigh in coords:
-            t2b_pairs.append(((x,y),neigh))
-    return t2b_pairs
+def find_t2b_neighbor(coords, region_coords, region_size):
+    x, y = coords
+    neigh = (x,y+region_size)
+    if neigh in region_coords:
+        return neigh
+    else:
+        return None
 
 
-def find_l2r_neighbors(coords, region_size):
-    l2r_pairs = []
-    for (x,y) in coords:
-        neigh = (x+region_size,y)
-        if neigh in coords:
-            l2r_pairs.append(((x,y),neigh))
-    return l2r_pairs
+def find_l2r_neighbor(coords, region_coords, region_size):
+    x, y = coords
+    neigh = (x+region_size,y)
+    if neigh in region_coords:
+        return neigh
+    else:
+        return None
 
 
-def create_overlap_regions(coords, region_dir: Path, region_size: int):
-    # find top-to-bottom neighbors
-    t2b_neighbors = find_t2b_neighbors(coords, region_size)
-    # find left-ro-right neighbors
-    l2r_neighbors = find_l2r_neighbors(coords, region_size)
+def create_overlap_regions(coords, region_coords, region_dir: Path, region_size: int):
+    x1, y1 = coords
+    fp1 = Path(region_dir, f"{x1}_{y1}.jpg")
+    region1 = Image.open(fp1)
+    # find top-to-bottom neighbor
+    t2b_neighbor = find_t2b_neighbor(coords, region_coords, region_size)
+    # find left-ro-right neighbor
+    l2r_neighbor = find_l2r_neighbor(coords, region_coords, region_size)
     # iterate over neighboring pairs
     overlap_regions, overlap_coords = [], []
-    for (x1, y1), (x2, y2) in t2b_neighbors:
-        fp1 = Path(region_dir, f"{x1}_{y1}.jpg")
+    if t2b_neighbor != None:
+        x2, y2 = t2b_neighbor
         fp2 = Path(region_dir, f"{x2}_{y2}.jpg")
-        region1 = Image.open(fp1)
         region2 = Image.open(fp2)
         #TODO: might need to inverse x,y axes
         area1 = (0, region_size//2, region_size, region_size)
@@ -3472,11 +3443,10 @@ def create_overlap_regions(coords, region_dir: Path, region_size: int):
         canvas.paste(crop1, (0, 0))
         canvas.paste(crop2, (0, region_size//2))
         overlap_regions.append(canvas)
-        overlap_coords.append((x1,y1+region_size//2))
-    for (x1, y1), (x2, y2) in l2r_neighbors:
-        fp1 = Path(region_dir, f"{x1}_{y1}.jpg")
+        overlap_coords.append(t2b_neighbor)
+    if l2r_neighbor != None:
+        x2, y2 = l2r_neighbor
         fp2 = Path(region_dir, f"{x2}_{y2}.jpg")
-        region1 = Image.open(fp1)
         region2 = Image.open(fp2)
         #TODO: might need to inverse x,y axes
         area1 = (region_size//2, 0, region_size, region_size)
@@ -3489,6 +3459,6 @@ def create_overlap_regions(coords, region_dir: Path, region_size: int):
         canvas.paste(crop1, (0, 0))
         canvas.paste(crop2, (region_size//2, 0))
         overlap_regions.append(canvas)
-        overlap_coords.append((x1+region_size//2,y1))
+        overlap_coords.append(l2r_neighbor)
     return overlap_regions, overlap_coords
 
