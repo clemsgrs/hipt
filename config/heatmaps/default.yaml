@@ -23,7 +23,7 @@ downscale: 1 # how much to downscale the output image by (e.g. downscale=4 will 
 downsample: 32  # uses this value to find the closest downsample level in the WSI for slide-level heatmap visualization
 threshold: 0.5 # threshold attention heatmaps to keep regions with attention scores higher than this value (set to None to not compute thresholded heatmaps)
 granular: True  # whether to compute attention scores using an overlapping stride to obtain more granular heatmaps
-highlight: 0.5 # highlight regions with attention score above this value (similar to threshold, but different visualization) (set to 0 to turn off highlighting)
+highlight: 0.5 # highlight regions with attention score above this value (similar to threshold, but different visualization) (set to None to turn off highlighting)
 opacity: 0.5  # opacity of non-highlighted regions
 restrict_to_tissue: True # when producing thresholded/highlighted heatmaps, decides to restrict highlighted regions to tissue content only
 font_fp: 'data/arial.ttf' # if display = True, path to font used to display figure titles
