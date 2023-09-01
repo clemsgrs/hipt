@@ -1,3 +1,4 @@
+import os
 import cv2
 import tqdm
 import h5py
@@ -3063,39 +3064,39 @@ def get_slide_blended_heatmaps(
 
                             if granular:
                                 if level == "global":
-                                    n = 1
-                                    score = (
-                                        region_att_scores * region_overlay * gamma
-                                        + patch_att_scores * patch_overlay * gamma
-                                    )
-                                    if gamma > 0:
-                                        score = score / (region_overlay * gamma + patch_overlay * gamma)
-                                elif level == "local":
                                     n = 2
-                                    score = (
-                                        region_att_scores * region_overlay * (1-gamma)
-                                        + patch_att_scores * patch_overlay * gamma
-                                    ) / (region_overlay * (1-gamma) + patch_overlay * gamma)
-                                else:
-                                    n = 3
                                     score = (
                                         region_att_scores * region_overlay * (1-gamma)
                                         + patch_att_scores * patch_overlay * (1-gamma)
                                     )
                                     if gamma < 1:
                                         score = score / (region_overlay * (1-gamma) + patch_overlay * (1-gamma))
+                                elif level == "local":
+                                    n = 1
+                                    score = (
+                                        region_att_scores * region_overlay * gamma
+                                        + patch_att_scores * patch_overlay * (1-gamma)
+                                    ) / (region_overlay * gamma + patch_overlay * (1-gamma))
+                                else:
+                                    n = 0
+                                    score = (
+                                        region_att_scores * region_overlay * gamma
+                                        + patch_att_scores * patch_overlay * gamma
+                                    )
+                                    if gamma > 0:
+                                        score = score / (region_overlay * gamma + patch_overlay * gamma)
                             else:
                                 if level == "global":
-                                    n = 1
-                                    score = region_att_scores * gamma + patch_att_scores * gamma
-                                elif level == "local":
                                     n = 2
-                                    score = region_att_scores * (1-gamma) + patch_att_scores * gamma
-                                else:
-                                    n = 3
                                     score = region_att_scores * (1-gamma) + patch_att_scores * (1-gamma)
+                                elif level == "local":
+                                    n = 1
+                                    score = region_att_scores * gamma + patch_att_scores * (1-gamma)
+                                else:
+                                    n = 0
+                                    score = region_att_scores * gamma + patch_att_scores * gamma
 
-                            score += slide_att_scores * (1-gamma)
+                            score += slide_att_scores * gamma
                             score = score / (n*(1-gamma)+(3-n)*gamma)
 
                             if threshold != None:
@@ -3179,6 +3180,7 @@ def stitch_slide_heatmaps(
     save_to_disk: bool = False,
     highlight: bool = False,
     opacity: float = 0.3,
+    cmap: matplotlib.colors.LinearSegmentedColormap = plt.get_cmap("coolwarm"),
     restrict_to_tissue: bool = False,
     seg_params: Optional[Dict] = None,
 ):
@@ -3290,8 +3292,28 @@ def stitch_slide_heatmaps(
         stitched_hm = Image.fromarray(canvas)
 
     if save_to_disk:
+        # add colorbar
+        sm = plt.cm.ScalarMappable(cmap=cmap)
+        fig, ax = plt.subplots(dpi=100)
+        plt.colorbar(sm, ax=ax)
+        ax.remove()
+        plt.yticks(fontsize='large')
+        plt.savefig('color_bar.png', bbox_inches='tight')
+        plt.close()
+        cbar = Image.open('color_bar.png')
+        os.remove('color_bar.png')
+        w_cbar, h_cbar = cbar.size
+        mode = stitched_hm.mode
+        w, h = stitched_hm.size
+        pad = 20
+        canvas = Image.new(
+            size=(w + 2 * pad + w_cbar, h), mode=mode, color=(255,) * len(mode)
+        )
+        x, y = w + pad, (h + 2 * pad - h_cbar) // 2
+        canvas.paste(stitched_hm, (0, 0))
+        canvas.paste(cbar, (x, y))
         stitched_hm_path = Path(slide_output_dir, f"{fname}.png")
-        stitched_hm.save(stitched_hm_path)
+        canvas.save(stitched_hm_path)
 
     return stitched_hm
 
@@ -3302,6 +3324,8 @@ def display_stitched_heatmaps(
     output_dir: Path,
     fname: str,
     display_patching: bool = False,
+    draw_grid: bool = True,
+    cmap: matplotlib.colors.LinearSegmentedColormap = plt.get_cmap("coolwarm"),
     region_dir: Optional[Path] = None,
     region_size: Optional[int] = None,
     downsample: int = 32,
@@ -3353,6 +3377,7 @@ def display_stitched_heatmaps(
             coords,
             region_size,
             vis_level,
+            draw_grid=draw_grid,
         )
 
         data = [(f"{region_size}x{region_size} patching", patching_im)] + [
@@ -3362,12 +3387,24 @@ def display_stitched_heatmaps(
 
     nhm = len(heatmaps)
     pad = 20
+
+    sm = plt.cm.ScalarMappable(cmap=cmap)
+    fig, ax = plt.subplots(dpi=100)
+    plt.colorbar(sm, ax=ax)
+    ax.remove()
+    plt.yticks(fontsize='large')
+    plt.savefig('color_bar.png', bbox_inches='tight')
+    plt.close()
+    cbar = Image.open('color_bar.png')
+    os.remove('color_bar.png')
+    w_cbar, h_cbar = cbar.size
+
     modes = set([hm.mode for hm in heatmaps.values()])
     mode = "RGB"
     if len(modes) > 1:
         mode = "RGBA"
     canvas = Image.new(
-        size=(w * nhm + pad * (nhm + 1), h + 2 * pad), mode=mode, color=(255,) * len(mode)
+        size=(w * nhm + pad * (nhm + 1) + 2 * pad + w_cbar, h + 2 * pad), mode=mode, color=(255,) * len(mode)
     )
 
     font = None
@@ -3393,6 +3430,9 @@ def display_stitched_heatmaps(
             (0, 0, 0),
             font=font,
         )
+
+    x, y = w * nhm + pad * (nhm + 1), (h + 2 * pad - h_cbar) // 2
+    canvas.paste(cbar, (x, y))
 
     stitched_hm_path = Path(output_dir, f"{fname}.png")
     canvas.save(stitched_hm_path)
