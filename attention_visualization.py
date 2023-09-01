@@ -204,6 +204,7 @@ def main(cfg: DictConfig):
                 spacing=cfg.spacing,
                 downsample=cfg.downsample,
                 downscale=cfg.downscale,
+                cmap=light_jet,
                 save_to_disk=True,
             )
             stitched_hms[f"Head {head_num}"] = stitched_hm
@@ -220,6 +221,7 @@ def main(cfg: DictConfig):
                     spacing=cfg.spacing,
                     downsample=cfg.downsample,
                     downscale=cfg.downscale,
+                    cmap=light_jet,
                     save_to_disk=True,
                 )
                 stitched_hms_thresh[f"Head {head_num}"] = stitched_hm
@@ -236,6 +238,7 @@ def main(cfg: DictConfig):
                     spacing=cfg.spacing,
                     downsample=cfg.downsample,
                     downscale=cfg.downscale,
+                    cmap=light_jet,
                     save_to_disk=True,
                     highlight=(cfg.highlight != None),
                     opacity=cfg.opacity,
@@ -251,6 +254,7 @@ def main(cfg: DictConfig):
                 output_dir_slide,
                 fname=f"patch",
                 display_patching=True,
+                cmap=light_jet,
                 region_dir=region_dir,
                 region_size=cfg.region_size,
                 downsample=cfg.downsample,
@@ -263,6 +267,7 @@ def main(cfg: DictConfig):
                     output_dir_slide,
                     fname=f"patch_thresh",
                     display_patching=True,
+                    cmap=light_jet,
                     region_dir=region_dir,
                     region_size=cfg.region_size,
                     downsample=cfg.downsample,
@@ -275,6 +280,7 @@ def main(cfg: DictConfig):
                     output_dir_slide,
                     fname=f"patch_highlight",
                     display_patching=True,
+                    cmap=light_jet,
                     region_dir=region_dir,
                     region_size=cfg.region_size,
                     downsample=cfg.downsample,
@@ -313,6 +319,7 @@ def main(cfg: DictConfig):
                 spacing=cfg.spacing,
                 downsample=cfg.downsample,
                 downscale=cfg.downscale,
+                cmap=light_jet,
                 save_to_disk=True,
             )
             stitched_hms[f"Head {head_num}"] = stitched_hm
@@ -329,6 +336,7 @@ def main(cfg: DictConfig):
                     spacing=cfg.spacing,
                     downsample=cfg.downsample,
                     downscale=cfg.downscale,
+                    cmap=light_jet,
                     save_to_disk=True,
                 )
                 stitched_hms_thresh[f"Head {head_num}"] = stitched_hm
@@ -345,6 +353,7 @@ def main(cfg: DictConfig):
                     spacing=cfg.spacing,
                     downsample=cfg.downsample,
                     downscale=cfg.downscale,
+                    cmap=light_jet,
                     save_to_disk=True,
                     highlight=(cfg.highlight != None),
                     opacity=cfg.opacity,
@@ -360,6 +369,7 @@ def main(cfg: DictConfig):
                 output_dir_slide,
                 fname=f"region",
                 display_patching=True,
+                cmap=light_jet,
                 region_dir=region_dir,
                 region_size=cfg.region_size,
                 downsample=cfg.downsample,
@@ -372,6 +382,7 @@ def main(cfg: DictConfig):
                     output_dir_slide,
                     fname=f"region_thresh",
                     display_patching=True,
+                    cmap=light_jet,
                     region_dir=region_dir,
                     region_size=cfg.region_size,
                     downsample=cfg.downsample,
@@ -384,6 +395,7 @@ def main(cfg: DictConfig):
                     output_dir_slide,
                     fname=f"region_highlight",
                     display_patching=True,
+                    cmap=light_jet,
                     region_dir=region_dir,
                     region_size=cfg.region_size,
                     downsample=cfg.downsample,
@@ -457,6 +469,7 @@ def main(cfg: DictConfig):
                     output_dir_slide,
                     fname=f"rhead_{rhead_num}",
                     display_patching=True,
+                    cmap=light_jet,
                     region_dir=region_dir,
                     region_size=cfg.region_size,
                     downsample=cfg.downsample,
@@ -509,6 +522,7 @@ def main(cfg: DictConfig):
                 spacing=cfg.spacing,
                 downsample=cfg.downsample,
                 downscale=cfg.downscale,
+                cmap=light_jet,
                 save_to_disk=True,
             )
             stitched_hms[f"slide-level"] = stitched_hm
@@ -552,6 +566,8 @@ def main(cfg: DictConfig):
                     output_dir,
                     fname=f"wsi",
                     display_patching=True,
+                    draw_grid=False,
+                    cmap=light_jet,
                     region_dir=region_dir,
                     region_size=cfg.region_size,
                     downsample=cfg.downsample,
@@ -598,6 +614,7 @@ def main(cfg: DictConfig):
                         spacing=cfg.spacing,
                         downsample=cfg.downsample,
                         downscale=cfg.downscale,
+                        cmap=light_jet,
                         save_to_disk=True,
                     )
                     stitched_hms[rhead_num].append(stitched_hm)
@@ -616,6 +633,7 @@ def main(cfg: DictConfig):
                         spacing=cfg.spacing,
                         downsample=cfg.downsample,
                         downscale=cfg.downscale,
+                        cmap=light_jet,
                         save_to_disk=True,
                     )
                     stitched_hms_thresh[rhead_num].append(stitched_hm)
@@ -632,6 +650,7 @@ def main(cfg: DictConfig):
                         output_dir_slide,
                         fname=f"rhead_{rhead_num}",
                         display_patching=True,
+                        cmap=light_jet,
                         region_dir=region_dir,
                         region_size=cfg.region_size,
                         downsample=cfg.downsample,
@@ -725,6 +744,7 @@ def main(cfg: DictConfig):
                         output_dir_slide,
                         fname=f"region",
                         display_patching=True,
+                        cmap=light_jet,
                         region_dir=region_dir,
                         region_size=cfg.region_size,
                         downsample=cfg.downsample,
@@ -737,6 +757,7 @@ def main(cfg: DictConfig):
                             output_dir_slide,
                             fname=f"region_thresh",
                             display_patching=True,
+                            cmap=light_jet,
                             region_dir=region_dir,
                             region_size=cfg.region_size,
                             downsample=cfg.downsample,
@@ -797,6 +818,7 @@ def main(cfg: DictConfig):
                         output_dir_slide,
                         fname=f"patch",
                         display_patching=True,
+                        cmap=light_jet,
                         region_dir=region_dir,
                         region_size=cfg.region_size,
                         downsample=cfg.downsample,
@@ -809,6 +831,7 @@ def main(cfg: DictConfig):
                             output_dir_slide,
                             fname=f"patch_thresh",
                             display_patching=True,
+                            cmap=light_jet,
                             region_dir=region_dir,
                             region_size=cfg.region_size,
                             downsample=cfg.downsample,
