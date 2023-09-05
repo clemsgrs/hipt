@@ -8,7 +8,7 @@ Re-implementation of original [HIPT](https://github.com/mahmoodlab/HIPT) code.
    <a href="https://github.com/PyCQA/pylint"><img alt="empty" src=https://img.shields.io/github/stars/clemsgrs/hipt?style=social></a>
 </p>
 
-<img src="hipt_overview.pdf" width="1000px" align="center" />
+<img src="hipt_overview.png" width="1000px" align="center" />
 
 ## Requirements
 
