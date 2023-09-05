@@ -8,7 +8,7 @@ Re-implementation of original [HIPT](https://github.com/mahmoodlab/HIPT) code.
    <a href="https://github.com/PyCQA/pylint"><img alt="empty" src=https://img.shields.io/github/stars/clemsgrs/hipt?style=social></a>
 </p>
 
-<img src="heatmap_illu.png" width="1000px" align="center" />
+<img src="hipt_overview.pdf" width="1000px" align="center" />
 
 ## Requirements
 
@@ -173,6 +173,8 @@ Then, run the following command to kick off model training on multiple folds:
 
 ## Interpretability via Attention Heatmaps
 
+<img src="heatmap_illu.png" width="1000px" align="center" />
+
 Given HIPT consists in 3 Transformers stacked on one another, one can look at attention heatmaps for each Transformer independantly. Additionally, one can also blend these attention heatmaps together and generate **factorized** attention heatmaps.<br>
 <br>
 To generate attention heatmaps, create a configuration file under `config/heatmaps`.<br>
@@ -238,7 +240,7 @@ where, for each slide (and for each attention head):
 * `region/` regroups the region-level Transformer attention heatmaps for all extracted regions in a given slide
 * `slide/` regroups all stitched attention heatmaps (patch-level, region-level, factorized) at the slide-level
 * `hierarchical_<region_size>_<patch_size>/` regroups the factorized patch-level & region-level attention heatmaps for all extracted regions in a given slide
- 
+
 
  **Distributed** heatmap generation across multiple gpus is supported via:
 
@@ -280,7 +282,7 @@ The following commands are used for **single-gpu** pretraining:
 
 ```bash
 python3 pretrain/dino_patch.py --config-name <dino_patch_config>
-python3 pretrain/dino_region.py --config-name <dino_region__config>
+python3 pretrain/dino_region.py --config-name <dino_region_config>
 ```
 
 **Distributed** pretraining across multiple gpus is supported via:
@@ -290,9 +292,25 @@ python3 -m torch.distributed.run --nproc_per_node=gpu pretrain/dino_patch.py --c
 python3 -m torch.distributed.run --nproc_per_node=gpu pretrain/dino_region.py --config-name <dino_region_config>
 ```
 
-**Early Stopping DINO pretraining**
+**Early Stopping during DINO pretraining**
 
-## TODO List
+When pretraining the patch-level Transformer, we can monitor student & teacher performances via a downstream patch-level classification task. This can later be used as an early stopping mechanism to prevent model overtraining.
 
-- [ ] switch back optimizer.zero_grad( ) before .step( )
-- [ ] implement heatmap visualization
+For more details about this, check DINO paper at https://arxiv.org/abs/2104.14294.
+
+To enable early stopping, make sure to check the parameters under `early_stopping` in your configuration file:
+
+| parameter | type | description |
+|-----------|------|-------------|
+| tune_every   | int | run downstream evaluation every {tune_every} epochs (leave blank if you want disable downstream evaluation)|
+| tracking | str | which metric should be tracked for early stopping |
+| min_max | str | whether the previous metric should be maximised ('max') or minimized ('min') |
+| patience | int | early stopping patience (in number of epochs) |
+| min_epoch | int | minimum number of epochs to complete before early stopping can be triggered |
+| save_every | int | save checkpoint every {save_every} epochs |
+| downstream.train_csv | str | path to the downstream train .csv file (it should have the following columns: `tile_path` : path to patch image, `label` : patch label) |
+| downstream.test_csv | str | path to the downstream test .csv file (same requirements) |
+| downstream.label_name | str | column name holding the labels in the previous .csv files |
+| knn.k | int | number of neighbours to retrieve |
+| knn.temperature | int | temperature value used when computing kNN probabilities |
+| knn.save_features | bool | whether to save kNN features to disk |
