@@ -131,14 +131,14 @@ class SlideAgg(nn.Module):
 
         # in nn.TransformerEncoderLayer, batch_first defaults to False
         # hence, input is expected to be of shape (seq_length, batch, emb_size)
-        x = self.global_transformer(x.unsqueeze(1)).squeeze(1)
-        att, x = self.global_attn_pool(x)
-        att = torch.transpose(att, 1, 0)
-        att = torch.nn.functional.softmax(att, dim=1)
+        x = self.global_transformer(x.unsqueeze(1)).squeeze(1) # [M, 192]
+        att, x = self.global_attn_pool(x) # [M, 1], [M, 192]
+        att = torch.transpose(att, 1, 0) # [1, M]
+        att = torch.nn.functional.softmax(att, dim=1) # [1, M], softmaxed attention scores across M regions
         if return_attention:
             return att
-        x_att = torch.mm(att, x)
-        x_wsi = self.global_rho(x_att)
+        x_att = torch.mm(att, x) # [1, 192], sum of regions embeddings, weighted by corresponding attention score
+        x_wsi = self.global_rho(x_att) # [1, 192]
         return x_wsi
 
 
@@ -619,9 +619,8 @@ def get_slide_attention_scores(
     with torch.no_grad():
         feature_seq = torch.stack(features, dim=0).squeeze(1)  # (M, 192)
         feature_seq = feature_seq.to(slide_device, non_blocking=True)
-        slide_attention = slide_model(feature_seq, return_attention=True).squeeze(
-            0
-        )  # (M)
+        slide_attention = slide_model(feature_seq, return_attention=True)
+        slide_attention = slide_attention.squeeze(0)  # (M)
         slide_attention = normalize_slide_scores(slide_attention.cpu().numpy())  # (M)
         slide_attention = slide_attention.reshape(-1, 1, 1)  # (M, 1, 1)
         slide_attention = torch.from_numpy(slide_attention).to(
