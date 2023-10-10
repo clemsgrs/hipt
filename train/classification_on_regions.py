@@ -140,7 +140,7 @@ def main(cfg: DictConfig):
     with tqdm.tqdm(
         range(cfg.nepochs),
         desc=(f"HIPT Training"),
-        unit=" slide",
+        unit=" epoch",
         ncols=100,
         leave=True,
     ) as t:

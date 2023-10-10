@@ -176,7 +176,7 @@ def main(cfg: DictConfig):
         with tqdm.tqdm(
             range(cfg.nepochs),
             desc=(f"Fold {i} Training"),
-            unit=" patient",
+            unit=" epoch",
             ncols=100,
             leave=True,
         ) as t:
