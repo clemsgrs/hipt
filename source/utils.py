@@ -817,7 +817,10 @@ def train(
 
             loss.backward()
 
-            if (i + 1) % gradient_accumulation == 0:
+            if not gradient_accumulation:
+                optimizer.step()
+                optimizer.zero_grad()
+            elif (i + 1) % gradient_accumulation == 0:
                 optimizer.step()
                 optimizer.zero_grad()
 
@@ -1078,7 +1081,10 @@ def train_regression(
 
             loss.backward()
 
-            if (i + 1) % gradient_accumulation == 0:
+            if not gradient_accumulation:
+                optimizer.step()
+                optimizer.zero_grad()
+            elif (i + 1) % gradient_accumulation == 0:
                 optimizer.step()
                 optimizer.zero_grad()
 
@@ -1303,7 +1309,10 @@ def train_ordinal(
 
             loss.backward()
 
-            if (i + 1) % gradient_accumulation == 0:
+            if not gradient_accumulation:
+                optimizer.step()
+                optimizer.zero_grad()
+            elif (i + 1) % gradient_accumulation == 0:
                 optimizer.step()
                 optimizer.zero_grad()
 
@@ -1571,7 +1580,10 @@ def train_survival(
 
             loss.backward()
 
-            if (i + 1) % gradient_accumulation == 0:
+            if not gradient_accumulation:
+                optimizer.step()
+                optimizer.zero_grad()
+            elif (i + 1) % gradient_accumulation == 0:
                 optimizer.step()
                 optimizer.zero_grad()
 
@@ -1860,7 +1872,10 @@ def train_on_regions(
 
             loss.backward()
 
-            if (i + 1) % gradient_accumulation == 0:
+            if not gradient_accumulation:
+                optimizer.step()
+                optimizer.zero_grad()
+            elif (i + 1) % gradient_accumulation == 0:
                 optimizer.step()
                 optimizer.zero_grad()
 

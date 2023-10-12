@@ -94,8 +94,12 @@ def main(cfg: DictConfig):
         result_dir = Path(result_root_dir, f"fold_{i}")
         result_dir.mkdir(parents=True, exist_ok=True)
 
-        slide_features_dir = Path(features_root_dir, f"fold_{i}/slide_features")
-        region_features_dir = Path(features_root_dir, f"fold_{i}/region_features")
+        if cfg.data.fold_specific_features:
+            slide_features_dir = Path(features_root_dir, f"fold_{i}/slide_features")
+            region_features_dir = Path(features_root_dir, f"fold_{i}/region_features")
+        else:
+            slide_features_dir = Path(features_root_dir, f"slide_features")
+            region_features_dir = Path(features_root_dir, f"region_features")
 
         print(f"Loading data for fold {i+1}")
         train_df_path = Path(fold_dir, "train.csv")

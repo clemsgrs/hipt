@@ -171,6 +171,8 @@ def main(cfg: DictConfig):
         with torch.no_grad():
             for i, batch in enumerate(t1):
                 idx, region_fps, slide_id = batch
+                # sort region filepath for easier reproducibility
+                region_fps = sorted(region_fps)
                 slide_ids.append(slide_id)
                 features = []
 
