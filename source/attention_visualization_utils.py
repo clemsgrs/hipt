@@ -230,10 +230,34 @@ def normalize_region_scores(
 
 def normalize_slide_scores(
     attn,
-    size: Optional[Tuple[int, int]] = None,
 ):
     rank = lambda v: rankdata(v) / len(v)
     color_hm = rank(attn)
+    return color_hm
+
+
+# def normalize_interpolated_slide_scores(
+#     attn,
+#     size: Optional[Tuple[int, int]] = None,
+# ):
+#     rank = lambda v: rankdata(v) / len(v)
+#     nregion = len(attn)
+#     hms = []
+#     for i in range(nregion):
+#         region_attn = attn[i]
+#         region_hm = rank(region_attn.flatten()).reshape(size)
+#         hms.append(region_hm)
+#     color_hm = np.stack(hms, axis=0)
+#     return color_hm
+
+
+def normalize_interpolated_slide_scores(
+    attn,
+    size: Optional[Tuple[int, int]] = None,
+):
+    nregion = len(attn)
+    rank = lambda v: rankdata(v) / len(v)
+    color_hm = rank(attn.flatten()).reshape((nregion,)+size)  # (nregion, 4096, 4096)
     return color_hm
 
 
@@ -540,6 +564,10 @@ def get_slide_attention_scores(
     region_fmt: str = "jpg",
     patch_size: int = 256,
     downscale: int = 1,
+    granular: bool = False,
+    offset: int = 1024,
+    slide_path: Optional[Path] = None,
+    spacing: Optional[float] = None,
     patch_device: torch.device = torch.device("cuda:0"),
     region_device: torch.device = torch.device("cuda:0"),
     slide_device: torch.device = torch.device("cuda:0"),
@@ -573,71 +601,294 @@ def get_slide_attention_scores(
     region_paths = sorted([
         fp for fp in Path(region_dir, slide_id, "imgs").glob(f"*.{region_fmt}")
     ])
+    nregion = len(region_paths)
+    region_size = Image.open(region_paths[0]).size[0]
 
-    coords = []
-    features = []
+    if granular:
 
-    with tqdm.tqdm(
-        region_paths,
-        desc=f"Getting slide-level Transformer attentions scores",
-        unit=" region",
-        leave=True,
-        position=0,
-        disable=not main_process,
-    ) as t1:
-        for k, fp in enumerate(t1):
-            region = Image.open(fp)
-            region_size = region.size[0]
-            n_patch = region_size // patch_size
+        assert slide_path
+        wsi_object = WholeSlideImage(slide_path)
+        spacing_level = wsi_object.get_best_level_for_spacing(spacing)
+        w, h = wsi_object.level_dimensions[spacing_level]
 
-            x, y = int(fp.stem.split("_")[0]), int(fp.stem.split("_")[1])
-            coords.append((x, y))
+        offset_ = offset
+        offset = int(offset_ * region_size / 4096)
+        ncomp = region_size // offset
 
-            with torch.no_grad():
-                patches = (
-                    t(region)
-                    .unsqueeze(0)
-                    .unfold(2, patch_size, patch_size)
-                    .unfold(3, patch_size, patch_size)
-                )  # (1, 3, region_size, region_size) -> (1, 3, n_patch, n_patch, patch_size, patch_size)
-                patches = rearrange(
-                    patches, "b c p1 p2 w h -> (b p1 p2) c w h"
-                )  # (n_patch**2, 3, patch_size, patch_size)
-                patches = patches.to(patch_device, non_blocking=True)
-                patch_features = patch_model(patches)  # (n_patch**2, 384)
+        offset = offset // downscale
+        s = region_size // downscale
 
-                regions = (
-                    patch_features.unfold(0, n_patch, n_patch)
-                    .transpose(0, 1)
-                    .unsqueeze(dim=0)
-                )  # (1, 384, n_patch, n_patch)
-                regions = regions.to(region_device, non_blocking=True)
-                region_features = region_model(regions)  # (1, 192)
+        slide_overlay = np.ones((nregion,s,s)) * 100
+        combined_slide_attention = np.zeros((nregion,s,s)) * 100
 
-                features.append(region_features)
+        coords = []
+        reached_top_left_corner, reached_top_right_corner = False, False
+        reached_bot_left_corner, reached_bot_right_corner = False, False
 
-    with torch.no_grad():
-        feature_seq = torch.stack(features, dim=0).squeeze(1)  # (M, 192)
-        feature_seq = feature_seq.to(slide_device, non_blocking=True)
-        slide_attention = slide_model(feature_seq, return_attention=True)
-        slide_attention = slide_attention.squeeze(0)  # (M)
-        slide_attention = normalize_slide_scores(slide_attention.cpu().numpy())  # (M)
-        slide_attention = slide_attention.reshape(-1, 1, 1)  # (M, 1, 1)
-        slide_attention = torch.from_numpy(slide_attention).to(
-            slide_device, non_blocking=True
-        )
+        for i in range(2):
+            for j in range(2):
 
-        slide_attention = (
-            nn.functional.interpolate(
-                slide_attention.unsqueeze(0),
-                scale_factor=int(region_size / downscale),
-                mode="nearest",
-            )[0]
-            .cpu()
-            .numpy()
-        )  # (M, region_size, region_size) when downscale = 1
-        # 'nearest' interpolation guarantees the values in the up-sampled array
-        # lie in the same set as the values in the original array
+                if i == 0:
+                    x_neg = True
+                    if j == 0:
+                        y_neg = True
+                    else:
+                        y_neg = False
+                else:
+                    x_neg = False
+                    if j == 0:
+                        y_neg = True
+                    else:
+                        y_neg = False
+
+                for ix, offset_x in enumerate(range(ncomp)):
+                    for iy, offset_y in enumerate(range(ncomp)):
+
+                        if i == 0 and j == 1 and offset_y == 0:
+                            continue
+                        if i == 1 and j == 0 and offset_x == 0:
+                            continue
+                        if i == 1 and j == 1 and offset_x == 0:
+                            continue
+                        if i == 1 and j == 1 and offset_y == 0:
+                            continue
+
+                        features = []
+
+                        with tqdm.tqdm(
+                            region_paths,
+                            desc=f"Getting slide-level Transformer attention scores [{(ix+1)*(i+1)+(iy+1)*(j+1)}/{(4*ncomp**2)-4*ncomp}]",
+                            unit=" region",
+                            leave=True,
+                            position=0,
+                            disable=not main_process,
+                        ) as t1:
+
+                            for k, fp in enumerate(t1):
+
+                                region = Image.open(fp)
+                                region_size = region.size[0]
+                                n_patch = region_size // patch_size
+
+                                x, y = int(fp.stem.split("_")[0]), int(fp.stem.split("_")[1])
+                                if offset_x == offset_y == 0:
+                                    coords.append((x, y))
+
+                                if i == 0:
+                                    if j == 0:
+                                        new_x = min(x - offset_x * offset_, 0)
+                                        new_y = min(y - offset_y * offset_, 0)
+                                        if (new_x, new_y) == (0, 0):
+                                            reached_top_left_corner = True
+                                            continue
+                                    else:
+                                        new_x = min(x - offset_x * offset_, 0)
+                                        new_y = max(y + offset_y * offset_, h)
+                                        if (new_x, new_y) == (0, h):
+                                            reached_bot_left_corner = True
+                                            continue
+                                else:
+                                    if j == 0:
+                                        new_x = max(x + offset_x * offset_, w)
+                                        new_y = min(y - offset_y * offset_, 0)
+                                        if (new_x, new_y) == (w, 0):
+                                            reached_top_right_corner = True
+                                            continue
+                                    else:
+                                        new_x = max(x + offset_x * offset_, w)
+                                        new_y = max(y + offset_y * offset_, h)
+                                        if (new_x, new_y) == (w, h):
+                                            reached_bot_right_corner = True
+                                            continue
+
+                                offset_region = wsi_object.wsi.get_patch(new_x, new_y, region_size, region_size, spacing=spacing, center=False)
+                                if x_neg and y_neg:
+                                    # x shift is negative, y shift is negative
+                                    slide_overlay[k, 0:offset_x*offset, 0:s-offset_y*offset] += 100
+                                elif x_neg:
+                                    # x shift is negative, y shift is positive
+                                    slide_overlay[k, 0:s-offset_x*offset, offset_y*offset:s] += 100
+                                elif y_neg:
+                                    # x shift is positive, y shift is negative
+                                    slide_overlay[k, offset_x*offset:s, 0:s-offset_y*offset] += 100
+                                else:
+                                    # x shift is positive, y shift is positive
+                                    slide_overlay[k, offset_x*offset:s, offset_y*offset:s] += 100
+
+                                with torch.no_grad():
+
+                                    patches = (
+                                        t(offset_region)
+                                        .unsqueeze(0)
+                                        .unfold(2, patch_size, patch_size)
+                                        .unfold(3, patch_size, patch_size)
+                                    )  # (1, 3, region_size, region_size) -> (1, 3, n_patch, n_patch, patch_size, patch_size)
+                                    patches = rearrange(
+                                        patches, "b c p1 p2 w h -> (b p1 p2) c w h"
+                                    )  # (n_patch**2, 3, patch_size, patch_size)
+                                    patches = patches.to(patch_device, non_blocking=True)
+                                    patch_features = patch_model(patches)  # (n_patch**2, 384)
+
+                                    regions = (
+                                        patch_features.unfold(0, n_patch, n_patch)
+                                        .transpose(0, 1)
+                                        .unsqueeze(dim=0)
+                                    )  # (1, 384, n_patch, n_patch)
+                                    regions = regions.to(region_device, non_blocking=True)
+                                    region_features = region_model(regions)  # (1, 192)
+
+                                    features.append(region_features)
+
+                        with torch.no_grad():
+
+                            feature_seq = torch.stack(features, dim=0).squeeze(1)  # (M, 192)
+                            feature_seq = feature_seq.to(slide_device, non_blocking=True)
+                            slide_attention = slide_model(feature_seq, return_attention=True)
+                            slide_attention = slide_attention.squeeze(0)  # (M)
+                            # slide_attention = normalize_slide_scores(slide_attention.cpu().numpy())  # (M)
+                            # slide_attention *= 100
+                            slide_attention = slide_attention.reshape(-1, 1, 1)  # (M, 1, 1)
+                            # slide_attention = torch.from_numpy(slide_attention).to(
+                            #     slide_device, non_blocking=True
+                            # )
+                            slide_attention = slide_attention.to(
+                                slide_device, non_blocking=True
+                            )
+
+                            slide_attention = (
+                                nn.functional.interpolate(
+                                    slide_attention.unsqueeze(0),
+                                    scale_factor=int(region_size / downscale),
+                                    mode="nearest",
+                                )[0]
+                                .cpu()
+                                .numpy()
+                            )  # (M, region_size, region_size) when downscale = 1
+                            # 'nearest' interpolation guarantees the values in the up-sampled array
+                            # lie in the same set as the values in the original array
+
+                            slide_attention = normalize_interpolated_slide_scores(
+                                slide_attention, size=(s,) * 2
+                            )
+                            slide_attention *= 100
+                            # only pick attention scores overlapping with the non-offset region
+                            overlapping_slide_attention = np.zeros_like(slide_attention)
+                            if x_neg and y_neg:
+                                # x shift is negative, y shift is negative
+                                overlapping_slide_attention[
+                                    :,
+                                    :s-offset_x*offset,
+                                    :s-offset_y*offset
+                                ] = slide_attention[
+                                    :,
+                                    offset_x*offset:s,
+                                    offset_y*offset:s
+                                ]
+                            elif x_neg:
+                                # x shift is negative, y shift is positive
+                                overlapping_slide_attention[
+                                    :,
+                                    :s-offset_x*offset,
+                                    offset_y*offset:s,
+                                ] = slide_attention[
+                                    :,
+                                    offset_x*offset:s,
+                                    :s-offset_y*offset
+                                ]
+                            elif y_neg:
+                                # x shift is positive, y shift is negative
+                                overlapping_slide_attention[
+                                    :,
+                                    offset_x*offset:s,
+                                    :s-offset_y*offset
+                                ] = slide_attention[
+                                    :,
+                                    :s-offset_x*offset,
+                                    offset_y*offset:s
+                                ]
+                            else:
+                                # x shift is positive, y shift is positive
+                                overlapping_slide_attention[
+                                    :,
+                                    offset_x*offset:s,
+                                    offset_y*offset:s
+                                ] = slide_attention[
+                                    :,
+                                    :s-offset_x*offset,
+                                    :s-offset_y*offset
+                                ]
+
+                            combined_slide_attention += overlapping_slide_attention
+
+        slide_attention = combined_slide_attention / slide_overlay
+
+    else:
+
+        coords = []
+        features = []
+
+        with tqdm.tqdm(
+            region_paths,
+            desc=f"Getting slide-level Transformer attention scores",
+            unit=" region",
+            leave=True,
+            position=0,
+            disable=not main_process,
+        ) as t1:
+            for k, fp in enumerate(t1):
+                region = Image.open(fp)
+                region_size = region.size[0]
+                n_patch = region_size // patch_size
+
+                x, y = int(fp.stem.split("_")[0]), int(fp.stem.split("_")[1])
+                coords.append((x, y))
+
+                with torch.no_grad():
+                    patches = (
+                        t(region)
+                        .unsqueeze(0)
+                        .unfold(2, patch_size, patch_size)
+                        .unfold(3, patch_size, patch_size)
+                    )  # (1, 3, region_size, region_size) -> (1, 3, n_patch, n_patch, patch_size, patch_size)
+                    patches = rearrange(
+                        patches, "b c p1 p2 w h -> (b p1 p2) c w h"
+                    )  # (n_patch**2, 3, patch_size, patch_size)
+                    patches = patches.to(patch_device, non_blocking=True)
+                    patch_features = patch_model(patches)  # (n_patch**2, 384)
+
+                    regions = (
+                        patch_features.unfold(0, n_patch, n_patch)
+                        .transpose(0, 1)
+                        .unsqueeze(dim=0)
+                    )  # (1, 384, n_patch, n_patch)
+                    regions = regions.to(region_device, non_blocking=True)
+                    region_features = region_model(regions)  # (1, 192)
+
+                    features.append(region_features)
+
+        with torch.no_grad():
+
+            feature_seq = torch.stack(features, dim=0).squeeze(1)  # (M, 192)
+            feature_seq = feature_seq.to(slide_device, non_blocking=True)
+            slide_attention = slide_model(feature_seq, return_attention=True)
+            slide_attention = slide_attention.squeeze(0)  # (M)
+            slide_attention = normalize_slide_scores(slide_attention.cpu().numpy())  # (M)
+            slide_attention = slide_attention.reshape(-1, 1, 1)  # (M, 1, 1)
+            slide_attention = torch.from_numpy(slide_attention).to(
+                slide_device, non_blocking=True
+            )
+
+            slide_attention = (
+                nn.functional.interpolate(
+                    slide_attention.unsqueeze(0),
+                    scale_factor=int(region_size / downscale),
+                    mode="nearest",
+                )[0]
+                .cpu()
+                .numpy()
+            )  # (M, region_size, region_size) when downscale = 1
+            # 'nearest' interpolation guarantees the values in the up-sampled array
+            # lie in the same set as the values in the original array
 
     return slide_attention, coords
 
@@ -2346,6 +2597,10 @@ def get_slide_heatmaps_slide_level(
     highlight: Optional[float] = None,
     opacity: float = 0.3,
     region_fmt: str = "jpg",
+    granular: bool = False,
+    offset: int = 1024,
+    slide_path: Optional[Path] = None,
+    spacing: Optional[float] = None,
     patch_device: torch.device = torch.device("cuda:0"),
     region_device: torch.device = torch.device("cuda:0"),
     slide_device: torch.device = torch.device("cuda:0"),
@@ -2383,6 +2638,10 @@ def get_slide_heatmaps_slide_level(
         region_fmt=region_fmt,
         patch_size=patch_size,
         downscale=downscale,
+        granular=granular,
+        offset=offset,
+        slide_path=slide_path,
+        spacing=spacing,
         patch_device=patch_device,
         region_device=region_device,
         slide_device=slide_device,
@@ -2808,6 +3067,10 @@ def get_slide_blended_heatmaps(
     save_to_disk: bool = False,
     granular: bool = False,
     offset: int = 128,
+    granular_slide: bool = False,
+    offset_slide: int = 1024,
+    slide_path: Optional[Path] = None,
+    spacing: Optional[float] = None,
     patch_device: torch.device = torch.device("cuda:0"),
     region_device: torch.device = torch.device("cuda:0"),
     slide_device: torch.device = torch.device("cuda:0"),
@@ -2825,7 +3088,7 @@ def get_slide_blended_heatmaps(
     - slide_model (nn.Module): slide-level Transformer
     - level (str): level at which the model was trained on
     - output_dir (Path): output directory for saving heatmaps
-    - gamma (float): factor weighting the importance given to frozen model attentions scores w.r.t finetuned model attention scores
+    - gamma (float): factor weighting the importance given to frozen model attention scores w.r.t finetuned model attention scores
     - patch_size (int): size of patches used for unrolling input region
     - mini_patch_size (int): size of mini-patches used for unrolling patch_model inputs
     - downscale (int): how much to downscale the output heatmap by (e.g. downscale=4 will resize 256x256 heatmaps to 64x64)
@@ -2851,6 +3114,10 @@ def get_slide_blended_heatmaps(
         region_fmt=region_fmt,
         patch_size=patch_size,
         downscale=downscale,
+        granular=granular_slide,
+        offset=offset_slide,
+        slide_path=slide_path,
+        spacing=spacing,
         patch_device=patch_device,
         region_device=region_device,
         slide_device=slide_device,
