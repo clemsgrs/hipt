@@ -12,6 +12,7 @@ import torchvision.transforms as transforms
 from PIL import Image, ImageFont, ImageDraw
 from einops import rearrange
 from scipy.stats import rankdata
+from scipy.ndimage import gaussian_filter
 from typing import Optional, List, Tuple, Dict
 from pathlib import Path
 from collections import OrderedDict, defaultdict
@@ -587,7 +588,7 @@ def get_slide_attention_scores(
         w, h = wsi_object.level_dimensions[spacing_level]
 
         offset_ = offset
-        offset = int(offset_ * region_size / 4096)
+        # offset = int(offset_ * region_size / 4096)
         ncomp = region_size // offset
 
         offset = offset // downscale
@@ -2538,6 +2539,8 @@ def get_slide_heatmaps_slide_level(
     offset: int = 1024,
     slide_path: Optional[Path] = None,
     spacing: Optional[float] = None,
+    gaussian_smoothing: bool = False,
+    gaussian_offset: int = 128,
     patch_device: torch.device = torch.device("cuda:0"),
     region_device: torch.device = torch.device("cuda:0"),
     slide_device: torch.device = torch.device("cuda:0"),
@@ -2603,6 +2606,8 @@ def get_slide_heatmaps_slide_level(
             region = Image.open(fp)
             region_size = region.size[0]
             s = region_size // downscale
+            g_offset = gaussian_offset // downscale
+            x, y = int(fp.stem.split("_")[0]), int(fp.stem.split("_")[1])
 
             if threshold != None:
                 save_region = np.array(region.resize((s, s)))
@@ -2633,6 +2638,33 @@ def get_slide_heatmaps_slide_level(
                 att_mask[att_mask >= highlight] = 1
                 highlighted_hm = rgba_region * (att_mask >= highlight)[..., np.newaxis]
                 highlighted_regions.append(highlighted_hm)
+
+            if gaussian_smoothing:
+                neighbors, descriptors = find_neighboring_regions((x,y), coords, region_size)
+                if neighbors:
+                    for n, d in zip(neighbors,descriptors):
+                        n_idx = neighbors.index(n)
+                        n_att = att[n_idx]
+                        if d == "top":
+                            smoothed_concat_attn = np.zeros((s*2, s))
+                            concat_att = np.concatenate([n_att, att[k]], axis=0)
+                            smoothed_concat_attn[s-g_offset:s+g_offset, :] = gaussian_filter(concat_att[s-g_offset:s+g_offset, :], sigma=offset, axes=0)
+                            att[k, :g_offset, :] = smoothed_concat_attn[s:s+g_offset, :]
+                        elif d == "bot":
+                            smoothed_concat_attn = np.zeros((s*2, s))
+                            concat_att = np.concatenate([att[k], n_att], axis=0)
+                            smoothed_concat_attn[s-g_offset:s+g_offset, :] = gaussian_filter(concat_att[s-g_offset:s+g_offset, :], sigma=offset, axes=0)
+                            att[k, s-g_offset:s, :] = smoothed_concat_attn[s-g_offset:s, :]
+                        elif d == "left":
+                            smoothed_concat_attn = np.zeros((s, s*2))
+                            concat_att = np.concatenate([n_att, att[k]], axis=1)
+                            smoothed_concat_attn[:, s-g_offset:s+g_offset] = gaussian_filter(concat_att[:, s-g_offset:s+g_offset], sigma=offset, axes=1)
+                            att[k, :, :g_offset] = smoothed_concat_attn[:, s:s+g_offset]
+                        elif d == "right":
+                            smoothed_concat_attn = np.zeros((s, s*2))
+                            concat_att = np.concatenate([att[k], n_att], axis=1)
+                            smoothed_concat_attn[:, s-g_offset:s+g_offset] = gaussian_filter(concat_att[:, s-g_offset:s+g_offset], sigma=offset//, axes=1)
+                            att[k, :, s-g_offset:s] = smoothed_concat_attn[:, s-g_offset:s]
 
             # given region is an RGB image, so the default filter for resizing is Resampling.BICUBIC
             # which is fine as we're resizing the image here, not attention scores
@@ -3640,13 +3672,19 @@ def display_stitched_heatmaps(
 
 # Smoothing utility functions
 
-def find_t2b_neighbor(coords, region_coords, region_size):
-    x, y = coords
-    neigh = (x,y+region_size)
-    if neigh in region_coords:
-        return neigh
+def find_neighboring_regions(coord, coordinates, region_size, scheme: int = 4):
+    x, y = coord
+    if scheme == 4:
+        neighbors_candidates = [(x,y-region_size), (x,y+region_size), (x-region_size,y), (x+region_size,y)]
+        descriptors = ["top", "bot", "left", "right"]
+    elif scheme == 8:
+        pass
+    neighbors = [n for n in neighbors_candidates if n in coordinates]
+    descriptors = [d for i, d in enumerate(descriptors) if neighbors_candidates[i] in coordinates]
+    if len(neighbors) > 0:
+        return neighbors, descriptors
     else:
-        return None
+        return None, None
 
 
 def find_l2r_neighbor(coords, region_coords, region_size):
@@ -3658,47 +3696,47 @@ def find_l2r_neighbor(coords, region_coords, region_size):
         return None
 
 
-def create_overlap_regions(coords, region_coords, region_dir: Path, region_size: int):
-    x1, y1 = coords
-    fp1 = Path(region_dir, f"{x1}_{y1}.jpg")
-    region1 = Image.open(fp1)
-    # find top-to-bottom neighbor
-    t2b_neighbor = find_t2b_neighbor(coords, region_coords, region_size)
-    # find left-ro-right neighbor
-    l2r_neighbor = find_l2r_neighbor(coords, region_coords, region_size)
-    # iterate over neighboring pairs
-    overlap_regions, overlap_coords = [], []
-    if t2b_neighbor != None:
-        x2, y2 = t2b_neighbor
-        fp2 = Path(region_dir, f"{x2}_{y2}.jpg")
-        region2 = Image.open(fp2)
-        #TODO: might need to inverse x,y axes
-        area1 = (0, region_size//2, region_size, region_size)
-        area2 = (0, 0, region_size, region_size//2)
-        crop1 = region1.crop(area1)
-        crop2 = region2.crop(area2)
-        canvas = Image.new(
-            size=(region_size,region_size), mode=region1.mode,
-        )
-        canvas.paste(crop1, (0, 0))
-        canvas.paste(crop2, (0, region_size//2))
-        overlap_regions.append(canvas)
-        overlap_coords.append(t2b_neighbor)
-    if l2r_neighbor != None:
-        x2, y2 = l2r_neighbor
-        fp2 = Path(region_dir, f"{x2}_{y2}.jpg")
-        region2 = Image.open(fp2)
-        #TODO: might need to inverse x,y axes
-        area1 = (region_size//2, 0, region_size, region_size)
-        area2 = (0, 0, region_size//2, region_size)
-        crop1 = region1.crop(area1)
-        crop2 = region2.crop(area2)
-        canvas = Image.new(
-            size=(region_size,region_size), mode=region1.mode,
-        )
-        canvas.paste(crop1, (0, 0))
-        canvas.paste(crop2, (region_size//2, 0))
-        overlap_regions.append(canvas)
-        overlap_coords.append(l2r_neighbor)
-    return overlap_regions, overlap_coords
+# def create_overlap_regions(coords, region_coords, region_dir: Path, region_size: int):
+#     x1, y1 = coords
+#     fp1 = Path(region_dir, f"{x1}_{y1}.jpg")
+#     region1 = Image.open(fp1)
+#     # find top-to-bottom neighbor
+#     t2b_neighbor = find_t2b_neighbor(coords, region_coords, region_size)
+#     # find left-ro-right neighbor
+#     l2r_neighbor = find_l2r_neighbor(coords, region_coords, region_size)
+#     # iterate over neighboring pairs
+#     overlap_regions, overlap_coords = [], []
+#     if t2b_neighbor != None:
+#         x2, y2 = t2b_neighbor
+#         fp2 = Path(region_dir, f"{x2}_{y2}.jpg")
+#         region2 = Image.open(fp2)
+#         #TODO: might need to inverse x,y axes
+#         area1 = (0, region_size//2, region_size, region_size)
+#         area2 = (0, 0, region_size, region_size//2)
+#         crop1 = region1.crop(area1)
+#         crop2 = region2.crop(area2)
+#         canvas = Image.new(
+#             size=(region_size,region_size), mode=region1.mode,
+#         )
+#         canvas.paste(crop1, (0, 0))
+#         canvas.paste(crop2, (0, region_size//2))
+#         overlap_regions.append(canvas)
+#         overlap_coords.append(t2b_neighbor)
+#     if l2r_neighbor != None:
+#         x2, y2 = l2r_neighbor
+#         fp2 = Path(region_dir, f"{x2}_{y2}.jpg")
+#         region2 = Image.open(fp2)
+#         #TODO: might need to inverse x,y axes
+#         area1 = (region_size//2, 0, region_size, region_size)
+#         area2 = (0, 0, region_size//2, region_size)
+#         crop1 = region1.crop(area1)
+#         crop2 = region2.crop(area2)
+#         canvas = Image.new(
+#             size=(region_size,region_size), mode=region1.mode,
+#         )
+#         canvas.paste(crop1, (0, 0))
+#         canvas.paste(crop2, (region_size//2, 0))
+#         overlap_regions.append(canvas)
+#         overlap_coords.append(l2r_neighbor)
+#     return overlap_regions, overlap_coords
 
