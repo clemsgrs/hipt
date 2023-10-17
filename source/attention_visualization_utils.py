@@ -236,31 +236,6 @@ def normalize_slide_scores(
     return color_hm
 
 
-# def normalize_interpolated_slide_scores(
-#     attn,
-#     size: Optional[Tuple[int, int]] = None,
-# ):
-#     rank = lambda v: rankdata(v) / len(v)
-#     nregion = len(attn)
-#     hms = []
-#     for i in range(nregion):
-#         region_attn = attn[i]
-#         region_hm = rank(region_attn.flatten()).reshape(size)
-#         hms.append(region_hm)
-#     color_hm = np.stack(hms, axis=0)
-#     return color_hm
-
-
-def normalize_interpolated_slide_scores(
-    attn,
-    size: Optional[Tuple[int, int]] = None,
-):
-    nregion = len(attn)
-    rank = lambda v: rankdata(v) / len(v)
-    color_hm = rank(attn.flatten()).reshape((nregion,)+size)  # (nregion, 4096, 4096)
-    return color_hm
-
-
 def getConcatImage(imgs, how="horizontal", gap=0):
     """
     Function to concatenate list of images (vertical or horizontal).
@@ -618,46 +593,35 @@ def get_slide_attention_scores(
         offset = offset // downscale
         s = region_size // downscale
 
-        slide_overlay = np.ones((nregion,s,s)) * 100
-        combined_slide_attention = np.zeros((nregion,s,s)) * 100
+        slide_overlay = np.zeros((nregion,s,s))
+        combined_slide_attention = np.zeros((nregion,s,s))
 
         coords = []
-        reached_top_left_corner, reached_top_right_corner = False, False
-        reached_bot_left_corner, reached_bot_right_corner = False, False
+        skip_count = 0
 
-        for i in range(2):
-            for j in range(2):
+        for i, ix in enumerate([-1, 1]):
+            for j, iy in enumerate([-1, 1]):
+                for offset_x in range(ncomp):
+                    for offset_y in range(ncomp):
 
-                if i == 0:
-                    x_neg = True
-                    if j == 0:
-                        y_neg = True
-                    else:
-                        y_neg = False
-                else:
-                    x_neg = False
-                    if j == 0:
-                        y_neg = True
-                    else:
-                        y_neg = False
-
-                for ix, offset_x in enumerate(range(ncomp)):
-                    for iy, offset_y in enumerate(range(ncomp)):
-
-                        if i == 0 and j == 1 and offset_y == 0:
+                        if ix == -1 and iy == 1 and offset_y == 0:
+                            skip_count += 1
                             continue
-                        if i == 1 and j == 0 and offset_x == 0:
+                        if ix == 1 and iy == -1 and offset_x == 0:
+                            skip_count += 1
                             continue
-                        if i == 1 and j == 1 and offset_x == 0:
+                        if ix == 1 and iy == 1 and offset_x == 0:
+                            skip_count += 1
                             continue
-                        if i == 1 and j == 1 and offset_y == 0:
+                        if ix == 1 and iy == 1 and offset_y == 0:
+                            skip_count += 1
                             continue
 
                         features = []
 
                         with tqdm.tqdm(
                             region_paths,
-                            desc=f"Getting slide-level Transformer attention scores [{(ix+1)*(i+1)+(iy+1)*(j+1)}/{(4*ncomp**2)-4*ncomp}]",
+                            desc=f"Getting slide-level Transformer attention scores [{i*(2*ncomp*ncomp)+j*(ncomp*ncomp)+offset_x*ncomp+offset_y+1-skip_count}/{(4*ncomp**2)-4*ncomp+1}]",
                             unit=" region",
                             leave=True,
                             position=0,
@@ -674,46 +638,22 @@ def get_slide_attention_scores(
                                 if offset_x == offset_y == 0:
                                     coords.append((x, y))
 
-                                if i == 0:
-                                    if j == 0:
-                                        new_x = min(x - offset_x * offset_, 0)
-                                        new_y = min(y - offset_y * offset_, 0)
-                                        if (new_x, new_y) == (0, 0):
-                                            reached_top_left_corner = True
-                                            continue
-                                    else:
-                                        new_x = min(x - offset_x * offset_, 0)
-                                        new_y = max(y + offset_y * offset_, h)
-                                        if (new_x, new_y) == (0, h):
-                                            reached_bot_left_corner = True
-                                            continue
-                                else:
-                                    if j == 0:
-                                        new_x = max(x + offset_x * offset_, w)
-                                        new_y = min(y - offset_y * offset_, 0)
-                                        if (new_x, new_y) == (w, 0):
-                                            reached_top_right_corner = True
-                                            continue
-                                    else:
-                                        new_x = max(x + offset_x * offset_, w)
-                                        new_y = max(y + offset_y * offset_, h)
-                                        if (new_x, new_y) == (w, h):
-                                            reached_bot_right_corner = True
-                                            continue
+                                new_x = max(0, min(x + ix * offset_x * offset_, w))
+                                new_y = max(0, min(y + iy * offset_y * offset_, h))
+
+                                # if new_x == 0:
+                                #     if reached_left_border:
+                                #         break
+                                #     elif offset_y == (ncomp - 1):
+                                #         reached_left_border = True
+                                # if new_x == w - region_size:
+                                #     continue
+                                # if new_y == 0:
+                                #     continue
+                                # if new_y == h - region_size:
+                                #     continue
 
                                 offset_region = wsi_object.wsi.get_patch(new_x, new_y, region_size, region_size, spacing=spacing, center=False)
-                                if x_neg and y_neg:
-                                    # x shift is negative, y shift is negative
-                                    slide_overlay[k, 0:offset_x*offset, 0:s-offset_y*offset] += 100
-                                elif x_neg:
-                                    # x shift is negative, y shift is positive
-                                    slide_overlay[k, 0:s-offset_x*offset, offset_y*offset:s] += 100
-                                elif y_neg:
-                                    # x shift is positive, y shift is negative
-                                    slide_overlay[k, offset_x*offset:s, 0:s-offset_y*offset] += 100
-                                else:
-                                    # x shift is positive, y shift is positive
-                                    slide_overlay[k, offset_x*offset:s, offset_y*offset:s] += 100
 
                                 with torch.no_grad():
 
@@ -745,13 +685,10 @@ def get_slide_attention_scores(
                             feature_seq = feature_seq.to(slide_device, non_blocking=True)
                             slide_attention = slide_model(feature_seq, return_attention=True)
                             slide_attention = slide_attention.squeeze(0)  # (M)
-                            # slide_attention = normalize_slide_scores(slide_attention.cpu().numpy())  # (M)
-                            # slide_attention *= 100
+                            slide_attention = normalize_slide_scores(slide_attention.cpu().numpy())  # (M)
+                            slide_attention *= 100
                             slide_attention = slide_attention.reshape(-1, 1, 1)  # (M, 1, 1)
-                            # slide_attention = torch.from_numpy(slide_attention).to(
-                            #     slide_device, non_blocking=True
-                            # )
-                            slide_attention = slide_attention.to(
+                            slide_attention = torch.from_numpy(slide_attention).to(
                                 slide_device, non_blocking=True
                             )
 
@@ -767,13 +704,9 @@ def get_slide_attention_scores(
                             # 'nearest' interpolation guarantees the values in the up-sampled array
                             # lie in the same set as the values in the original array
 
-                            slide_attention = normalize_interpolated_slide_scores(
-                                slide_attention, size=(s,) * 2
-                            )
-                            slide_attention *= 100
                             # only pick attention scores overlapping with the non-offset region
                             overlapping_slide_attention = np.zeros_like(slide_attention)
-                            if x_neg and y_neg:
+                            if ix == -1 and iy == -1:
                                 # x shift is negative, y shift is negative
                                 overlapping_slide_attention[
                                     :,
@@ -784,7 +717,8 @@ def get_slide_attention_scores(
                                     offset_x*offset:s,
                                     offset_y*offset:s
                                 ]
-                            elif x_neg:
+                                slide_overlay[:, :s-offset_x*offset, :s-offset_y*offset] += 100
+                            if ix == -1 and iy == 1:
                                 # x shift is negative, y shift is positive
                                 overlapping_slide_attention[
                                     :,
@@ -795,7 +729,8 @@ def get_slide_attention_scores(
                                     offset_x*offset:s,
                                     :s-offset_y*offset
                                 ]
-                            elif y_neg:
+                                slide_overlay[:, :s-offset_x*offset, offset_y*offset:s] += 100
+                            if ix == 1 and iy == -1:
                                 # x shift is positive, y shift is negative
                                 overlapping_slide_attention[
                                     :,
@@ -806,7 +741,8 @@ def get_slide_attention_scores(
                                     :s-offset_x*offset,
                                     offset_y*offset:s
                                 ]
-                            else:
+                                slide_overlay[:, offset_x*offset:s, :s-offset_y*offset] += 100
+                            if ix == 1 and iy == 1:
                                 # x shift is positive, y shift is positive
                                 overlapping_slide_attention[
                                     :,
@@ -817,6 +753,7 @@ def get_slide_attention_scores(
                                     :s-offset_x*offset,
                                     :s-offset_y*offset
                                 ]
+                                slide_overlay[:, offset_x*offset:s, offset_y*offset:s] += 100
 
                             combined_slide_attention += overlapping_slide_attention
 
@@ -3065,10 +3002,7 @@ def get_slide_blended_heatmaps(
     threshold: Optional[float] = None,
     region_fmt: str = "jpg",
     save_to_disk: bool = False,
-    granular: bool = False,
-    offset: int = 128,
-    granular_slide: bool = False,
-    offset_slide: int = 1024,
+    smoothing: Optional[Dict] = None,
     slide_path: Optional[Path] = None,
     spacing: Optional[float] = None,
     patch_device: torch.device = torch.device("cuda:0"),
@@ -3114,8 +3048,8 @@ def get_slide_blended_heatmaps(
         region_fmt=region_fmt,
         patch_size=patch_size,
         downscale=downscale,
-        granular=granular_slide,
-        offset=offset_slide,
+        granular=smoothing.slide,
+        offset=smoothing.offset.slide,
         slide_path=slide_path,
         spacing=spacing,
         patch_device=patch_device,
@@ -3163,7 +3097,7 @@ def get_slide_blended_heatmaps(
             ) # (n_patch**2, nhead, patch_size, patch_size) when downscale = 1
             slide_att_scores = slide_attention[k]
 
-            if granular:
+            if smoothing.region:
                 offset = int(offset_ * region_size / 4096)
                 region2 = add_margin(
                     region.crop((offset, offset, region_size, region_size)),
@@ -3243,7 +3177,7 @@ def get_slide_blended_heatmaps(
                         region_att[j], size=(s,) * 2
                     )
 
-                    if granular:
+                    if smoothing.region:
                         region_att_scores_2 = normalize_region_scores(
                             region_att_2[j], size=(s,) * 2
                         )
@@ -3301,7 +3235,7 @@ def get_slide_blended_heatmaps(
                                 size=(s // n_patch,) * 2,
                             )
 
-                            if granular:
+                            if smoothing.patch:
                                 patch_att_scores_2 = concat_patch_scores(
                                     patch_att_2[:, i, :, :],
                                     region_size=region_size,
@@ -3328,7 +3262,7 @@ def get_slide_blended_heatmaps(
                                     / patch_overlay
                                 )
 
-                            if granular:
+                            if smoothing.region:
                                 if level == "global":
                                     n = 2
                                     score = (
