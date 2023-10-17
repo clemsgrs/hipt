@@ -2648,22 +2648,22 @@ def get_slide_heatmaps_slide_level(
                         if d == "top":
                             smoothed_concat_attn = np.zeros((s*2, s))
                             concat_att = np.concatenate([n_att, att[k]], axis=0)
-                            smoothed_concat_attn[s-g_offset:s+g_offset, :] = gaussian_filter(concat_att[s-g_offset:s+g_offset, :], sigma=offset, axes=0)
+                            smoothed_concat_attn[s-g_offset:s+g_offset, :] = gaussian_filter(concat_att[s-g_offset:s+g_offset, :], sigma=offset//2, axes=0)
                             att[k, :g_offset, :] = smoothed_concat_attn[s:s+g_offset, :]
                         elif d == "bot":
                             smoothed_concat_attn = np.zeros((s*2, s))
                             concat_att = np.concatenate([att[k], n_att], axis=0)
-                            smoothed_concat_attn[s-g_offset:s+g_offset, :] = gaussian_filter(concat_att[s-g_offset:s+g_offset, :], sigma=offset, axes=0)
+                            smoothed_concat_attn[s-g_offset:s+g_offset, :] = gaussian_filter(concat_att[s-g_offset:s+g_offset, :], sigma=offset//2, axes=0)
                             att[k, s-g_offset:s, :] = smoothed_concat_attn[s-g_offset:s, :]
                         elif d == "left":
                             smoothed_concat_attn = np.zeros((s, s*2))
                             concat_att = np.concatenate([n_att, att[k]], axis=1)
-                            smoothed_concat_attn[:, s-g_offset:s+g_offset] = gaussian_filter(concat_att[:, s-g_offset:s+g_offset], sigma=offset, axes=1)
+                            smoothed_concat_attn[:, s-g_offset:s+g_offset] = gaussian_filter(concat_att[:, s-g_offset:s+g_offset], sigma=offset//2, axes=1)
                             att[k, :, :g_offset] = smoothed_concat_attn[:, s:s+g_offset]
                         elif d == "right":
                             smoothed_concat_attn = np.zeros((s, s*2))
                             concat_att = np.concatenate([att[k], n_att], axis=1)
-                            smoothed_concat_attn[:, s-g_offset:s+g_offset] = gaussian_filter(concat_att[:, s-g_offset:s+g_offset], sigma=offset//, axes=1)
+                            smoothed_concat_attn[:, s-g_offset:s+g_offset] = gaussian_filter(concat_att[:, s-g_offset:s+g_offset], sigma=offset//2, axes=1)
                             att[k, :, s-g_offset:s] = smoothed_concat_attn[:, s-g_offset:s]
 
             # given region is an RGB image, so the default filter for resizing is Resampling.BICUBIC
