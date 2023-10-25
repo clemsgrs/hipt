@@ -3102,6 +3102,7 @@ def get_slide_blended_heatmaps(
 
     nhead_patch = patch_model.num_heads
     nhead_region = region_model.num_heads
+    offset = smoothing.offset.region
     offset_ = offset
 
     with tqdm.tqdm(
