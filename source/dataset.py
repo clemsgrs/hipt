@@ -119,6 +119,7 @@ class ClassificationDatasetOptions:
     label_mapping: Dict[int, int] = field(default_factory=lambda: {})
     label_encoding: Optional[str] = None
     transform: Optional[Callable] = None
+    blinded: bool = False
 
 
 @dataclass
@@ -139,7 +140,13 @@ class DatasetFactory:
         agg_method: str = "concat",
     ):
         if task in ["classification", "regression"]:
-            if options.label_encoding == "ordinal":
+            if options.blinded:
+                self.dataset = BlindedExtractedFeaturesDataset(
+                    options.df,
+                    options.features_dir,
+                    options.transform,
+                )
+            elif options.label_encoding == "ordinal":
                 self.dataset = ExtractedFeaturesOrdinalDataset(
                     options.df,
                     options.features_dir,
@@ -285,6 +292,45 @@ class ExtractedFeaturesOrdinalDataset(ExtractedFeaturesDataset):
         if self.transform:
             features = self.transform(features, slide_id, self.seed)
         return idx, features, label
+
+
+class BlindedExtractedFeaturesDataset(torch.utils.data.Dataset):
+    def __init__(
+        self,
+        df: pd.DataFrame,
+        features_dir: Path,
+        transform: Optional[Callable] = None,
+    ):
+        self.features_dir = features_dir
+        self.transform = transform
+
+        self.seed = 0
+        self.df, _ = self.prepare_data(df)
+
+    def prepare_data(self, df):
+        filtered_slide_ids = []
+        for slide_id in df.slide_id:
+            if Path(self.features_dir, f"{slide_id}.pt").is_file():
+                filtered_slide_ids.append(slide_id)
+        df_missing = df[~df.slide_id.isin(filtered_slide_ids)].reset_index(drop=True)
+        df_filtered = df[df.slide_id.isin(filtered_slide_ids)].reset_index(drop=True)
+        if len(df.slide_id) != len(df_filtered.slide_id):
+            print(
+                f"WARNING: {len(df.slide_id)-len(df_filtered.slide_id)} slides dropped because .pt files missing"
+            )
+        return df_filtered, df_missing
+
+    def __getitem__(self, idx: int):
+        row = self.df.loc[idx]
+        slide_id = row.slide_id
+        fp = Path(self.features_dir, f"{slide_id}.pt")
+        features = torch.load(fp)
+        if self.transform:
+            features = self.transform(features, slide_id, self.seed)
+        return idx, features, _
+
+    def __len__(self):
+        return len(self.df)
 
 
 class ExtractedFeaturesSurvivalDataset(torch.utils.data.Dataset):
