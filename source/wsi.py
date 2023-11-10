@@ -96,16 +96,51 @@ class WholeSlideImage(object):
         else:
             return level
 
+    def loadSegmentation(
+        self,
+        mask_fp: Path,
+        downsample: int,
+        sthresh_up: int = 255,
+        tissue_val: int = 1,
+        try_previous_level: bool = True,
+    ):
+
+        mask = WholeSlideImage(mask_fp, backend=self.backend)
+        seg_level = self.get_best_level_for_downsample_custom(downsample)
+        w, h = self.level_dimensions[seg_level]
+
+        mask_level = int(np.argmin([abs(x - w) for x, _ in mask.level_dimensions]))
+        mask_width, mask_height = mask.level_dimensions[mask_level]
+
+        if try_previous_level:
+            while mask_width != w:
+                seg_level = seg_level -1
+                w, h = self.level_dimensions[seg_level]
+                mask_level = int(np.argmin([abs(x - w) for x, _ in mask.level_dimensions]))
+                mask_width, mask_height = mask.level_dimensions[mask_level]
+        else:
+            assert mask_width == w, f"Couldn't match slide's seg_level with correspoding mask level\n If mask's levels are a subset of slide's levels, make sure try_previous_level is set to True"
+
+        mask_spacing = mask.spacings[mask_level]
+        s = mask.spacing_mapping[mask_spacing]
+        m = mask.wsi.get_patch(0, 0, mask_width, mask_height, spacing=s, center=False)
+        m = m[...,0]
+
+        if tissue_val == 2:
+            m = m - np.ones_like(m)
+        if np.max(m) == 1:
+            m = m * sthresh_up
+
+        self.binary_mask = m
+
     def segmentTissue(
         self,
-        spacing: float,
         seg_level: int = 0,
         sthresh: int = 20,
         sthresh_up: int = 255,
         mthresh: int = 7,
         close: int = 0,
         use_otsu: bool = False,
-        filter_params: Dict[str, int] = {"ref_patch_size": 512, "a_t": 1, "a_h": 1},
     ):
         """
         Segment the tissue via HSV -> Median thresholding -> Binary threshold
@@ -135,7 +170,6 @@ class WholeSlideImage(object):
             img_thresh = cv2.morphologyEx(img_thresh, cv2.MORPH_CLOSE, kernel)
 
         self.binary_mask = img_thresh
-        self.detect_contours(img_thresh, spacing, seg_level, filter_params)
 
     def detect_contours(
         self, img_thresh, spacing: float, seg_level: int, filter_params: Dict[str, int]

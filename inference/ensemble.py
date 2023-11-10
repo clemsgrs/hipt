@@ -23,6 +23,7 @@ from source.utils import (
     test,
     test_ordinal,
     test_regression,
+    test_regression_masked,
     compute_time,
     collate_features,
 )
@@ -53,13 +54,16 @@ def main(cfg: DictConfig):
 
     num_workers = min(mp.cpu_count(), cfg.speed.num_workers)
     if "SLURM_JOB_CPUS_PER_NODE" in os.environ:
-        num_workers = min(num_workers, int(os.environ['SLURM_JOB_CPUS_PER_NODE']))
+        num_workers = min(num_workers, int(os.environ["SLURM_JOB_CPUS_PER_NODE"]))
 
     assert (cfg.task != "classification" and cfg.label_encoding != "ordinal") or (
         cfg.task == "classification"
     )
 
-    test_csvs = {k: v for e in cfg.test_csv for k, v in e.items()}
+    if isinstance(cfg.test_csv, str):
+        test_csvs = {"test": cfg.test_csv}
+    else:
+        test_csvs = {k: v for e in cfg.test_csv for k, v in e.items()}
 
     checkpoint_root_dir = Path(cfg.model.checkpoints)
     nfold = len([_ for _ in checkpoint_root_dir.glob(f"fold_*")])
@@ -90,7 +94,8 @@ def main(cfg: DictConfig):
         msg = model.load_state_dict(sd)
         print(f"Checkpoint loaded with msg: {msg}")
 
-        features_dir = Path(features_root_dir, f"{model_name}", "slide_features")
+        # features_dir = Path(features_root_dir, f"{model_name}", "slide_features")
+        features_dir = Path(features_root_dir, f"{model_name}")
 
         model_start_time = time.time()
         for test_name, csv_path in test_csvs.items():
@@ -103,6 +108,19 @@ def main(cfg: DictConfig):
                 label_name=cfg.label_name,
                 label_mapping=cfg.label_mapping,
                 label_encoding=cfg.label_encoding,
+                blinded=cfg.blinded,
+                num_classes=cfg.num_classes,
+                mask_attention=cfg.mask_attn,
+                region_dir=cfg.region_dir,
+                spacing=cfg.spacing,
+                region_size=cfg.model.region_size,
+                patch_size=cfg.model.patch_size,
+                mini_patch_size=cfg.model.mini_patch_size,
+                downsample=cfg.downsample,
+                backend=cfg.backend,
+                region_format=cfg.region_format,
+                tissue_pixel_value=cfg.tissue_pixel_value,
+                tissue_pct=cfg.tissue_pct,
             )
 
             print(f"Initializing test dataset")
@@ -111,13 +129,22 @@ def main(cfg: DictConfig):
             print(f"Running inference on {test_name} dataset with {model_name} model")
 
             if cfg.task == "regression":
-                test_results = test_regression(
-                    model,
-                    test_dataset,
-                    batch_size=1,
-                    num_workers=num_workers,
-                    use_wandb=cfg.wandb.enable,
-                )
+                if cfg.mask_attn:
+                    test_results = test_regression_masked(
+                        model,
+                        test_dataset,
+                        batch_size=1,
+                        num_workers=num_workers,
+                        use_wandb=cfg.wandb.enable,
+                    )
+                else:
+                    test_results = test_regression(
+                        model,
+                        test_dataset,
+                        batch_size=1,
+                        num_workers=num_workers,
+                        use_wandb=cfg.wandb.enable,
+                    )
             elif cfg.label_encoding == "ordinal":
                 test_results = test_ordinal(
                     model,
@@ -167,7 +194,7 @@ def main(cfg: DictConfig):
         print()
 
     distance_func = None
-    if cfg.distance_func == 'custom':
+    if cfg.distance_func == "custom":
         distance_func = custom_isup_grade_dist
     for test_name, csv_path in test_csvs.items():
         dfs = []
@@ -236,6 +263,7 @@ def main(cfg: DictConfig):
 if __name__ == "__main__":
 
     import torch.multiprocessing
+
     torch.multiprocessing.set_sharing_strategy("file_system")
 
     main()

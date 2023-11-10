@@ -278,6 +278,17 @@ def collate_features(batch, label_type: str = "int"):
     return [idx, feature, label]
 
 
+def collate_features_mask(batch, label_type: str = "int"):
+    idx = torch.LongTensor([item[0] for item in batch])
+    feature = torch.cat([item[1] for item in batch], dim=0)
+    if label_type == "float":
+        label = torch.FloatTensor([item[2] for item in batch])
+    elif label_type == "int":
+        label = torch.LongTensor([item[2] for item in batch])
+    mask = torch.cat([item[3] for item in batch], dim=0)
+    return [idx, feature, label, mask]
+
+
 def collate_ordinal_features(batch):
     idx = torch.LongTensor([item[0] for item in batch])
     feature = torch.cat([item[1] for item in batch], dim=0)
@@ -342,7 +353,8 @@ def collate_region_filepaths(batch):
     idx = torch.LongTensor([item[0]])
     fp = item[1]
     sid = item[2]
-    return [idx, fp, sid]
+    pct = item[3]
+    return [idx, fp, sid, pct]
 
 
 def get_roc_auc_curve(
@@ -495,10 +507,12 @@ def custom_isup_grade_dist(x: int, y: int):
     if (x == 0 and y == 1) or (x == 1 and y == 0):
         return 1.5
     else:
-        return abs(x-y)
+        return abs(x - y)
 
 
-def get_majority_vote(preds, distance_func: Optional[Callable] = None, nfold: int = 5, seed: int = 0):
+def get_majority_vote(
+    preds, distance_func: Optional[Callable] = None, nfold: int = 5, seed: int = 0
+):
     random.seed(seed)
     x = Counter(preds)
     max_occ = x.most_common(1)[0][1]
@@ -514,7 +528,7 @@ def get_majority_vote(preds, distance_func: Optional[Callable] = None, nfold: in
         if distance_func:
             distances = [distance_func(t, outlier) for t in ties]
         else:
-            distances = [abs(t-outlier) for t in ties]
+            distances = [abs(t - outlier) for t in ties]
         m = min(distances)
         idx_min = [i for i, v in enumerate(distances) if v == m]
         idx = random.randint(0, len(idx_min) - 1)
@@ -1223,6 +1237,239 @@ def test_regression(
                     device, non_blocking=True
                 )
                 logits = model(x)
+
+                pred = get_label_from_regression_logits(
+                    logits.cpu(), dataset.num_classes
+                )
+                preds.extend(pred[:, 0].clone().tolist())
+
+                labels.extend(label.clone().tolist())
+                idxs.extend(list(idx))
+
+    dataset.df.loc[idxs, f"pred"] = preds
+
+    metrics = get_metrics(
+        preds,
+        labels,
+        class_names=[f"isup_{i}" for i in range(dataset.num_classes)],
+        use_wandb=use_wandb,
+    )
+    results.update(metrics)
+
+    return results
+
+
+def train_regression_masked(
+    epoch: int,
+    model: nn.Module,
+    dataset: torch.utils.data.Dataset,
+    optimizer: torch.optim.Optimizer,
+    criterion: Callable,
+    collate_fn: Callable = partial(collate_features_mask, label_type="float"),
+    batch_size: Optional[int] = 1,
+    weighted_sampling: Optional[bool] = False,
+    gradient_accumulation: Optional[int] = None,
+    num_workers: int = 0,
+    use_wandb: bool = False,
+):
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    model.train()
+    epoch_loss = 0
+    preds, labels = [], []
+    idxs = []
+
+    sampler = torch.utils.data.RandomSampler(dataset)
+    if weighted_sampling:
+        weights = make_weights_for_balanced_classes(dataset)
+        sampler = torch.utils.data.WeightedRandomSampler(
+            weights,
+            len(weights),
+        )
+
+    loader = torch.utils.data.DataLoader(
+        dataset,
+        batch_size=batch_size,
+        sampler=sampler,
+        collate_fn=collate_fn,
+        num_workers=num_workers,
+    )
+
+    results = {}
+
+    with tqdm.tqdm(
+        loader,
+        desc=(f"Epoch {epoch} - Train"),
+        unit=" slide",
+        ncols=80,
+        unit_scale=batch_size,
+        leave=False,
+    ) as t:
+        for i, batch in enumerate(t):
+            # optimizer.zero_grad()
+            idx, x, label, pct = batch
+            x, label, pct = (
+                x.to(device, non_blocking=True),
+                label.to(device, non_blocking=True),
+                pct.to(device, non_blocking=True),
+            )
+            logits = model(x, pct=pct)
+            loss = criterion(logits, label.unsqueeze(1))
+
+            loss_value = loss.item()
+            epoch_loss += loss_value
+
+            if gradient_accumulation:
+                loss = loss / gradient_accumulation
+
+            loss.backward()
+
+            if not gradient_accumulation:
+                optimizer.step()
+                optimizer.zero_grad()
+            elif (i + 1) % gradient_accumulation == 0:
+                optimizer.step()
+                optimizer.zero_grad()
+
+            pred = get_label_from_regression_logits(logits.cpu(), dataset.num_classes)
+            preds.extend(pred[:, 0].clone().tolist())
+
+            labels.extend(label.clone().tolist())
+            idxs.extend(list(idx))
+
+    dataset.df.loc[idxs, f"pred"] = preds
+
+    metrics = get_metrics(
+        preds,
+        labels,
+        class_names=[f"isup_{i}" for i in range(dataset.num_classes)],
+        use_wandb=use_wandb,
+    )
+    results.update(metrics)
+
+    train_loss = epoch_loss / len(loader)
+    results["loss"] = train_loss
+
+    return results
+
+
+def tune_regression_masked(
+    epoch: int,
+    model: nn.Module,
+    dataset: torch.utils.data.Dataset,
+    criterion: Callable,
+    collate_fn: Callable = partial(collate_features_mask, label_type="float"),
+    batch_size: Optional[int] = 1,
+    num_workers: int = 0,
+    use_wandb: bool = False,
+):
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    model.eval()
+    epoch_loss = 0
+    preds, labels = [], []
+    idxs = []
+
+    sampler = torch.utils.data.SequentialSampler(dataset)
+
+    loader = torch.utils.data.DataLoader(
+        dataset,
+        batch_size=batch_size,
+        sampler=sampler,
+        collate_fn=collate_fn,
+        num_workers=num_workers,
+    )
+
+    results = {}
+
+    with tqdm.tqdm(
+        loader,
+        desc=(f"Epoch {epoch} - Tune"),
+        unit=" slide",
+        ncols=80,
+        unit_scale=batch_size,
+        leave=False,
+    ) as t:
+        with torch.no_grad():
+            for i, batch in enumerate(t):
+                idx, x, label, pct = batch
+                x, label, pct = (
+                    x.to(device, non_blocking=True),
+                    label.to(device, non_blocking=True),
+                    pct.to(device, non_blocking=True),
+                )
+                logits = model(x, pct=pct)
+                loss = criterion(logits, label.unsqueeze(1))
+
+                pred = get_label_from_regression_logits(
+                    logits.cpu(), dataset.num_classes
+                )
+                preds.extend(pred[:, 0].clone().tolist())
+
+                labels.extend(label.clone().tolist())
+                idxs.extend(list(idx))
+
+                epoch_loss += loss.item()
+
+    dataset.df.loc[idxs, f"pred"] = preds
+
+    metrics = get_metrics(
+        preds,
+        labels,
+        class_names=[f"isup_{i}" for i in range(dataset.num_classes)],
+        use_wandb=use_wandb,
+    )
+    results.update(metrics)
+
+    tune_loss = epoch_loss / len(loader)
+    results["loss"] = tune_loss
+
+    return results
+
+
+def test_regression_masked(
+    model: nn.Module,
+    dataset: torch.utils.data.Dataset,
+    collate_fn: Callable = partial(collate_features_mask, label_type="float"),
+    batch_size: Optional[int] = 1,
+    num_workers: int = 0,
+    use_wandb: bool = False,
+):
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    model.eval()
+    preds, labels = [], []
+    idxs = []
+
+    sampler = torch.utils.data.SequentialSampler(dataset)
+
+    loader = torch.utils.data.DataLoader(
+        dataset,
+        batch_size=batch_size,
+        sampler=sampler,
+        collate_fn=collate_fn,
+        num_workers=num_workers,
+    )
+
+    results = {}
+
+    with tqdm.tqdm(
+        loader,
+        desc=(f"Test"),
+        unit=" slide",
+        ncols=80,
+        unit_scale=batch_size,
+        leave=True,
+    ) as t:
+        with torch.no_grad():
+            for i, batch in enumerate(t):
+                idx, x, label, pct = batch
+                x, label, pct = (
+                    x.to(device, non_blocking=True),
+                    label.to(device, non_blocking=True),
+                    pct.to(device, non_blocking=True),
+                )
+                logits = model(x, pct=pct)
 
                 pred = get_label_from_regression_logits(
                     logits.cpu(), dataset.num_classes

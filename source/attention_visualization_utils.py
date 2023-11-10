@@ -26,6 +26,7 @@ from source.model_utils import Attn_Net_Gated
 def get_patch_model(
     pretrained_weights: Path,
     arch: str = "vit_small",
+    mask_attn: bool = False,
     device: Optional[torch.device] = None,
 ):
     checkpoint_key = "teacher"
@@ -33,7 +34,11 @@ def get_patch_model(
         device = (
             torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
         )
-    patch_model = vits.__dict__[arch](patch_size=16, num_classes=0)
+    patch_model = vits.__dict__[arch](
+        patch_size=16,
+        num_classes=0,
+        mask_attn=mask_attn,
+    )
     for p in patch_model.parameters():
         p.requires_grad = False
     patch_model.eval()
@@ -62,6 +67,7 @@ def get_region_model(
     arch: str = "vit4k_xs",
     region_size: int = 4096,
     patch_size: int = 256,
+    mask_attn: bool = False,
     img_size_pretrained: Optional[int] = None,
     device: Optional[torch.device] = None,
 ):
@@ -71,7 +77,11 @@ def get_region_model(
             torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
         )
     region_model = vits.__dict__[arch](
-        img_size=region_size, patch_size=patch_size, num_classes=0, img_size_pretrained=img_size_pretrained,
+        img_size=region_size,
+        patch_size=patch_size,
+        num_classes=0,
+        mask_attn=mask_attn,
+        img_size_pretrained=img_size_pretrained,
     )
     for p in region_model.parameters():
         p.requires_grad = False
@@ -193,8 +203,8 @@ def tensorbatch2im(input_image, imtype=np.uint8):
     return image_numpy.astype(imtype)
 
 
-def normalize_patch_scores(attns, size=(256, 256)):
-    rank = lambda v: rankdata(v) / len(v)
+def normalize_patch_scores(attns, size=(256, 256), method: str = 'min'):
+    rank = lambda v: (rankdata(v, method=method)-1) / len(v)
     color_block = [rank(attn.flatten()).reshape(size) for attn in attns][0]
     return color_block
 
@@ -204,9 +214,10 @@ def concat_patch_scores(
     region_size: int = 4096,
     patch_size: int = 256,
     size: Optional[Tuple[int, int]] = None,
+    method: str = 'min',
 ):
     n_patch = region_size // patch_size
-    rank = lambda v: rankdata(v) / len(v)
+    rank = lambda v: (rankdata(v, method=method)-1) / len(v)
     color_block = [
         rank(attn.flatten()).reshape(size) for attn in attns
     ]  # [(256, 256)] of length len(attns)
@@ -223,16 +234,18 @@ def concat_patch_scores(
 def normalize_region_scores(
     attn,
     size: Optional[Tuple[int, int]] = None,
+    method: str = 'min',
 ):
-    rank = lambda v: rankdata(v) / len(v)
+    rank = lambda v: (rankdata(v, method=method)-1) / len(v)
     color_hm = rank(attn.flatten()).reshape(size)  # (4096, 4096)
     return color_hm
 
 
 def normalize_slide_scores(
     attn,
+    method: str = 'min',
 ):
-    rank = lambda v: rankdata(v) / len(v)
+    rank = lambda v: (rankdata(v, method=method)-1) / len(v)
     color_hm = rank(attn)
     return color_hm
 
@@ -371,11 +384,214 @@ def DrawMapFromCoords(
     return Image.fromarray(canvas)
 
 
+def get_mask(
+    slide_path: str,
+    segmentation_mask_path: str,
+    x: int,
+    y: int,
+    region_size: int = 4096,
+    patch_size: int = 256,
+    mini_patch_size: int = 16,
+    spacing: float = 0.5,
+    backend: str = 'pyvips',
+    downsample: int = 4,
+    tissue_pixel_value: int = 1,
+    pct_thresh: float = 0.0,
+    offset: Optional[int] = None,
+):
+    import wholeslidedata as wsd
+    # load the slide
+    wsi = wsd.WholeSlideImage(Path(slide_path), backend=backend)
+    # load segmentation mask
+    mask = wsd.WholeSlideImage(Path(segmentation_mask_path), backend=backend)
+    # scale coordinates from slide's level 0 to mask's level 0
+    sx, sy = tuple(i / j for i, j in zip(mask.shapes[0], wsi.shapes[0]))
+    # find spacing of level closest to desired downsample
+    idx = np.argmin([abs(downsample - d) for d in mask.downsamplings])
+    downsample_spacing = mask.spacings[idx]
+    # scale region size from true spacing to downsample spacing
+    # we excepct mask spacings to be a subset of slide spacings
+    # the ratio should thus give an integer
+    sr = int(downsample_spacing / spacing)
+    scaled_region_size = region_size // sr
+    # scale patch_size and mini_patch_size
+    scaled_patch_size = patch_size // sr
+    scaled_mini_patch_size = mini_patch_size // sr
+
+    x_mask, y_mask = int(x * sx), int(y * sy)
+    region_mask = mask.get_patch(
+        x=x_mask,
+        y=y_mask,
+        width=scaled_region_size,
+        height=scaled_region_size,
+        spacing=downsample_spacing,
+        center=False,
+    )
+    if offset:
+        region_mask = region_mask[offset:, offset:]
+        height, width = region_mask.shape[:2]
+        new_height = height + offset
+        new_width = width + offset
+        new_region_mask = np.full((new_height, new_width, region_mask.shape[2]), 0, dtype=region_mask.dtype)
+        new_region_mask[0:height, 0:0+width] = region_mask
+        region_mask = new_region_mask
+
+    assert region_mask.shape[-1] == 1, f"expecting 1 channel, found {region_mask.shape[-1]} channels"
+    region_mask = region_mask[...,0]
+
+    def split_into_blocks(arr, block_size):
+        """
+        Split a 2D array into smaller blocks of given block_size.
+        """
+        # Split the array into sub-arrays of size block_size along the rows
+        rows_split = np.split(arr, arr.shape[0] // block_size)
+        # Further split these sub-arrays along the columns
+        blocks = [
+            np.split(block, arr.shape[1] // block_size, axis=1)
+            for block in rows_split
+        ]
+        # Flatten the list of blocks
+        flattened_blocks = [
+            block for sublist in blocks for block in sublist
+        ]
+        return np.array(flattened_blocks)
+
+    # compute tissue percentage for each mini patch in each patch
+    region_patches = split_into_blocks(region_mask, scaled_patch_size)
+
+    region_mini_patches = []
+    for p in region_patches:
+        mp = split_into_blocks(p, scaled_mini_patch_size)
+        region_mini_patches.append(mp)
+    region_mini_patches = np.stack(region_mini_patches)
+    tissue = region_mini_patches == tissue_pixel_value
+    pct = np.sum(tissue, axis=(-2, -1)) / tissue[0][0].size # (npatch**2, nminipatch**2)
+    pct = torch.Tensor(pct)
+
+    mask_mini_patch = (pct > pct_thresh).int()  # (num_patches, nminipatch**2)
+    # add the [CLS] token to the mask
+    cls_token = mask_mini_patch.new_ones((mask_mini_patch.size(0),1))
+    mask_mini_patch = torch.cat((cls_token, mask_mini_patch), dim=1)  # [num_patches, nminipatch**2+1]
+    # infer patch-level mask
+    pct_patch = torch.sum(pct, axis=-1) / pct.numel()
+    mask_patch = (pct_patch > pct_thresh).int().unsqueeze(0)
+    # add the [CLS] token to the mask
+    cls_token = mask_patch.new_ones((mask_patch.size(0),1))
+    mask_patch = torch.cat((cls_token, mask_patch), dim=1)  # [1, num_patches+1]
+
+    return mask_patch, mask_mini_patch
+
+
+def generate_masks(
+    slide_id: str,
+    slide_path: str,
+    segmentation_mask_path: str,
+    region_dir: str,
+    region_size: int = 4096,
+    patch_size: int = 256,
+    mini_patch_size: int = 16,
+    spacing: float = 0.5,
+    backend: str = 'asap',
+    downsample: int = 4,
+    region_format: str = "jpg",
+    tissue_pixel_value: int = 1,
+    pct_thresh: float = 0.0,
+):
+    import wholeslidedata as wsd
+    # load the slide
+    wsi = wsd.WholeSlideImage(Path(slide_path), backend=backend)
+    # load segmentation mask
+    mask = wsd.WholeSlideImage(Path(segmentation_mask_path), backend=backend)
+    # scale coordinates from slide's level 0 to mask's level 0
+    sx, sy = tuple(i / j for i, j in zip(mask.shapes[0], wsi.shapes[0]))
+    # find spacing of level closest to desired downsample
+    idx = np.argmin([abs(downsample - d) for d in mask.downsamplings])
+    downsample_spacing = mask.spacings[idx]
+    # scale region size from true spacing to downsample spacing
+    # we excepct mask spacings to be a subset of slide spacings
+    # the ratio should thus give an integer
+    sr = int(downsample_spacing / spacing)
+    scaled_region_size = region_size // sr
+    # scale patch_size and mini_patch_size
+    scaled_patch_size = patch_size // sr
+    scaled_mini_patch_size = mini_patch_size // sr
+    # retrieve region's (x,y) coordinates
+    # should appear in the same order as in the corresponding slide feature vector
+    coordinates = sorted(
+        [p.stem for p in Path(region_dir, slide_id, "imgs").glob(f"*.{region_format}")]
+    )
+    coordinates = [
+        (int(p.split("_")[0]), int(p.split("_")[1])) for p in coordinates
+    ]
+    tissue_pcts = []
+    for i, (x, y) in enumerate(coordinates):
+        x_mask, y_mask = int(x * sx), int(y * sy)
+        region = mask.get_patch(
+            x=x_mask,
+            y=y_mask,
+            width=scaled_region_size,
+            height=scaled_region_size,
+            spacing=downsample_spacing,
+            center=False,
+        )
+        assert region.shape[-1] == 1, f"expecting 1 channel, found {region.shape[-1]} channels"
+        region = region[...,0]
+        #TODO: make sure there is no issue with slide (x,y) axis gets inverted in numpy
+
+        def split_into_blocks(arr, block_size):
+            """
+            Split a 2D array into smaller blocks of given block_size.
+            """
+            # Split the array into sub-arrays of size block_size along the rows
+            rows_split = np.split(arr, arr.shape[0] // block_size)
+            # Further split these sub-arrays along the columns
+            blocks = [
+                np.split(block, arr.shape[1] // block_size, axis=1)
+                for block in rows_split
+            ]
+            # Flatten the list of blocks
+            flattened_blocks = [
+                block for sublist in blocks for block in sublist
+            ]
+            return np.array(flattened_blocks)
+
+        # compute tissue percentage for each mini patch in each patch
+        region_patches = split_into_blocks(region, scaled_patch_size)
+        # region_patches = region.reshape((-1, scaled_patch_size, scaled_patch_size))
+
+        region_mini_patches = []
+        for p in region_patches:
+            mp = split_into_blocks(p, scaled_mini_patch_size)
+            # mp = p.reshape((-1, scaled_mini_patch_size, scaled_mini_patch_size))
+            region_mini_patches.append(mp)
+        region_mini_patches = np.stack(region_mini_patches)
+        tissue = region_mini_patches == tissue_pixel_value
+        tissue_pct = np.sum(tissue, axis=(-2, -1)) / tissue[0][0].size
+        tissue_pcts.append(tissue_pct)
+
+    pct = np.stack(tissue_pcts)  # (M, npatch**2, nminipatch**2)
+    pct = torch.Tensor(pct)
+
+    mask_mini_patch = (pct > pct_thresh).int()  # (M, num_patches, nminipatch**2)
+    # add the [CLS] token to the mask
+    cls_token = mask_mini_patch.new_ones((mask_mini_patch.size(0),mask_mini_patch.size(1),1))
+    mask_mini_patch = torch.cat((cls_token, mask_mini_patch), dim=2)  # [M, num_patches, nminipatch**2+1]
+    # infer patch-level mask
+    pct_patch = torch.sum(pct, axis=-1) / pct[0].numel()
+    mask_patch = (pct_patch > pct_thresh).int()
+    # add the [CLS] token to the mask
+    cls_token = mask_patch.new_ones((mask_patch.size(0),1))
+    mask_patch = torch.cat((cls_token, mask_patch), dim=1)  # [M, num_patches+1]
+
+    return mask_patch, mask_mini_patch
+
+
 def get_patch_attention_scores(
     patch: Image,
     patch_model: nn.Module,
     mini_patch_size: int = 16,
     downscale: int = 1,
+    mini_patch_attn_mask: Optional[torch.Tensor] = None,
     patch_device: torch.device = torch.device("cuda:0"),
 ):
     """
@@ -403,7 +619,8 @@ def get_patch_attention_scores(
         features = patch_model(batch)  # (1, 384)
 
         attention = patch_model.get_last_selfattention(
-            batch
+            batch,
+            mask=mini_patch_attn_mask,
         )  # (1, 6, n_minipatch**2+1, n_minipatch**2+1)
         nh = attention.shape[1]  # number of head
         attention = attention[:, :, 0, 1:].reshape(
@@ -437,6 +654,8 @@ def get_region_attention_scores(
     patch_size: int = 256,
     mini_patch_size: int = 16,
     downscale: int = 1,
+    patch_attn_mask: Optional[torch.Tensor] = None,
+    mini_patch_attn_mask: Optional[torch.Tensor] = None,
     patch_device: torch.device = torch.device("cuda:0"),
     region_device: torch.device = torch.device("cuda:0"),
 ):
@@ -476,10 +695,13 @@ def get_region_attention_scores(
             patches, "b c p1 p2 w h -> (b p1 p2) c w h"
         )  # (n_patch**2, 3, patch_size, patch_size)
         patches = patches.to(patch_device, non_blocking=True)
-        patch_features = patch_model(patches)  # (n_patch**2, 384)
+        if mini_patch_attn_mask is not None:
+            mini_patch_attn_mask = mini_patch_attn_mask.to(patch_device, non_blocking=True)
+        patch_features = patch_model(patches, mask=mini_patch_attn_mask)  # (n_patch**2, 384)
 
         patch_attention = patch_model.get_last_selfattention(
-            patches
+            patches,
+            mask=mini_patch_attn_mask,
         )  # (n_patch**2, nhead, n_minipatch**2+1, n_minipatch**2+1)
         nh = patch_attention.shape[1]  # number of head
         patch_attention = patch_attention[:, :, 0, 1:].reshape(
@@ -503,8 +725,11 @@ def get_region_attention_scores(
         region_features = (
             patch_features.unfold(0, n_patch, n_patch).transpose(0, 1).unsqueeze(dim=0)
         )  # (1, 384, n_patch, n_patch)
+        if patch_attn_mask is not None:
+            patch_attn_mask = patch_attn_mask.to(region_device)
         region_attention = region_model.get_last_selfattention(
-            region_features.detach().to(region_device)
+            region_features.detach().to(region_device),
+            mask=patch_attn_mask,
         )  # (1, nhead, n_patch**2+1, n_patch**2+1)
         nh = region_attention.shape[1]  # number of head
         region_attention = region_attention[0, :, 0, 1:].reshape(
@@ -544,6 +769,8 @@ def get_slide_attention_scores(
     offset: int = 1024,
     slide_path: Optional[Path] = None,
     spacing: Optional[float] = None,
+    patch_attn_mask: Optional[torch.Tensor] = None,
+    mini_patch_attn_mask: Optional[torch.Tensor] = None,
     patch_device: torch.device = torch.device("cuda:0"),
     region_device: torch.device = torch.device("cuda:0"),
     slide_device: torch.device = torch.device("cuda:0"),
@@ -668,7 +895,10 @@ def get_slide_attention_scores(
                                         patches, "b c p1 p2 w h -> (b p1 p2) c w h"
                                     )  # (n_patch**2, 3, patch_size, patch_size)
                                     patches = patches.to(patch_device, non_blocking=True)
-                                    patch_features = patch_model(patches)  # (n_patch**2, 384)
+                                    mpm = None
+                                    if mini_patch_attn_mask is not None:
+                                        mpm = mini_patch_attn_mask[k].to(patch_device, non_blocking=True)
+                                    patch_features = patch_model(patches, mask=mpm)  # (n_patch**2, 384)
 
                                     regions = (
                                         patch_features.unfold(0, n_patch, n_patch)
@@ -676,7 +906,10 @@ def get_slide_attention_scores(
                                         .unsqueeze(dim=0)
                                     )  # (1, 384, n_patch, n_patch)
                                     regions = regions.to(region_device, non_blocking=True)
-                                    region_features = region_model(regions)  # (1, 192)
+                                    pm = None
+                                    if patch_attn_mask is not None:
+                                        pm = patch_attn_mask[k].unsqueeze(0).to(region_device, non_blocking=True)
+                                    region_features = region_model(regions, mask=pm)  # (1, 192)
 
                                     features.append(region_features)
 
@@ -792,7 +1025,10 @@ def get_slide_attention_scores(
                         patches, "b c p1 p2 w h -> (b p1 p2) c w h"
                     )  # (n_patch**2, 3, patch_size, patch_size)
                     patches = patches.to(patch_device, non_blocking=True)
-                    patch_features = patch_model(patches)  # (n_patch**2, 384)
+                    mpm = None
+                    if mini_patch_attn_mask is not None:
+                        mpm = mini_patch_attn_mask[k].to(patch_device, non_blocking=True)
+                    patch_features = patch_model(patches, mask=mpm)  # (n_patch**2, 384)
 
                     regions = (
                         patch_features.unfold(0, n_patch, n_patch)
@@ -800,7 +1036,10 @@ def get_slide_attention_scores(
                         .unsqueeze(dim=0)
                     )  # (1, 384, n_patch, n_patch)
                     regions = regions.to(region_device, non_blocking=True)
-                    region_features = region_model(regions)  # (1, 192)
+                    pm = None
+                    if patch_attn_mask is not None:
+                        pm = patch_attn_mask[k].unsqueeze(0).to(region_device, non_blocking=True)
+                    region_features = region_model(regions, mask=pm)  # (1, 192)
 
                     features.append(region_features)
 
@@ -1887,6 +2126,13 @@ def get_slide_heatmaps_patch_level(
     save_to_disk: bool = False,
     granular: bool = False,
     offset: int = 128,
+    slide_path: Optional[str] = None,
+    segmentation_mask_path: Optional[str] = None,
+    spacing: Optional[float] = None,
+    downsample: Optional[int] = None,
+    tissue_pixel_value: Optional[int] = None,
+    patch_attn_mask: Optional[torch.Tensor] = None,
+    mini_patch_attn_mask: Optional[torch.Tensor] = None,
     patch_device: torch.device = torch.device("cuda:0"),
     region_device: torch.device = torch.device("cuda:0"),
     main_process: bool = True,
@@ -1933,6 +2179,7 @@ def get_slide_heatmaps_patch_level(
 
     nhead_patch = patch_model.num_heads
     offset_ = offset
+    mask_attn = (patch_attn_mask is not None)
 
     with tqdm.tqdm(
         region_paths,
@@ -1946,6 +2193,12 @@ def get_slide_heatmaps_patch_level(
             region = Image.open(fp)
             region_size = region.size[0]
             n_patch = region_size // patch_size
+            x, y = int(fp.stem.split("_")[0]), int(fp.stem.split("_")[1])
+
+            pm, mpm = None, None
+            if mask_attn:
+                pm = patch_attn_mask[k].unsqueeze(0)
+                mpm = mini_patch_attn_mask[k]
 
             _, patch_att, _ = get_region_attention_scores(
                 region,
@@ -1954,6 +2207,8 @@ def get_slide_heatmaps_patch_level(
                 patch_size=patch_size,
                 mini_patch_size=mini_patch_size,
                 downscale=downscale,
+                patch_attn_mask=pm,
+                mini_patch_attn_mask=mpm,
                 patch_device=patch_device,
                 region_device=region_device,
             )
@@ -1968,6 +2223,22 @@ def get_slide_heatmaps_patch_level(
                     right=offset,
                     color=(255, 255, 255),
                 )
+                pm2, mpm2 = None, None
+                if mask_attn:
+                    pm2, mpm2 = get_mask(
+                        slide_path,
+                        segmentation_mask_path,
+                        x,
+                        y,
+                        region_size,
+                        patch_size,
+                        mini_patch_size,
+                        spacing,
+                        backend='asap',
+                        downsample=downsample,
+                        tissue_pixel_value=tissue_pixel_value,
+                        offset=offset,
+                    )
                 _, patch_att_2, _ = get_region_attention_scores(
                     region2,
                     patch_model,
@@ -1975,6 +2246,8 @@ def get_slide_heatmaps_patch_level(
                     patch_size=patch_size,
                     mini_patch_size=mini_patch_size,
                     downscale=downscale,
+                    patch_attn_mask=pm2,
+                    mini_patch_attn_mask=mpm2,
                     patch_device=patch_device,
                     region_device=region_device,
                 )
@@ -1998,7 +2271,6 @@ def get_slide_heatmaps_patch_level(
                     )
                     patch_hm_output_dir.mkdir(exist_ok=True, parents=True)
 
-                    x, y = int(fp.stem.split("_")[0]), int(fp.stem.split("_")[1])
                     coords[i].append((x, y))
 
                     patch_att_scores = concat_patch_scores(
@@ -2113,7 +2385,14 @@ def get_slide_heatmaps_region_level(
     save_to_disk: bool = False,
     granular: bool = False,
     offset: int = 128,
-    smoothing: bool = False,
+    gaussian_smoothing: bool = False,
+    slide_path: Optional[str] = None,
+    segmentation_mask_path: Optional[str] = None,
+    spacing: Optional[float] = None,
+    downsample: Optional[int] = None,
+    tissue_pixel_value: Optional[int] = None,
+    patch_attn_mask: Optional[torch.Tensor] = None,
+    mini_patch_attn_mask: Optional[torch.Tensor] = None,
     patch_device: torch.device = torch.device("cuda:0"),
     region_device: torch.device = torch.device("cuda:0"),
     main_process: bool = True,
@@ -2161,6 +2440,7 @@ def get_slide_heatmaps_region_level(
 
     nhead_region = region_model.num_heads
     offset_ = offset
+    mask_attn = (patch_attn_mask is not None)
 
     with tqdm.tqdm(
         region_paths,
@@ -2175,6 +2455,11 @@ def get_slide_heatmaps_region_level(
             region_size = region.size[0]
             x, y = int(fp.stem.split("_")[0]), int(fp.stem.split("_")[1])
 
+            pm, mpm = None, None
+            if mask_attn:
+                pm = patch_attn_mask[k].unsqueeze(0)
+                mpm = mini_patch_attn_mask[k]
+
             _, _, region_att = get_region_attention_scores(
                 region,
                 patch_model,
@@ -2182,6 +2467,8 @@ def get_slide_heatmaps_region_level(
                 patch_size=patch_size,
                 mini_patch_size=mini_patch_size,
                 downscale=downscale,
+                patch_attn_mask=pm,
+                mini_patch_attn_mask=mpm,
                 patch_device=patch_device,
                 region_device=region_device,
             )
@@ -2196,6 +2483,22 @@ def get_slide_heatmaps_region_level(
                     right=offset,
                     color=(255, 255, 255),
                 )
+                pm2, mpm2 = None, None
+                if mask_attn:
+                    pm2, mpm2 = get_mask(
+                        slide_path,
+                        segmentation_mask_path,
+                        x,
+                        y,
+                        region_size,
+                        patch_size,
+                        mini_patch_size,
+                        spacing,
+                        backend='asap',
+                        downsample=downsample,
+                        tissue_pixel_value=tissue_pixel_value,
+                        offset=offset,
+                    )
                 region3 = add_margin(
                     region.crop((offset * 2, offset * 2, region_size, region_size)),
                     top=0,
@@ -2204,6 +2507,22 @@ def get_slide_heatmaps_region_level(
                     right=offset * 2,
                     color=(255, 255, 255),
                 )
+                pm3, mpm3 = None, None
+                if mask_attn:
+                    pm3, mpm3 = get_mask(
+                        slide_path,
+                        segmentation_mask_path,
+                        x,
+                        y,
+                        region_size,
+                        patch_size,
+                        mini_patch_size,
+                        spacing,
+                        backend='asap',
+                        downsample=downsample,
+                        tissue_pixel_value=tissue_pixel_value,
+                        offset=offset*2,
+                    )
                 region4 = add_margin(
                     region.crop((offset * 3, offset * 3, region_size, region_size)),
                     top=0,
@@ -2212,6 +2531,22 @@ def get_slide_heatmaps_region_level(
                     right=offset * 3,
                     color=(255, 255, 255),
                 )
+                pm4, mpm4 = None, None
+                if mask_attn:
+                    pm4, mpm4 = get_mask(
+                        slide_path,
+                        segmentation_mask_path,
+                        x,
+                        y,
+                        region_size,
+                        patch_size,
+                        mini_patch_size,
+                        spacing,
+                        backend='asap',
+                        downsample=downsample,
+                        tissue_pixel_value=tissue_pixel_value,
+                        offset=offset*3,
+                    )
 
                 _, _, region_att_2 = get_region_attention_scores(
                     region2,
@@ -2220,6 +2555,8 @@ def get_slide_heatmaps_region_level(
                     patch_size=patch_size,
                     mini_patch_size=mini_patch_size,
                     downscale=downscale,
+                    patch_attn_mask=pm2,
+                    mini_patch_attn_mask=mpm2,
                     patch_device=patch_device,
                     region_device=region_device,
                 )
@@ -2230,6 +2567,8 @@ def get_slide_heatmaps_region_level(
                     patch_size=patch_size,
                     mini_patch_size=mini_patch_size,
                     downscale=downscale,
+                    patch_attn_mask=pm3,
+                    mini_patch_attn_mask=mpm3,
                     patch_device=patch_device,
                     region_device=region_device,
                 )
@@ -2240,6 +2579,8 @@ def get_slide_heatmaps_region_level(
                     patch_size=patch_size,
                     mini_patch_size=mini_patch_size,
                     downscale=downscale,
+                    patch_attn_mask=pm4,
+                    mini_patch_attn_mask=mpm4,
                     patch_device=patch_device,
                     region_device=region_device,
                 )
@@ -2309,7 +2650,7 @@ def get_slide_heatmaps_region_level(
                             + new_region_att_scores_4
                         ) / region_overlay
 
-                    if smoothing:
+                    if gaussian_smoothing:
 
                         overlap_regions, overlap_coords = create_overlap_regions((x,y), region_coords, Path(region_dir, slide_id, "imgs"), region_size)
                         n_overlap_regions = len(overlap_regions)
@@ -2541,6 +2882,8 @@ def get_slide_heatmaps_slide_level(
     spacing: Optional[float] = None,
     gaussian_smoothing: bool = False,
     gaussian_offset: int = 128,
+    patch_attn_mask: Optional[torch.Tensor] = None,
+    mini_patch_attn_mask: Optional[torch.Tensor] = None,
     patch_device: torch.device = torch.device("cuda:0"),
     region_device: torch.device = torch.device("cuda:0"),
     slide_device: torch.device = torch.device("cuda:0"),
@@ -2582,6 +2925,8 @@ def get_slide_heatmaps_slide_level(
         offset=offset,
         slide_path=slide_path,
         spacing=spacing,
+        patch_attn_mask=patch_attn_mask,
+        mini_patch_attn_mask=mini_patch_attn_mask,
         patch_device=patch_device,
         region_device=region_device,
         slide_device=slide_device,
@@ -3036,7 +3381,12 @@ def get_slide_blended_heatmaps(
     save_to_disk: bool = False,
     smoothing: Optional[Dict] = None,
     slide_path: Optional[Path] = None,
+    segmentation_mask_path: Optional[str] = None,
     spacing: Optional[float] = None,
+    downsample: Optional[int] = None,
+    tissue_pixel_value: Optional[int] = None,
+    patch_attn_mask: Optional[torch.Tensor] = None,
+    mini_patch_attn_mask: Optional[torch.Tensor] = None,
     patch_device: torch.device = torch.device("cuda:0"),
     region_device: torch.device = torch.device("cuda:0"),
     slide_device: torch.device = torch.device("cuda:0"),
@@ -3084,6 +3434,8 @@ def get_slide_blended_heatmaps(
         offset=smoothing.offset.slide,
         slide_path=slide_path,
         spacing=spacing,
+        patch_attn_mask=patch_attn_mask,
+        mini_patch_attn_mask=mini_patch_attn_mask,
         patch_device=patch_device,
         region_device=region_device,
         slide_device=slide_device,
@@ -3104,6 +3456,7 @@ def get_slide_blended_heatmaps(
     nhead_region = region_model.num_heads
     offset = smoothing.offset.region
     offset_ = offset
+    mask_attn = (patch_attn_mask is not None)
 
     with tqdm.tqdm(
         region_paths,
@@ -3117,6 +3470,12 @@ def get_slide_blended_heatmaps(
             region = Image.open(fp)
             region_size = region.size[0]
             n_patch = region_size // patch_size
+            x, y = int(fp.stem.split("_")[0]), int(fp.stem.split("_")[1])
+
+            pm, mpm = None, None
+            if mask_attn:
+                pm = patch_attn_mask[k].unsqueeze(0)
+                mpm = mini_patch_attn_mask[k]
 
             _, patch_att, region_att = get_region_attention_scores(
                 region,
@@ -3125,6 +3484,8 @@ def get_slide_blended_heatmaps(
                 patch_size=patch_size,
                 mini_patch_size=mini_patch_size,
                 downscale=downscale,
+                patch_attn_mask=pm,
+                mini_patch_attn_mask=mpm,
                 patch_device=patch_device,
                 region_device=region_device,
             ) # (n_patch**2, nhead, patch_size, patch_size) when downscale = 1
@@ -3140,6 +3501,22 @@ def get_slide_blended_heatmaps(
                     right=offset,
                     color=(255, 255, 255),
                 )
+                pm2, mpm2 = None, None
+                if mask_attn:
+                    pm2, mpm2 = get_mask(
+                        slide_path,
+                        segmentation_mask_path,
+                        x,
+                        y,
+                        region_size,
+                        patch_size,
+                        mini_patch_size,
+                        spacing,
+                        backend='asap',
+                        downsample=downsample,
+                        tissue_pixel_value=tissue_pixel_value,
+                        offset=offset,
+                    )
                 region3 = add_margin(
                     region.crop((offset * 2, offset * 2, region_size, region_size)),
                     top=0,
@@ -3148,6 +3525,22 @@ def get_slide_blended_heatmaps(
                     right=offset * 2,
                     color=(255, 255, 255),
                 )
+                pm3, mpm3 = None, None
+                if mask_attn:
+                    pm3, mpm3 = get_mask(
+                        slide_path,
+                        segmentation_mask_path,
+                        x,
+                        y,
+                        region_size,
+                        patch_size,
+                        mini_patch_size,
+                        spacing,
+                        backend='asap',
+                        downsample=downsample,
+                        tissue_pixel_value=tissue_pixel_value,
+                        offset=offset*2,
+                    )
                 region4 = add_margin(
                     region.crop((offset * 3, offset * 3, region_size, region_size)),
                     top=0,
@@ -3156,6 +3549,22 @@ def get_slide_blended_heatmaps(
                     right=offset * 3,
                     color=(255, 255, 255),
                 )
+                pm4, mpm4 = None, None
+                if mask_attn:
+                    pm4, mpm4 = get_mask(
+                        slide_path,
+                        segmentation_mask_path,
+                        x,
+                        y,
+                        region_size,
+                        patch_size,
+                        mini_patch_size,
+                        spacing,
+                        backend='asap',
+                        downsample=downsample,
+                        tissue_pixel_value=tissue_pixel_value,
+                        offset=offset*3,
+                    )
 
                 _, patch_att_2, region_att_2 = get_region_attention_scores(
                     region2,
@@ -3164,6 +3573,8 @@ def get_slide_blended_heatmaps(
                     patch_size=patch_size,
                     mini_patch_size=mini_patch_size,
                     downscale=downscale,
+                    patch_attn_mask=pm2,
+                    mini_patch_attn_mask=mpm2,
                     patch_device=patch_device,
                     region_device=region_device,
                 )
@@ -3174,6 +3585,8 @@ def get_slide_blended_heatmaps(
                     patch_size=patch_size,
                     mini_patch_size=mini_patch_size,
                     downscale=downscale,
+                    patch_attn_mask=pm3,
+                    mini_patch_attn_mask=mpm3,
                     patch_device=patch_device,
                     region_device=region_device,
                 )
@@ -3184,6 +3597,8 @@ def get_slide_blended_heatmaps(
                     patch_size=patch_size,
                     mini_patch_size=mini_patch_size,
                     downscale=downscale,
+                    patch_attn_mask=pm4,
+                    mini_patch_attn_mask=mpm4,
                     patch_device=patch_device,
                     region_device=region_device,
                 )
@@ -3256,9 +3671,6 @@ def get_slide_blended_heatmaps(
                     ) as t3:
                         for i in t3:
 
-                            x, y = int(fp.stem.split("_")[0]), int(
-                                fp.stem.split("_")[1]
-                            )
                             coords[(j,i)].append((x, y))
 
                             patch_att_scores = concat_patch_scores(
@@ -3267,6 +3679,7 @@ def get_slide_blended_heatmaps(
                                 patch_size=patch_size,
                                 size=(s // n_patch,) * 2,
                             )
+                            patch_overlay = np.ones_like(patch_att_scores) * 100
 
                             if smoothing.patch:
                                 patch_att_scores_2 = concat_patch_scores(
@@ -3416,6 +3829,8 @@ def stitch_slide_heatmaps(
     cmap: matplotlib.colors.LinearSegmentedColormap = plt.get_cmap("coolwarm"),
     restrict_to_tissue: bool = False,
     seg_params: Optional[Dict] = None,
+    segmentation_mask_path: Optional[str] = False,
+    tissue_pixel_value: int = 1,
 ):
     """
     Returns region-level heatmaps stitched together at the slide-level.
@@ -3441,18 +3856,22 @@ def stitch_slide_heatmaps(
     wsi_object = WholeSlideImage(slide_path)
 
     if restrict_to_tissue:
-        # segment tissue
-        seg_level = wsi_object.get_best_level_for_downsample_custom(downsample)
-        filter_params = seg_params.filter_params
-        wsi_object.segmentTissue(
-            spacing=spacing,
-            seg_level=seg_level,
-            sthresh=seg_params.sthresh,
-            mthresh=seg_params.mthresh,
-            close=seg_params.close,
-            use_otsu=seg_params.use_otsu,
-            filter_params=filter_params,
-        )
+        if segmentation_mask_path is None:
+            # segment tissue
+            seg_level = wsi_object.get_best_level_for_downsample_custom(downsample)
+            wsi_object.segmentTissue(
+                seg_level=seg_level,
+                sthresh=seg_params.sthresh,
+                mthresh=seg_params.mthresh,
+                close=seg_params.close,
+                use_otsu=seg_params.use_otsu,
+            )
+        else:
+            wsi_object.loadSegmentation(
+                mask_fp=Path(segmentation_mask_path),
+                downsample=downsample,
+                tissue_val=tissue_pixel_value,
+            )
 
     vis_level = wsi_object.get_best_level_for_downsample_custom(downsample)
     (width, height) = wsi_object.level_dimensions[vis_level]
@@ -3507,8 +3926,8 @@ def stitch_slide_heatmaps(
                 x_downsampled : min(x_downsampled + w_downsampled, width),
             ]
             tissue_mask = (tissue_mask > 0).astype(int)
-            if highlight:
-                tissue_mask = tissue_mask[..., np.newaxis]
+            # if highlight:
+            tissue_mask = tissue_mask[..., np.newaxis]
             canvas[
                 y_downsampled : min(y_downsampled + h_downsampled, height),
                 x_downsampled : min(x_downsampled + w_downsampled, width),

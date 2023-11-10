@@ -3,6 +3,8 @@ import torch
 import random
 import numpy as np
 import pandas as pd
+import wholeslidedata as wsd
+
 from PIL import Image
 from pathlib import Path
 from torchvision import transforms, datasets
@@ -120,6 +122,18 @@ class ClassificationDatasetOptions:
     label_encoding: Optional[str] = None
     transform: Optional[Callable] = None
     blinded: bool = False
+    num_classes: Optional[int] = None
+    mask_attention: bool = False
+    region_dir: Optional[Path] = None
+    spacing: float = 0.5
+    region_size: int = 4096
+    patch_size: int = 256
+    mini_patch_size: int = 16
+    downsample: int = 4
+    backend: str = "pyvips"
+    region_format: str = "jpg"
+    tissue_pixel_value: int = 1
+    tissue_pct: float = 0.0
 
 
 @dataclass
@@ -129,7 +143,7 @@ class SurvivalDatasetOptions:
     tiles_df: pd.DataFrame
     features_dir: Path
     label_name: str
-    transform: Optional[Callable] = None,
+    transform: Optional[Callable] = (None,)
 
 
 class DatasetFactory:
@@ -145,6 +159,24 @@ class DatasetFactory:
                     options.df,
                     options.features_dir,
                     options.transform,
+                )
+            elif options.mask_attention:
+                self.dataset = ExtractedFeaturesMaskedDataset(
+                    options.df,
+                    options.features_dir,
+                    Path(options.region_dir),
+                    options.spacing,
+                    options.region_size,
+                    options.patch_size,
+                    options.mini_patch_size,
+                    options.downsample,
+                    options.backend,
+                    options.region_format,
+                    options.tissue_pixel_value,
+                    options.tissue_pct,
+                    options.transform,
+                    options.label_name,
+                    options.label_mapping,
                 )
             elif options.label_encoding == "ordinal":
                 self.dataset = ExtractedFeaturesOrdinalDataset(
@@ -300,9 +332,11 @@ class BlindedExtractedFeaturesDataset(torch.utils.data.Dataset):
         df: pd.DataFrame,
         features_dir: Path,
         transform: Optional[Callable] = None,
+        num_classes: Optional[int] = None,
     ):
         self.features_dir = features_dir
         self.transform = transform
+        self.num_classes = num_classes
 
         self.seed = 0
         self.df, _ = self.prepare_data(df)
@@ -614,6 +648,144 @@ class ExtractedFeaturesSlideLevelSurvivalDataset(torch.utils.data.Dataset):
         return len(self.df)
 
 
+class ExtractedFeaturesMaskedDataset(ExtractedFeaturesDataset):
+    def __init__(
+        self,
+        df: pd.DataFrame,
+        features_dir: Path,
+        region_dir: Path,
+        spacing: float,
+        region_size: int,
+        patch_size: int = 256,
+        mini_patch_size: int = 16,
+        downsample: int = 4,
+        backend: str = "pyvips",
+        region_format: str = "jpg",
+        tissue_pixel_value: int = 1,
+        tissue_pct: float = 0.0,
+        transform: Optional[Callable] = None,
+        label_name: str = "label",
+        label_mapping: Dict[int, int] = {},
+        verbose: bool = True,
+    ):
+        super().__init__(df, features_dir, transform, label_name, label_mapping)
+        self.region_dir = region_dir
+        self.region_format = region_format
+        self.spacing = spacing
+        self.region_size = region_size
+        self.patch_size = patch_size
+        self.mini_patch_size = mini_patch_size
+        self.downsample = downsample
+        self.backend = backend
+        self.tissue_pixel_value = tissue_pixel_value
+        self.tissue_pct = tissue_pct
+        self.verbose = verbose
+
+        self.masks = self.generate_masks()
+
+    def generate_masks(self):
+        self.slide_id_to_tissue_pct = {}
+        id_path_mask = zip(
+            self.df.slide_id.unique().tolist(),
+            self.df.slide_path.unique().tolist(),
+            self.df.segmentation_mask_path.unique().tolist(),
+        )
+        with tqdm.tqdm(
+            id_path_mask,
+            desc=(f"Computing masks based on tissue content"),
+            unit=f" slide",
+            total=self.df.slide_id.nunique(),
+            leave=True,
+            disable=(not self.verbose),
+        ) as t:
+            for (sid, slide_fp, mask_fp) in t:
+                # load the slide
+                wsi = wsd.WholeSlideImage(Path(slide_fp), backend=self.backend)
+                # load segmentation mask
+                mask = wsd.WholeSlideImage(Path(mask_fp), backend=self.backend)
+                # scale coordinates from slide's level 0 to mask's level 0
+                sx, sy = tuple(i / j for i, j in zip(mask.shapes[0], wsi.shapes[0]))
+                # find spacing of level closest to desired downsample
+                idx = np.argmin([abs(self.downsample - d) for d in mask.downsamplings])
+                downsample_spacing = mask.spacings[idx]
+                # scale region size from true spacing to downsample spacing
+                # we excepct mask spacings to be a subset of slide spacings
+                # the ratio should thus give an integer
+                sr = int(downsample_spacing / self.spacing)
+                scaled_region_size = self.region_size // sr
+                # scale patch_size and mini_patch_size
+                scaled_patch_size = self.patch_size // sr
+                scaled_mini_patch_size = self.mini_patch_size // sr
+                # retrieve region's (x,y) coordinates
+                # should appear in the same order as in the corresponding slide feature vector
+                coordinates = sorted(
+                    [p.stem for p in Path(self.region_dir, sid, "imgs").glob(f"*.{self.region_format}")]
+                )
+                coordinates = [
+                    (int(p.split("_")[0]), int(p.split("_")[1])) for p in coordinates
+                ]
+                tissue_pcts = []
+                for i, (x, y) in enumerate(coordinates):
+                    x_mask, y_mask = int(x * sx), int(y * sy)
+                    region = mask.get_patch(
+                        x=x_mask,
+                        y=y_mask,
+                        width=scaled_region_size,
+                        height=scaled_region_size,
+                        spacing=downsample_spacing,
+                        center=False,
+                    )
+                    assert region.shape[-1] == 1, f"expecting 1 channel, found {region.shape[-1]} channels"
+                    region = region[...,0]
+                    #TODO: make sure there is no issue with slide (x,y) axis gets inverted in numpy
+
+                    def split_into_blocks(arr, block_size):
+                        """
+                        Split a 2D array into smaller blocks of given block_size.
+                        """
+                        # Split the array into sub-arrays of size block_size along the rows
+                        rows_split = np.split(arr, arr.shape[0] // block_size)
+                        # Further split these sub-arrays along the columns
+                        blocks = [
+                            np.split(block, arr.shape[1] // block_size, axis=1)
+                            for block in rows_split
+                        ]
+                        # Flatten the list of blocks
+                        flattened_blocks = [
+                            block for sublist in blocks for block in sublist
+                        ]
+                        return np.array(flattened_blocks)
+
+                    # compute tissue percentage for each mini patch in each patch
+                    region_patches = split_into_blocks(region, scaled_patch_size)
+
+                    region_mini_patches = []
+                    for p in region_patches:
+                        mp = split_into_blocks(p, scaled_mini_patch_size)
+                        region_mini_patches.append(mp)
+                    region_mini_patches = np.stack(region_mini_patches)
+                    tissue = region_mini_patches == self.tissue_pixel_value
+                    tissue_pct = np.sum(tissue, axis=(-2, -1)) / tissue[0][0].size
+                    tissue_pcts.append(tissue_pct)
+
+                tissue_pcts = np.stack(tissue_pcts)  # (M, npatch**2, nminipatch**2)
+                self.slide_id_to_tissue_pct[sid] = tissue_pcts
+
+    def __getitem__(self, idx: int):
+        row = self.df.loc[idx]
+        slide_id = row.slide_id
+        fp = Path(self.features_dir, f"{slide_id}.pt")
+        features = torch.load(fp)
+        label = row.label
+        if self.transform:
+            features = self.transform(features, slide_id, self.seed)
+        tissue_pct = self.slide_id_to_tissue_pct[
+            slide_id
+        ]  # (M, npatch**2, nminipatch**2)
+        tissue_pct = torch.Tensor(tissue_pct)
+        return idx, features, label, tissue_pct
+
+
 class StackedRegionsDataset(torch.utils.data.Dataset):
     def __init__(
         self,
@@ -727,7 +899,7 @@ class RegionFilepathsDataset(torch.utils.data.Dataset):
         slide_id = row.slide_id
         slide_dir = Path(self.region_dir, slide_id, "imgs")
         regions = [str(fp) for fp in slide_dir.glob(f"*.{self.format}")]
-        return idx, regions, slide_id
+        return idx, regions, slide_id, None
 
     def __len__(self):
         return len(self.df)

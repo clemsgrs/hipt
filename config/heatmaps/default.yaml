@@ -7,7 +7,13 @@ region_fp:  # path to input region
 # region_fp: 'data/image_2k.png'  # path to input region
 
 slide_fp: # path to input slide
+segmentation_mask_fp:
+tissue_pixel_value:
+
 slide_csv: # path to .csv file which contains a 'slide_path' column
+num_workers: 8
+
+level:
 
 region_dir: # path to folder containing HS2P output (extracted regions)
 region_size: 2048 # if slide_fp is provided, must indicate the size of the regions extracted in region_dir
@@ -17,6 +23,7 @@ region_weights: '/data/pathology/projects/ais-cap/code/git/clemsgrs/hipt/checkpo
 img_size_pretrained:
 slide_weights: # slide-level Transformer weights
 
+mask_attn: False
 display: False  # whether to display the heatmaps of multiple attention heads on a single image
 spacing: 0.5 # when processing a slide, indicate the pixel spacing which the regions were extracted at (in mpp)
 downscale: 1 # how much to downscale the output image by (e.g. downscale=4 will resize 4096x4096 regions to 1024x1024)
@@ -44,7 +51,7 @@ wandb:
   project: 'hipt'
   username: 'clemsg'
   exp_name: '${experiment_name}'
-  tags:
+  tags: ['heatmaps', '${level}', '${region_size}']
   dir: '/home/user'
   group:
   resume_id:

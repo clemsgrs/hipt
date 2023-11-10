@@ -89,6 +89,8 @@ class ModelFactory:
                             freeze_vit_region_pos_embed=model_options.freeze_vit_region_pos_embed,
                             dropout=model_options.dropout,
                             slide_pos_embed=model_options.slide_pos_embed,
+                            mask_attn=model_options.mask_attn,
+                            img_size_pretrained=model_options.img_size_pretrained,
                         )
                     else:
                         self.model = LocalGlobalOrdinalHIPT(
@@ -100,6 +102,8 @@ class ModelFactory:
                             freeze_vit_region_pos_embed=model_options.freeze_vit_region_pos_embed,
                             dropout=model_options.dropout,
                             slide_pos_embed=model_options.slide_pos_embed,
+                            mask_attn=model_options.mask_attn,
+                            img_size_pretrained=model_options.img_size_pretrained,
                         )
                 else:
                     self.model = LocalGlobalHIPT(
@@ -113,6 +117,7 @@ class ModelFactory:
                         freeze_vit_region_pos_embed=model_options.freeze_vit_region_pos_embed,
                         dropout=model_options.dropout,
                         slide_pos_embed=model_options.slide_pos_embed,
+                        mask_attn=model_options.mask_attn,
                         img_size_pretrained=model_options.img_size_pretrained,
                     )
             else:
@@ -129,6 +134,7 @@ class ModelFactory:
                     freeze_vit_region_pos_embed=model_options.freeze_vit_region_pos_embed,
                     dropout=model_options.dropout,
                     slide_pos_embed=model_options.slide_pos_embed,
+                    masked_attn=model_options.masked_attn,
                     img_size_pretrained=model_options.img_size_pretrained,
                 )
         elif task == "regression":
@@ -162,6 +168,8 @@ class ModelFactory:
                         freeze_vit_region_pos_embed=model_options.freeze_vit_region_pos_embed,
                         dropout=model_options.dropout,
                         slide_pos_embed=model_options.slide_pos_embed,
+                        mask_attn=model_options.mask_attn,
+                        img_size_pretrained=model_options.img_size_pretrained,
                     )
 
     def get_model(self):
@@ -221,7 +229,7 @@ class GlobalHIPT(nn.Module):
 
     def forward(self, x):
         # x = [M, embed_dim_region]
-        x = self.global_phi(x) # (M, d_model)
+        x = self.global_phi(x)  # (M, d_model)
 
         if self.slide_pos_embed.use:
             x = self.pos_encoder(x)
@@ -276,6 +284,7 @@ class LocalGlobalHIPT(nn.Module):
         freeze_vit_region_pos_embed: bool = True,
         dropout: float = 0.25,
         slide_pos_embed: Optional[DictConfig] = None,
+        mask_attn: bool = False,
         img_size_pretrained: Optional[int] = None,
     ):
         super(LocalGlobalHIPT, self).__init__()
@@ -289,6 +298,7 @@ class LocalGlobalHIPT(nn.Module):
             patch_size=patch_size,
             input_embed_dim=embed_dim_patch,
             output_embed_dim=embed_dim_region,
+            mask_attn=mask_attn,
             img_size_pretrained=img_size_pretrained,
         )
 
@@ -364,10 +374,18 @@ class LocalGlobalHIPT(nn.Module):
 
         self.classifier = nn.Linear(192, num_classes)
 
-    def forward(self, x):
+    def forward(self, x, pct: Optional[torch.Tensor] = None, pct_thresh: float = 0.0):
+        mask_patch = None
+        if pct is not None:
+            pct_patch = torch.sum(pct, axis=-1) / pct[0].numel()
+            mask_patch = (pct_patch > pct_thresh).int()  # (M, npatch**2) e.g. (M, 64)
+            # add the [CLS] token to the mask
+            cls_token = mask_patch.new_ones((mask_patch.size(0),1))
+            mask_patch = torch.cat((cls_token, mask_patch), dim=1)  # [M, num_patches+1]
         # x = [M, 256, 384]
         x = self.vit_region(
-            x.unfold(1, self.npatch, self.npatch).transpose(1, 2)
+            x.unfold(1, self.npatch, self.npatch).transpose(1, 2),
+            mask=mask_patch,
         )  # [M, 192]
         x = self.global_phi(x)  # [M, 192]
 
@@ -431,6 +449,7 @@ class HIPT(nn.Module):
         split_across_gpus: bool = False,
         dropout: float = 0.25,
         slide_pos_embed: Optional[DictConfig] = None,
+        mask_attn: bool = False,
         img_size_pretrained: Optional[int] = None,
     ):
         super(HIPT, self).__init__()
@@ -451,6 +470,7 @@ class HIPT(nn.Module):
             img_size=patch_size,
             patch_size=mini_patch_size,
             embed_dim=embed_dim_patch,
+            mask_attn=mask_attn,
         )
 
         if pretrain_vit_patch and Path(pretrain_vit_patch).is_file():
@@ -492,6 +512,7 @@ class HIPT(nn.Module):
             patch_size=patch_size,
             input_embed_dim=embed_dim_patch,
             output_embed_dim=embed_dim_region,
+            mask_attn=mask_attn,
             img_size_pretrained=img_size_pretrained,
         )
 
@@ -570,7 +591,19 @@ class HIPT(nn.Module):
 
         self.classifier = nn.Linear(192, num_classes)
 
-    def forward(self, x):
+    def forward(self, x, pct: Optional[torch.Tensor] = None, pct_thresh: float = 0.0):
+        mask_patch, mask_mini_patch = None, None
+        if pct is not None:
+            mask_mini_patch = (pct > pct_thresh).int()  # (M, num_patches, nminipatch**2)
+            # add the [CLS] token to the mask
+            cls_token = mask_mini_patch.new_ones((mask_mini_patch.size(0),mask_mini_patch.size(1),1))
+            mask_mini_patch = torch.cat((cls_token, mask_mini_patch), dim=2)  # [M, num_patches, nminipatch**2+1]
+            # infer patch-level mask
+            pct_patch = torch.sum(pct, axis=-1) / pct[0].numel()
+            mask_patch = (pct_patch > pct_thresh).int()
+            # add the [CLS] token to the mask
+            cls_token = mask_patch.new_ones((mask_patch.size(0),1))
+            mask_patch = torch.cat((cls_token, mask_patch), dim=1)  # [M, num_patches+1]
         # x = [M, 3, region_size, region_size]
         # TODO: add prepare_img_tensor method
         x = x.unfold(2, self.ps, self.ps).unfold(
@@ -582,17 +615,32 @@ class HIPT(nn.Module):
         if self.split_across_gpus:
             x = x.to(self.device_patch, non_blocking=True)  # [M*num_patches, 3, ps, ps]
 
+        if pct is not None:
+            mask_mini_patch = rearrange(
+                mask_mini_patch, "b c p -> (b c) p"
+            )  # [M*num_patches, nminipatch**2]
+
         patch_features = []
         for mini_bs in range(0, x.shape[0], self.num_patches):
-            minibatch = x[mini_bs : mini_bs + self.num_patches]
-            f = self.vit_patch(minibatch).detach()  # [num_patches, 384]
+            minibatch = x[
+                mini_bs : mini_bs + self.num_patches
+            ]  # [num_patches, 3, ps, ps] = [npatch*npatch, 3, ps, ps] -> [num_patches, nminipatch**2+1, 768]
+            sub_mask_mini_patch = None
+            if pct is not None:
+                sub_mask_mini_patch = mask_mini_patch[
+                    mini_bs : mini_bs + self.num_patches
+                ]  # [num_patches, nminipatch**2+1]
+            f = self.vit_patch(
+                minibatch, mask=sub_mask_mini_patch
+            ).detach()  # [num_patches, 384]
             patch_features.append(f.unsqueeze(0))
 
         x = torch.vstack(patch_features)  # [M, num_patches, 384]
         if self.split_across_gpus:
             x = x.to(self.device_region, non_blocking=True)
         x = self.vit_region(
-            x.unfold(1, self.npatch, self.npatch).transpose(1, 2)
+            x.unfold(1, self.npatch, self.npatch).transpose(1, 2),
+            mask=mask_patch,
         )  # x = [M, npatch, npatch, 384] -> [M, 192]
 
         x = self.global_phi(x)
@@ -653,8 +701,9 @@ class GlobalFeatureExtractor(nn.Module):
         embed_dim_patch: int = 384,
         embed_dim_region: int = 192,
         split_across_gpus: bool = False,
-        verbose: bool = True,
+        mask_attn: bool = False,
         img_size_pretrained: Optional[int] = None,
+        verbose: bool = True,
     ):
         super(GlobalFeatureExtractor, self).__init__()
         checkpoint_key = "teacher"
@@ -671,6 +720,7 @@ class GlobalFeatureExtractor(nn.Module):
             img_size=patch_size,
             patch_size=mini_patch_size,
             embed_dim=embed_dim_patch,
+            mask_attn=mask_attn,
         )
 
         if Path(pretrain_vit_patch).is_file():
@@ -711,6 +761,7 @@ class GlobalFeatureExtractor(nn.Module):
             patch_size=patch_size,
             input_embed_dim=embed_dim_patch,
             output_embed_dim=embed_dim_region,
+            mask_attn=mask_attn,
             img_size_pretrained=img_size_pretrained,
         )
 
@@ -749,7 +800,19 @@ class GlobalFeatureExtractor(nn.Module):
         if split_across_gpus:
             self.vit_region.to(self.device_region)
 
-    def forward(self, x):
+    def forward(self, x, pct: Optional[torch.Tensor] = None, pct_thresh: float = 0.0):
+        mask_patch, mask_mini_patch = None, None
+        if pct is not None:
+            mask_mini_patch = (pct > pct_thresh).int() # [num_patches, nminipatch**2]
+            # add the [CLS] token to the mask
+            cls_token = mask_mini_patch.new_ones((mask_mini_patch.size(0),mask_mini_patch.size(1),1))
+            mask_mini_patch = torch.cat((cls_token, mask_mini_patch), dim=2)  # [M, num_patches, nminipatch**2+1]
+            # infer patch-level mask
+            pct_patch = torch.sum(pct, axis=-1) / pct[0].numel()
+            mask_patch = (pct_patch > pct_thresh).int()
+            # add the [CLS] token to the mask
+            cls_token = mask_patch.new_ones((mask_patch.size(0),1))
+            mask_patch = torch.cat((cls_token, mask_patch), dim=1)  # [M, num_patches+1]
         # x = [1, 3, region_size, region_size]
         # TODO: add prepare_img_tensor method
         x = x.unfold(2, self.ps, self.ps).unfold(
@@ -761,7 +824,12 @@ class GlobalFeatureExtractor(nn.Module):
         if self.split_across_gpus:
             x = x.to(self.device_patch, non_blocking=True)  # [num_patches, 3, ps, ps]
 
-        patch_features = self.vit_patch(x)  # [num_patches, 384]
+        # if pct is not None:
+        #     mask_mini_patch = rearrange(
+        #         mask_mini_patch, "b c p -> (b c) p"
+        #     )  # [1*num_patches, nminipatch**2]
+
+        patch_features = self.vit_patch(x, mask=mask_mini_patch)  # [num_patches, 384]
         patch_features = patch_features.unsqueeze(0)  # [1, num_patches, 384]
         patch_features = patch_features.unfold(1, self.npatch, self.npatch).transpose(
             1, 2
@@ -769,7 +837,9 @@ class GlobalFeatureExtractor(nn.Module):
         if self.split_across_gpus:
             patch_features = patch_features.to(self.device_region, non_blocking=True)
 
-        region_feature = self.vit_region(patch_features).cpu()  # [1, 192]
+        region_feature = self.vit_region(
+            patch_features, mask=mask_patch
+        ).cpu()  # [1, 192]
 
         return region_feature
 
@@ -781,6 +851,7 @@ class LocalFeatureExtractor(nn.Module):
         mini_patch_size: int = 16,
         pretrain_vit_patch: str = "path/to/pretrained/vit_patch/weights.pth",
         embed_dim_patch: int = 384,
+        mask_attn: bool = False,
         verbose: bool = True,
     ):
         super(LocalFeatureExtractor, self).__init__()
@@ -792,6 +863,7 @@ class LocalFeatureExtractor(nn.Module):
             img_size=patch_size,
             patch_size=mini_patch_size,
             embed_dim=embed_dim_patch,
+            mask_attn=mask_attn,
         )
 
         if Path(pretrain_vit_patch).is_file():
@@ -824,7 +896,13 @@ class LocalFeatureExtractor(nn.Module):
         if verbose:
             print("Done")
 
-    def forward(self, x):
+    def forward(self, x, pct: Optional[torch.Tensor] = None, pct_thresh: float = 0.0):
+        mask_mini_patch = None
+        if pct is not None:
+            mask_mini_patch = (pct > pct_thresh).int()  # [num_patches, nminipatch**2]
+            # add the [CLS] token to the mask
+            cls_token = mask_patch.new_ones((mask_mini_patch.size(dim=0),1))
+            mask_mini_patch = torch.cat((cls_tokens, mask_mini_patch), dim=1)  # [num_patches, num_mini_patches+1]
         # x = [1, 3, region_size, region_size]
         # TODO: add prepare_img_tensor method
         x = x.unfold(2, self.ps, self.ps).unfold(
@@ -832,7 +910,14 @@ class LocalFeatureExtractor(nn.Module):
         )  # [1, 3, npatch, region_size, ps] -> [1, 3, npatch, npatch, ps, ps]
         x = rearrange(x, "b c p1 p2 w h -> (b p1 p2) c w h")  # [num_patches, 3, ps, ps]
 
-        patch_feature = self.vit_patch(x).detach().cpu()  # [num_patches, 384]
+        # if pct is not None:
+        #     mask_mini_patch = rearrange(
+        #         mask_mini_patch, "b c p -> (b c) p"
+        #     )  # [1*num_patches, nminipatch**2]
+
+        patch_feature = (
+            self.vit_patch(x, mask=mask_mini_patch).detach().cpu()
+        )  # [num_patches, 384]
 
         return patch_feature
 
@@ -844,8 +929,9 @@ class PatchEmbedder(nn.Module):
         mini_patch_size: int = 16,
         pretrain_vit_patch: str = "path/to/pretrained/vit_patch/weights.pth",
         embed_dim: int = 384,
-        verbose: bool = True,
+        mask_attn: bool = False,
         img_size_pretrained: Optional[int] = None,
+        verbose: bool = True,
     ):
         super(PatchEmbedder, self).__init__()
         checkpoint_key = "teacher"
@@ -854,6 +940,7 @@ class PatchEmbedder(nn.Module):
             img_size=img_size,
             patch_size=mini_patch_size,
             embed_dim=embed_dim,
+            mask_attn=mask_attn,
             img_size_pretrained=img_size_pretrained,
         )
 
@@ -1228,6 +1315,8 @@ class LocalGlobalOrdinalHIPT(LocalGlobalHIPT):
         freeze_vit_region_pos_embed: bool = True,
         dropout: float = 0.25,
         slide_pos_embed: Optional[DictConfig] = None,
+        mask_attn: bool = False,
+        img_size_pretrained: Optional[int] = None,
     ):
         super().__init__(
             num_classes,
@@ -1240,6 +1329,8 @@ class LocalGlobalOrdinalHIPT(LocalGlobalHIPT):
             freeze_vit_region_pos_embed,
             dropout,
             slide_pos_embed,
+            mask_attn,
+            img_size_pretrained,
         )
         self.classifier = nn.Linear(192, num_classes - 1)
 
@@ -1257,6 +1348,8 @@ class LocalGlobalCoralHIPT(LocalGlobalHIPT):
         freeze_vit_region_pos_embed: bool = True,
         dropout: float = 0.25,
         slide_pos_embed: Optional[DictConfig] = None,
+        mask_attn: bool = False,
+        img_size_pretrained: Optional[int] = None,
     ):
         super().__init__(
             num_classes,
@@ -1269,15 +1362,25 @@ class LocalGlobalCoralHIPT(LocalGlobalHIPT):
             freeze_vit_region_pos_embed,
             dropout,
             slide_pos_embed,
+            mask_attn,
+            img_size_pretrained,
         )
         self.classifier = nn.Linear(192, 1, bias=False)
         self.num_classes = num_classes
         self.b = nn.Parameter(torch.zeros(self.num_classes - 1, device="cuda").float())
 
-    def forward(self, x):
+    def forward(self, x, pct: Optional[torch.Tensor] = None, pct_thresh: float = 0.0):
+        mask_patch = None
+        if pct is not None:
+            pct_patch = torch.sum(pct, axis=-1) / pct[0].numel()
+            mask_patch = (pct_patch > pct_thresh).int()  # (M, npatch**2) e.g. (M, 64)
+            # add the [CLS] token to the mask
+            cls_token = mask_patch.new_ones((mask_patch.size(0),1))
+            mask_patch = torch.cat((cls_token, mask_patch), dim=1)  # [M, num_patches+1]
         # x = [M, 256, 384]
         x = self.vit_region(
-            x.unfold(1, self.npatch, self.npatch).transpose(1, 2)
+            x.unfold(1, self.npatch, self.npatch).transpose(1, 2),
+            mask=mask_patch,
         )  # [M, 192]
         x = self.global_phi(x)  # [M, 192]
 
@@ -1326,6 +1429,8 @@ class LocalGlobalRegressionHIPT(LocalGlobalHIPT):
         freeze_vit_region_pos_embed: bool = True,
         dropout: float = 0.25,
         slide_pos_embed: Optional[DictConfig] = None,
+        mask_attn: bool = False,
+        img_size_pretrained: Optional[int] = None,
     ):
         super().__init__(
             num_classes,
@@ -1338,5 +1443,7 @@ class LocalGlobalRegressionHIPT(LocalGlobalHIPT):
             freeze_vit_region_pos_embed,
             dropout,
             slide_pos_embed,
+            mask_attn,
+            img_size_pretrained,
         )
         self.classifier = nn.Linear(192, 1)

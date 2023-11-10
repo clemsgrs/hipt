@@ -21,6 +21,7 @@ from source.attention_visualization_utils import (
     get_patch_model,
     get_region_model,
     get_slide_model,
+    generate_masks,
     create_patch_heatmaps_indiv,
     create_patch_heatmaps_concat,
     create_region_heatmaps_indiv,
@@ -35,7 +36,7 @@ from source.attention_visualization_utils import (
 )
 
 
-@hydra.main(version_base="1.2.0", config_path="config/heatmaps", config_name="default")
+@hydra.main(version_base="1.2.0", config_path="config/heatmaps", config_name="ecp_masked_attn")
 def main(cfg: DictConfig):
     distributed = torch.cuda.device_count() > 1
     if distributed:
@@ -84,11 +85,19 @@ def main(cfg: DictConfig):
         device = torch.device(f"cuda:{gpu_id}")
 
     patch_weights = Path(cfg.patch_weights)
-    patch_model = get_patch_model(pretrained_weights=patch_weights, device=device)
+    patch_model = get_patch_model(
+        pretrained_weights=patch_weights,
+        mask_attn=cfg.mask_attn,
+        device=device,
+    )
 
     region_weights = Path(cfg.region_weights)
     region_model = get_region_model(
-        pretrained_weights=region_weights, region_size=cfg.region_size, img_size_pretrained=cfg.img_size_pretrained, device=device,
+        pretrained_weights=region_weights,
+        region_size=cfg.region_size,
+        mask_attn=cfg.mask_attn,
+        img_size_pretrained=cfg.img_size_pretrained,
+        device=device,
     )
 
     if cfg.slide_weights:
@@ -193,6 +202,19 @@ def main(cfg: DictConfig):
 
         output_dir_slide = Path(output_dir, slide_id)
 
+        mask_p, mask_mp = None, None
+        if cfg.mask_attn:
+            mask_p, mask_mp = generate_masks(
+                slide_id,
+                slide_path,
+                cfg.segmentation_mask_fp,
+                region_dir,
+                region_size=cfg.region_size,
+                spacing=cfg.spacing,
+                downsample=1,
+                tissue_pixel_value=cfg.tissue_pixel_value,
+            )
+
         ########################
         # PATCH-LEVEL HEATMAPS #
         ########################
@@ -210,6 +232,13 @@ def main(cfg: DictConfig):
             save_to_disk=False,
             granular=cfg.smoothing.patch,
             offset=cfg.smoothing.offset.patch,
+            slide_path=slide_path,
+            segmentation_mask_path=cfg.segmentation_mask_fp,
+            spacing=cfg.spacing,
+            downsample=1,
+            tissue_pixel_value=cfg.tissue_pixel_value,
+            patch_attn_mask=mask_p,
+            mini_patch_attn_mask=mask_mp,
             patch_device=device,
             region_device=device,
         )
@@ -325,7 +354,14 @@ def main(cfg: DictConfig):
             highlight=cfg.highlight,
             granular=cfg.smoothing.region,
             offset=cfg.smoothing.offset.region,
-            smoothing=cfg.gaussian_smoothing,
+            gaussian_smoothing=cfg.gaussian_smoothing,
+            slide_path=slide_path,
+            segmentation_mask_path=cfg.segmentation_mask_fp,
+            spacing=cfg.spacing,
+            downsample=1,
+            tissue_pixel_value=cfg.tissue_pixel_value,
+            patch_attn_mask=mask_p,
+            mini_patch_attn_mask=mask_mp,
             patch_device=device,
             region_device=device,
         )
@@ -523,6 +559,8 @@ def main(cfg: DictConfig):
                 spacing=cfg.spacing,
                 gaussian_smoothing=cfg.gaussian_smoothing,
                 gaussian_offset=cfg.gaussian_offset,
+                patch_attn_mask=mask_p,
+                mini_patch_attn_mask=mask_mp,
                 patch_device=device,
                 region_device=device,
                 slide_device=device,
@@ -540,6 +578,9 @@ def main(cfg: DictConfig):
                 downscale=cfg.downscale,
                 cmap=light_jet,
                 save_to_disk=True,
+                restrict_to_tissue=cfg.restrict_to_tissue,
+                segmentation_mask_path=cfg.segmentation_mask_fp,
+                tissue_pixel_value=cfg.tissue_pixel_value,
             )
             stitched_hms[f"slide-level"] = stitched_hm
 
@@ -612,7 +653,12 @@ def main(cfg: DictConfig):
                 save_to_disk=False,
                 smoothing=cfg.smoothing,
                 slide_path=slide_path,
+                segmentation_mask_path=cfg.segmentation_mask_fp,
                 spacing=cfg.spacing,
+                downsample=1,
+                tissue_pixel_value=cfg.tissue_pixel_value,
+                patch_attn_mask=mask_p,
+                mini_patch_attn_mask=mask_mp,
                 patch_device=device,
                 region_device=device,
                 slide_device=device,
@@ -634,6 +680,9 @@ def main(cfg: DictConfig):
                         downscale=cfg.downscale,
                         cmap=light_jet,
                         save_to_disk=True,
+                        restrict_to_tissue=cfg.restrict_to_tissue,
+                        segmentation_mask_path=cfg.segmentation_mask_fp,
+                        tissue_pixel_value=cfg.tissue_pixel_value,
                     )
                     stitched_hms[rhead_num].append(stitched_hm)
 
@@ -847,7 +896,7 @@ def main(cfg: DictConfig):
                     highlight=cfg.highlight,
                     granular=cfg.smoothing.region,
                     offset=cfg.smoothing.offset.region,
-                    smoothing=cfg.gaussian_smoothing,
+                    gaussian_smoothing=cfg.gaussian_smoothing,
                     patch_device=device,
                     region_device=device,
                     main_process=is_main_process(),

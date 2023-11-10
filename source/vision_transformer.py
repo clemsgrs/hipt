@@ -138,6 +138,40 @@ class Attention(nn.Module):
         return x, attn
 
 
+class MaskedAttention(Attention):
+    def forward(self, x, mask):
+        B, seq_length, embed_dim = x.shape
+        qkv = (
+            self.qkv(x)
+            .reshape(B, seq_length, 3, self.num_heads, embed_dim // self.num_heads)
+            .permute(2, 0, 3, 1, 4)
+        )
+        q, k, v = qkv[0], qkv[1], qkv[2]
+
+        # raw attention scores
+        raw_attn = (
+            q @ k.transpose(-2, -1)
+        ) * self.scale  # (M, nhead, seq_length, seq_length)
+
+        # (B, seq_length)
+        mask_ = mask.unsqueeze(1)  # (B, 1, seq_length)
+        mask_ = mask_.unsqueeze(1).expand(
+            -1, self.num_heads, -1, -1
+        )  # (B, nhead, 1, seq_length)
+        # apply the mask so that masked positions have a large negative number,
+        # which becomes zero after softmax, ensuring they do not contribute to the attention scores
+        masked_attn = raw_attn.masked_fill(mask_ == 0, float("-inf"))
+
+        # apply softmax to get the attention weights. Now the masked positions are 0.
+        attn = masked_attn.softmax(dim=-1)
+        attn = self.attn_drop(attn)
+
+        x = (attn @ v).transpose(1, 2).reshape(B, seq_length, embed_dim)
+        x = self.proj(x)
+        x = self.proj_drop(x)
+        return x, attn
+
+
 class Block(nn.Module):
     def __init__(
         self,
@@ -151,17 +185,28 @@ class Block(nn.Module):
         drop_path=0.0,
         act_layer=nn.GELU,
         norm_layer=nn.LayerNorm,
+        mask_attn: bool = False,
     ):
         super().__init__()
         self.norm1 = norm_layer(dim)
-        self.attn = Attention(
-            dim,
-            num_heads=num_heads,
-            qkv_bias=qkv_bias,
-            qk_scale=qk_scale,
-            attn_drop=attn_drop,
-            proj_drop=drop,
-        )
+        if mask_attn:
+            self.attn = MaskedAttention(
+                dim,
+                num_heads=num_heads,
+                qkv_bias=qkv_bias,
+                qk_scale=qk_scale,
+                attn_drop=attn_drop,
+                proj_drop=drop,
+            )
+        else:
+            self.attn = Attention(
+                dim,
+                num_heads=num_heads,
+                qkv_bias=qkv_bias,
+                qk_scale=qk_scale,
+                attn_drop=attn_drop,
+                proj_drop=drop,
+            )
         self.drop_path = DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
         self.norm2 = norm_layer(dim)
         mlp_hidden_dim = int(dim * mlp_ratio)
@@ -172,8 +217,11 @@ class Block(nn.Module):
             drop=drop,
         )
 
-    def forward(self, x, return_attention=False):
-        y, attn = self.attn(self.norm1(x))
+    def forward(self, x, return_attention=False, mask: Optional[torch.Tensor] = None):
+        if mask is not None:
+            y, attn = self.attn(self.norm1(x), mask)
+        else:
+            y, attn = self.attn(self.norm1(x))
         if return_attention:
             return attn
         x = x + self.drop_path(y)
@@ -217,6 +265,7 @@ class VisionTransformer(nn.Module):
         attn_drop_rate: float = 0.0,
         drop_path_rate: float = 0.0,
         norm_layer: Callable = nn.LayerNorm,
+        mask_attn: bool = False,
         img_size_pretrained: Optional[int] = None,
     ):
         super().__init__()
@@ -225,7 +274,9 @@ class VisionTransformer(nn.Module):
 
         num_patches = int(img_size * dino_max_crop_scale // patch_size) ** 2
         if img_size_pretrained:
-            num_patches = int(img_size_pretrained * dino_max_crop_scale // patch_size) ** 2
+            num_patches = (
+                int(img_size_pretrained * dino_max_crop_scale // patch_size) ** 2
+            )
 
         self.patch_embed = PatchEmbed(
             patch_size=patch_size,
@@ -252,6 +303,7 @@ class VisionTransformer(nn.Module):
                     attn_drop=attn_drop_rate,
                     drop_path=dpr[i],
                     norm_layer=norm_layer,
+                    mask_attn=mask_attn,
                 )
                 for i in range(depth)
             ]
@@ -322,29 +374,29 @@ class VisionTransformer(nn.Module):
 
         return self.pos_drop(x)
 
-    def forward(self, x):
+    def forward(self, x, mask: Optional[torch.Tensor] = None):
         # x_in = [num_patches, 3, img_size, img_size], x_out = [num_patches, num_mini_patches+1, 768]
         x = self.prepare_tokens(x)
         for blk in self.blocks:
-            x = blk(x)
+            x = blk(x, mask=mask)
         x = self.norm(x)
         return x[:, 0]
 
-    def get_last_selfattention(self, x):
+    def get_last_selfattention(self, x, mask: Optional[torch.Tensor] = None):
         x = self.prepare_tokens(x)
         for i, blk in enumerate(self.blocks):
             if i < len(self.blocks) - 1:
-                x = blk(x)
+                x = blk(x, mask=mask)
             else:
                 # return attention of the last block
-                return blk(x, return_attention=True)
+                return blk(x, mask=mask, return_attention=True)
 
-    def get_intermediate_layers(self, x, n=1):
+    def get_intermediate_layers(self, x, n=1, mask: Optional[torch.Tensor] = None):
         x = self.prepare_tokens(x)
         # we return the output tokens from the `n` last blocks
         output = []
         for i, blk in enumerate(self.blocks):
-            x = blk(x)
+            x = blk(x, mask=mask)
             if len(self.blocks) - i <= n:
                 output.append(self.norm(x))
         return output
@@ -430,6 +482,7 @@ class VisionTransformer4K(nn.Module):
         attn_drop_rate: float = 0.0,
         drop_path_rate: float = 0.0,
         norm_layer: Callable = nn.LayerNorm,
+        mask_attn: bool = False,
         img_size_pretrained: Optional[int] = None,
     ):
         super().__init__()
@@ -445,7 +498,9 @@ class VisionTransformer4K(nn.Module):
         )
         num_patches = int(img_size * dino_max_crop_scale // patch_size) ** 2
         if img_size_pretrained:
-            num_patches = int(img_size_pretrained * dino_max_crop_scale // patch_size) ** 2
+            num_patches = (
+                int(img_size_pretrained * dino_max_crop_scale // patch_size) ** 2
+            )
 
         self.cls_token = nn.Parameter(torch.zeros(1, 1, self.embed_dim))
         self.pos_embed = nn.Parameter(
@@ -468,6 +523,7 @@ class VisionTransformer4K(nn.Module):
                     attn_drop=attn_drop_rate,
                     drop_path=dpr[i],
                     norm_layer=norm_layer,
+                    mask_attn=mask_attn,
                 )
                 for i in range(depth)
             ]
@@ -493,8 +549,12 @@ class VisionTransformer4K(nn.Module):
             nn.init.constant_(m.weight, 1.0)
 
     def interpolate_pos_encoding(self, x, w, h):
-        npatch_sq = x.shape[1] - 1  # x = [M, npatch**2+1, 192] where npatch = number of (patch_size, patch_size) patches fitting along img_size
-        N = self.pos_embed.shape[1] - 1  # self.pos_embed = [1, 1+196, 192] -> N = 196 (when patch_size = 256 and img_size = 4096)
+        npatch_sq = (
+            x.shape[1] - 1
+        )  # x = [M, npatch**2+1, 192] where npatch = number of (patch_size, patch_size) patches fitting along img_size
+        N = (
+            self.pos_embed.shape[1] - 1
+        )  # self.pos_embed = [1, 1+196, 192] -> N = 196 (when patch_size = 256 and img_size = 4096)
         if npatch_sq == N and w == h:
             return self.pos_embed
         class_pos_embed = self.pos_embed[:, 0]  # [1, 192]
@@ -540,29 +600,29 @@ class VisionTransformer4K(nn.Module):
 
         return self.pos_drop(x)
 
-    def forward(self, x):
+    def forward(self, x, mask: Optional[torch.Tensor] = None):
         # x = [M, 384, npatch, npatch]
         x = self.prepare_tokens(x)  # [M, npatch**2+1, 192]
         for blk in self.blocks:
-            x = blk(x)
+            x = blk(x, mask=mask)
         x = self.norm(x)
         return x[:, 0]
 
-    def get_last_selfattention(self, x):
+    def get_last_selfattention(self, x, mask: Optional[torch.Tensor] = None):
         x = self.prepare_tokens(x)
         for i, blk in enumerate(self.blocks):
             if i < len(self.blocks) - 1:
-                x = blk(x)
+                x = blk(x, mask=mask)
             else:
                 # return attention of the last block
-                return blk(x, return_attention=True)
+                return blk(x, mask=mask, return_attention=True)
 
-    def get_intermediate_layers(self, x, n=1):
+    def get_intermediate_layers(self, x, n=1, mask: Optional[torch.Tensor] = None):
         x = self.prepare_tokens(x)
         # we return the output tokens from the `n` last blocks
         output = []
         for i, blk in enumerate(self.blocks):
-            x = blk(x)
+            x = blk(x, mask=mask)
             if len(self.blocks) - i <= n:
                 output.append(self.norm(x))
         return output
