@@ -134,7 +134,7 @@ def main(cfg: DictConfig):
 
     num_workers = min(mp.cpu_count(), cfg.num_workers)
     if "SLURM_JOB_CPUS_PER_NODE" in os.environ:
-        num_workers = min(num_workers, int(os.environ['SLURM_JOB_CPUS_PER_NODE']))
+        num_workers = min(num_workers, int(os.environ["SLURM_JOB_CPUS_PER_NODE"]))
 
     loader = torch.utils.data.DataLoader(
         dataset,
@@ -170,7 +170,7 @@ def main(cfg: DictConfig):
     ) as t1:
         with torch.no_grad():
             for i, batch in enumerate(t1):
-                idx, region_fps, slide_id = batch
+                idx, region_fps, slide_id, pct = batch
                 # sort region filepath for easier reproducibility
                 region_fps = sorted(region_fps)
                 slide_ids.append(slide_id)
@@ -185,7 +185,7 @@ def main(cfg: DictConfig):
                     leave=False,
                     disable=not (gpu_id in [-1, 0]),
                 ) as t2:
-                    for fp in t2:
+                    for j, fp in enumerate(t2):
                         x_y = Path(fp).stem
                         x, y = int(x_y.split("_")[0]), int(x_y.split("_")[1])
                         x_coords.append(x)
@@ -194,7 +194,10 @@ def main(cfg: DictConfig):
                         img = transforms.functional.to_tensor(img)  # [3, 4096, 4096]
                         img = img.unsqueeze(0)  # [1, 3, 4096, 4096]
                         img = img.to(device, non_blocking=True)
-                        feature = model(img)
+                        p = None
+                        if pct is not None:
+                            p = pct[j]
+                        feature = model(img, pct=p)
                         if cfg.save_region_features:
                             save_path = Path(
                                 region_features_dir, f"{slide_id}_{x}_{y}.pt"

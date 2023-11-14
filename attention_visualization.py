@@ -236,6 +236,7 @@ def main(cfg: DictConfig):
             segmentation_mask_path=cfg.segmentation_mask_fp,
             spacing=cfg.spacing,
             downsample=1,
+            background_pixel_value=cfg.background_pixel_value,
             tissue_pixel_value=cfg.tissue_pixel_value,
             patch_attn_mask=mask_p,
             mini_patch_attn_mask=mask_mp,
@@ -256,6 +257,9 @@ def main(cfg: DictConfig):
                 downscale=cfg.downscale,
                 cmap=light_jet,
                 save_to_disk=True,
+                restrict_to_tissue=cfg.restrict_to_tissue,
+                segmentation_mask_path=cfg.segmentation_mask_fp,
+                tissue_pixel_value=cfg.tissue_pixel_value,
             )
             stitched_hms[f"Head {head_num}"] = stitched_hm
 
@@ -309,6 +313,7 @@ def main(cfg: DictConfig):
                 region_size=cfg.region_size,
                 downsample=cfg.downsample,
                 font_fp=cfg.font_fp,
+                run_id=run_id,
             )
             if len(stitched_hms_thresh) > 0:
                 display_stitched_heatmaps(
@@ -322,6 +327,7 @@ def main(cfg: DictConfig):
                     region_size=cfg.region_size,
                     downsample=cfg.downsample,
                     font_fp=cfg.font_fp,
+                    run_id=run_id,
                 )
             if len(stitched_hms_highlight) > 0:
                 display_stitched_heatmaps(
@@ -335,6 +341,7 @@ def main(cfg: DictConfig):
                     region_size=cfg.region_size,
                     downsample=cfg.downsample,
                     font_fp=cfg.font_fp,
+                    run_id=run_id,
                 )
 
         #########################
@@ -359,6 +366,7 @@ def main(cfg: DictConfig):
             segmentation_mask_path=cfg.segmentation_mask_fp,
             spacing=cfg.spacing,
             downsample=1,
+            background_pixel_value=cfg.background_pixel_value,
             tissue_pixel_value=cfg.tissue_pixel_value,
             patch_attn_mask=mask_p,
             mini_patch_attn_mask=mask_mp,
@@ -379,6 +387,9 @@ def main(cfg: DictConfig):
                 downscale=cfg.downscale,
                 cmap=light_jet,
                 save_to_disk=True,
+                restrict_to_tissue=cfg.restrict_to_tissue,
+                segmentation_mask_path=cfg.segmentation_mask_fp,
+                tissue_pixel_value=cfg.tissue_pixel_value,
             )
             stitched_hms[f"Head {head_num}"] = stitched_hm
 
@@ -432,6 +443,7 @@ def main(cfg: DictConfig):
                 region_size=cfg.region_size,
                 downsample=cfg.downsample,
                 font_fp=cfg.font_fp,
+                run_id=run_id,
             )
             if len(stitched_hms_thresh) > 0:
                 display_stitched_heatmaps(
@@ -445,6 +457,7 @@ def main(cfg: DictConfig):
                     region_size=cfg.region_size,
                     downsample=cfg.downsample,
                     font_fp=cfg.font_fp,
+                    run_id=run_id,
                 )
             if len(stitched_hms_highlight) > 0:
                 display_stitched_heatmaps(
@@ -458,6 +471,7 @@ def main(cfg: DictConfig):
                     region_size=cfg.region_size,
                     downsample=cfg.downsample,
                     font_fp=cfg.font_fp,
+                    run_id=run_id,
                 )
 
         ##################################
@@ -533,6 +547,7 @@ def main(cfg: DictConfig):
         #             region_size=cfg.region_size,
         #             downsample=cfg.downsample,
         #             font_fp=cfg.font_fp,
+        #             run_id=run_id,
         #         )
 
         if cfg.slide_weights:
@@ -578,7 +593,7 @@ def main(cfg: DictConfig):
                 downscale=cfg.downscale,
                 cmap=light_jet,
                 save_to_disk=True,
-                restrict_to_tissue=cfg.restrict_to_tissue,
+                restrict_to_tissue=False,
                 segmentation_mask_path=cfg.segmentation_mask_fp,
                 tissue_pixel_value=cfg.tissue_pixel_value,
             )
@@ -629,6 +644,7 @@ def main(cfg: DictConfig):
                     region_size=cfg.region_size,
                     downsample=cfg.downsample,
                     font_fp=cfg.font_fp,
+                    run_id=run_id,
                 )
 
             ####################
@@ -656,6 +672,7 @@ def main(cfg: DictConfig):
                 segmentation_mask_path=cfg.segmentation_mask_fp,
                 spacing=cfg.spacing,
                 downsample=1,
+                background_pixel_value=cfg.background_pixel_value,
                 tissue_pixel_value=cfg.tissue_pixel_value,
                 patch_attn_mask=mask_p,
                 mini_patch_attn_mask=mask_mp,
@@ -723,6 +740,7 @@ def main(cfg: DictConfig):
                         region_size=cfg.region_size,
                         downsample=cfg.downsample,
                         font_fp=cfg.font_fp,
+                        run_id=run_id,
                     )
 
     if cfg.slide_csv:

@@ -1,4 +1,5 @@
 test_csv:
+blinded: False
 
 features_root_dir:
 output_dir: 'output/debug'
@@ -13,6 +14,21 @@ label_name: 'label'
 label_mapping:
 label_encoding:
 
+# mask attention of background patches / mini-patches
+mask_attn: False
+region_dir: ''
+spacing: 0.5
+backend: 'asap'
+region_format: "jpg"
+tissue_pct: 0.0
+seg_params:
+  downsample: 16 # find the closest downsample level in the WSI for tissue segmentation computation
+  sthresh: 8 # segmentation threshold (positive integer, using a higher threshold leads to less foreground and more background detection) (not used when use_otsu=True)
+  mthresh: 7 # median filter size (positive, odd integer)
+  close: 4 # additional morphological closing to apply following initial thresholding (positive integer)
+  use_otsu: False # use otsu's method instead of simple binary thresholding
+  tissue_pixel_value: 2 # value of tissue pixel in pre-computed segmentation masks
+
 model:
   checkpoint:
   dropout: 0.25
@@ -22,6 +38,14 @@ model:
   region_size: 4096
   patch_size: 256
   mini_patch_size: 16
+  pretrain_vit_patch:
+  freeze_vit_patch: True
+  freeze_vit_patch_pos_embed: True
+  pretrain_vit_region:
+  img_size_pretrained: ${model.region_size}
+  freeze_vit_region: True
+  freeze_vit_region_pos_embed: True
+  mask_attn: ${mask_attn}
   agg_method: 'concat'
   slide_pos_embed:
     use: False
@@ -30,6 +54,7 @@ model:
     max_seq_len:
     max_nslide:
     tile_size:
+
 
 speed:
   num_workers: 8

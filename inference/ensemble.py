@@ -32,7 +32,7 @@ from source.utils import (
 @hydra.main(
     version_base="1.2.0",
     config_path="../config/inference/classification",
-    config_name="ensemble",
+    config_name="ecp_masked_attn",
 )
 def main(cfg: DictConfig):
     run_id = datetime.datetime.now().strftime("%Y-%m-%d_%H_%M")
@@ -111,15 +111,14 @@ def main(cfg: DictConfig):
                 blinded=cfg.blinded,
                 num_classes=cfg.num_classes,
                 mask_attention=cfg.mask_attn,
-                region_dir=cfg.region_dir,
+                region_dir=Path(cfg.region_dir),
                 spacing=cfg.spacing,
                 region_size=cfg.model.region_size,
                 patch_size=cfg.model.patch_size,
                 mini_patch_size=cfg.model.mini_patch_size,
-                downsample=cfg.downsample,
                 backend=cfg.backend,
                 region_format=cfg.region_format,
-                tissue_pixel_value=cfg.tissue_pixel_value,
+                segmentation_parameters=cfg.seg_params,
                 tissue_pct=cfg.tissue_pct,
             )
 

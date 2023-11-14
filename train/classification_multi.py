@@ -26,12 +26,15 @@ from source.utils import (
     train,
     train_ordinal,
     train_regression,
+    train_regression_masked,
     tune,
     tune_ordinal,
     tune_regression,
+    tune_regression_masked,
     test,
     test_ordinal,
     test_regression,
+    test_regression_masked,
     compute_time,
     update_log_dict,
     collate_features,
@@ -73,7 +76,7 @@ def main(cfg: DictConfig):
 
     num_workers = min(mp.cpu_count(), cfg.speed.num_workers)
     if "SLURM_JOB_CPUS_PER_NODE" in os.environ:
-        num_workers = min(num_workers, int(os.environ['SLURM_JOB_CPUS_PER_NODE']))
+        num_workers = min(num_workers, int(os.environ["SLURM_JOB_CPUS_PER_NODE"]))
 
     assert (cfg.task != "classification" and cfg.label_encoding != "ordinal") or (
         cfg.task == "classification"
@@ -147,6 +150,16 @@ def main(cfg: DictConfig):
             label_mapping=cfg.label_mapping,
             label_encoding=cfg.label_encoding,
             transform=transform,
+            mask_attention=cfg.mask_attn,
+            region_dir=Path(cfg.region_dir),
+            spacing=cfg.spacing,
+            region_size=cfg.model.region_size,
+            patch_size=cfg.model.patch_size,
+            mini_patch_size=cfg.model.mini_patch_size,
+            backend=cfg.backend,
+            region_format=cfg.region_format,
+            segmentation_parameters=cfg.seg_params,
+            tissue_pct=cfg.tissue_pct,
         )
         tune_dataset_options = ClassificationDatasetOptions(
             df=tune_df,
@@ -154,6 +167,16 @@ def main(cfg: DictConfig):
             label_name=cfg.label_name,
             label_mapping=cfg.label_mapping,
             label_encoding=cfg.label_encoding,
+            mask_attention=cfg.mask_attn,
+            region_dir=Path(cfg.region_dir),
+            spacing=cfg.spacing,
+            region_size=cfg.model.region_size,
+            patch_size=cfg.model.patch_size,
+            mini_patch_size=cfg.model.mini_patch_size,
+            backend=cfg.backend,
+            region_format=cfg.region_format,
+            segmentation_parameters=cfg.seg_params,
+            tissue_pct=cfg.tissue_pct,
         )
         if test_df_path.is_file():
             test_dataset_options = ClassificationDatasetOptions(
@@ -162,6 +185,16 @@ def main(cfg: DictConfig):
                 label_name=cfg.label_name,
                 label_mapping=cfg.label_mapping,
                 label_encoding=cfg.label_encoding,
+                mask_attention=cfg.mask_attn,
+                region_dir=Path(cfg.region_dir),
+                spacing=cfg.spacing,
+                region_size=cfg.model.region_size,
+                patch_size=cfg.model.patch_size,
+                mini_patch_size=cfg.model.mini_patch_size,
+                backend=cfg.backend,
+                region_format=cfg.region_format,
+                segmentation_parameters=cfg.seg_params,
+                tissue_pct=cfg.tissue_pct,
             )
 
         print(f"Initializing datasets")
@@ -228,18 +261,32 @@ def main(cfg: DictConfig):
                     log_dict = {f"train/fold_{i}/epoch": epoch + 1}
 
                 if cfg.task == "regression":
-                    train_results = train_regression(
-                        epoch + 1,
-                        model,
-                        train_dataset,
-                        optimizer,
-                        criterion,
-                        batch_size=cfg.training.batch_size,
-                        weighted_sampling=cfg.training.weighted_sampling,
-                        gradient_accumulation=cfg.training.gradient_accumulation,
-                        num_workers=num_workers,
-                        use_wandb=cfg.wandb.enable,
-                    )
+                    if cfg.mask_attn:
+                        train_results = train_regression_masked(
+                            epoch + 1,
+                            model,
+                            train_dataset,
+                            optimizer,
+                            criterion,
+                            batch_size=cfg.training.batch_size,
+                            weighted_sampling=cfg.training.weighted_sampling,
+                            gradient_accumulation=cfg.training.gradient_accumulation,
+                            num_workers=num_workers,
+                            use_wandb=cfg.wandb.enable,
+                        )
+                    else:
+                        train_results = train_regression(
+                            epoch + 1,
+                            model,
+                            train_dataset,
+                            optimizer,
+                            criterion,
+                            batch_size=cfg.training.batch_size,
+                            weighted_sampling=cfg.training.weighted_sampling,
+                            gradient_accumulation=cfg.training.gradient_accumulation,
+                            num_workers=num_workers,
+                            use_wandb=cfg.wandb.enable,
+                        )
                 elif cfg.label_encoding == "ordinal":
                     train_results = train_ordinal(
                         epoch + 1,
@@ -286,15 +333,26 @@ def main(cfg: DictConfig):
 
                 if epoch % cfg.tuning.tune_every == 0:
                     if cfg.task == "regression":
-                        tune_results = tune_regression(
-                            epoch + 1,
-                            model,
-                            tune_dataset,
-                            criterion,
-                            batch_size=cfg.tuning.batch_size,
-                            num_workers=num_workers,
-                            use_wandb=cfg.wandb.enable,
-                        )
+                        if cfg.mask_attn:
+                            tune_results = tune_regression_masked(
+                                epoch + 1,
+                                model,
+                                tune_dataset,
+                                criterion,
+                                batch_size=cfg.tuning.batch_size,
+                                num_workers=num_workers,
+                                use_wandb=cfg.wandb.enable,
+                            )
+                        else:
+                            tune_results = tune_regression(
+                                epoch + 1,
+                                model,
+                                tune_dataset,
+                                criterion,
+                                batch_size=cfg.tuning.batch_size,
+                                num_workers=num_workers,
+                                use_wandb=cfg.wandb.enable,
+                            )
                     elif cfg.label_encoding == "ordinal":
                         tune_results = tune_ordinal(
                             epoch + 1,
@@ -374,13 +432,22 @@ def main(cfg: DictConfig):
         model.load_state_dict(best_model_sd)
 
         if cfg.task == "regression":
-            tune_results = test_regression(
-                model,
-                tune_dataset,
-                batch_size=1,
-                num_workers=num_workers,
-                use_wandb=cfg.wandb.enable,
-            )
+            if cfg.mask_attn:
+                tune_results = test_regression_masked(
+                    model,
+                    tune_dataset,
+                    batch_size=1,
+                    num_workers=num_workers,
+                    use_wandb=cfg.wandb.enable,
+                )
+            else:
+                tune_results = test_regression(
+                    model,
+                    tune_dataset,
+                    batch_size=1,
+                    num_workers=num_workers,
+                    use_wandb=cfg.wandb.enable,
+                )
         elif cfg.label_encoding == "ordinal":
             tune_results = test_ordinal(
                 model,
@@ -431,13 +498,22 @@ def main(cfg: DictConfig):
 
         if test_df_path.is_file():
             if cfg.task == "regression":
-                test_results = test_regression(
-                    model,
-                    test_dataset,
-                    batch_size=1,
-                    num_workers=num_workers,
-                    use_wandb=cfg.wandb.enable,
-                )
+                if cfg.mask_attn:
+                    test_results = test_regression_masked(
+                        model,
+                        test_dataset,
+                        batch_size=1,
+                        num_workers=num_workers,
+                        use_wandb=cfg.wandb.enable,
+                    )
+                else:
+                    test_results = test_regression(
+                        model,
+                        test_dataset,
+                        batch_size=1,
+                        num_workers=num_workers,
+                        use_wandb=cfg.wandb.enable,
+                    )
             elif cfg.label_encoding == "ordinal":
                 test_results = test_ordinal(
                     model,
@@ -528,6 +604,7 @@ def main(cfg: DictConfig):
 if __name__ == "__main__":
 
     import torch.multiprocessing
+
     torch.multiprocessing.set_sharing_strategy("file_system")
 
     main()

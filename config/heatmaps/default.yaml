@@ -8,6 +8,7 @@ region_fp:  # path to input region
 
 slide_fp: # path to input slide
 segmentation_mask_fp:
+background_pixel_value:
 tissue_pixel_value:
 
 slide_csv: # path to .csv file which contains a 'slide_path' column
@@ -32,7 +33,7 @@ threshold: 0.5 # threshold attention heatmaps to keep regions with attention sco
 granular: True  # whether to compute attention scores using an overlapping stride to obtain more granular heatmaps
 highlight: 0.5 # highlight regions with attention score above this value (similar to threshold, but different visualization) (set to None to turn off highlighting)
 opacity: 0.5  # opacity of non-highlighted regions
-restrict_to_tissue: True # when producing thresholded/highlighted heatmaps, decides to restrict highlighted regions to tissue content only
+restrict_to_tissue: False # when producing thresholded/highlighted heatmaps, decides to restrict highlighted regions to tissue content only
 font_fp: 'data/arial.ttf' # if display = True, path to font used to display figure titles
 
 seg_params:

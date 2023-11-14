@@ -8,6 +8,20 @@ output_dir: 'output'
 experiment_name: 'tcga_brca'
 level: 'global'
 
+mask_attn: False
+region_dir: ''
+spacing: 0.5
+backend: 'asap'
+region_format: "jpg"
+tissue_pct: 0.0
+seg_params:
+  downsample: 16 # find the closest downsample level in the WSI for tissue segmentation computation
+  sthresh: 8 # segmentation threshold (positive integer, using a higher threshold leads to less foreground and more background detection) (not used when use_otsu=True)
+  mthresh: 7 # median filter size (positive, odd integer)
+  close: 4 # additional morphological closing to apply following initial thresholding (positive integer)
+  use_otsu: False # use otsu's method instead of simple binary thresholding
+  tissue_pixel_value: 1 # value of tissue pixel in pre-computed segmentation masks
+
 nepochs: 50
 num_classes: 2
 label_name: 'label'
@@ -55,6 +69,7 @@ model:
   patch_size: 256
   mini_patch_size: 16
   dropout: 0.25
+  mask_attn: ${mask_attn}
   agg_method: 'concat'
   slide_pos_embed:
     use: False

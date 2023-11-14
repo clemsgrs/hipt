@@ -4,6 +4,7 @@ import torch
 import hydra
 import random
 import datetime
+import subprocess
 import pandas as pd
 import multiprocessing as mp
 import matplotlib.pyplot as plt
@@ -56,6 +57,8 @@ def get_knn_features(
     sim_threshold: Optional[float] = None,
     region_features_dir: Optional[Path] = None,
     num_workers: int = 0,
+    process_id: Optional[int] = None,
+    augmentation_dir: Optional[Path] = None,
 ):
     label = label_df[label_df.slide_id == slide_id][label_name].values[0]
     df = pd.merge(
@@ -71,24 +74,29 @@ def get_knn_features(
         in_class_feature_paths = [
             Path(region_features_dir, Path(fp).name) for fp in in_class_feature_paths
         ]
-    stacked_features_path = Path(output_dir, f"in_class_features_{label}.pt")
+    if augmentation_dir:
+        stacked_features_path = Path(augmentation_dir, f"in_class_features_{label}.pt")
+    else:
+        stacked_features_path = Path(output_dir, f"in_class_features_{label}.pt")
     if stacked_features_path.is_file():
         stacked_features = torch.load(
             stacked_features_path
         )  # (nregion, 192) or (nregion*npatch, 384) with npatch = 256 (resp. 64, 16) if region size = 4096 (resp. 2048, 1024)
     else:
         # multi-cpu support
-        if num_workers > 0:
+        if num_workers > 1:
             features = []
             with mp.Pool(num_workers) as pool:
                 for i, r in enumerate(pool.map(load_feature, in_class_feature_paths)):
                     features.append(r)
         else:
+            enable_pbar = (process_id == mp.current_process().pid)
             with tqdm.tqdm(
                 in_class_feature_paths,
                 desc=f"Loading in class features (label={label})",
                 unit=" region",
                 leave=False,
+                # disable=not enable_pbar,
             ) as t:
                 for fp in t:
                     f = torch.load(fp)
@@ -317,8 +325,7 @@ def plot_knn_features(
     elif slide_dir:
         slide_path = [x for x in slide_dir.glob(f"{sid}*")][0]
         wsi_object = WholeSlideImage(slide_path, backend=backend)
-        s = wsi_object.spacing_mapping[spacing]
-        ref_region = wsi_object.wsi.get_patch(x, y, ts, ts, spacing=s, center=False)
+        ref_region = wsi_object.wsi.get_patch(x, y, ts, ts, spacing=spacing, center=False)
         ref_region = Image.fromarray(region).convert("RGB")
     else:
         raise ValueError(
@@ -338,8 +345,7 @@ def plot_knn_features(
         elif slide_dir:
             slide_path = [x for x in slide_dir.glob(f"{sid}*")][0]
             wsi_object = WholeSlideImage(slide_path, backend=backend)
-            s = wsi_object.spacing_mapping[spacing]
-            region = wsi_object.wsi.get_patch(x, y, ts, ts, spacing=s, center=False)
+            region = wsi_object.wsi.get_patch(x, y, ts, ts, spacing=spacing, center=False)
             region = Image.fromarray(region).convert("RGB")
         region = region.resize((size, size))
         ax[i].imshow(region)
@@ -403,6 +409,8 @@ def save_slide_knn_df(
     K: int = 10,
     sim_threshold: Optional[float] = None,
     num_workers: int = 0,
+    process_id: Optional[int] = None,
+    augmentation_dir: Optional[Path] = None,
 ):
     fp = Path(features_dir, f"{slide_id}.pt")
     features = torch.load(fp)
@@ -423,6 +431,8 @@ def save_slide_knn_df(
                 K=K,
                 sim_threshold=sim_threshold,
                 num_workers=num_workers,
+                process_id=process_id,
+                augmentation_dir=augmentation_dir,
             )
     elif level == "local":
         # features = (M, npatch, 384)
@@ -444,6 +454,8 @@ def save_slide_knn_df(
                     K=K,
                     sim_threshold=sim_threshold,
                     num_workers=num_workers,
+                    process_id=process_id,
+                    augmentation_dir=augmentation_dir,
                 )
     return slide_id
 
@@ -504,26 +516,20 @@ def main(cfg: DictConfig):
                 region_features_dir,
                 cfg.K,
                 cfg.threshold,
+                0,
+                None,
+                cfg.augmentation_dir,
             )
             for sid in slide_ids
         ]
 
-        command_line = [
-            "python3",
-            "log_nproc.py",
-            "--output_dir",
-            f"{output_dir}",
-            "--fmt",
-            "csv",
-            "--total",
-            f"{len(slide_ids)}",
-        ]
-        if cfg.wandb.enable:
-            command_line = command_line + ["--log_to_wandb", "--id", f"{run_id}"]
-        subprocess.Popen(command_line)
-
         processed_sids = []
         with mp.Pool(num_workers) as pool:
+            # # get all active child processes
+            # children = mp.active_children()
+            # # get the pid of each child process
+            # pids = [child.pid for child in children]
+            # args = [e + (pids[0],) for e in args]
             for sid in pool.starmap(save_slide_knn_df, args):
                 processed_sids.append(sid)
         if cfg.wandb.enable:
@@ -553,6 +559,7 @@ def main(cfg: DictConfig):
                     K=cfg.K,
                     sim_threshold=cfg.threshold,
                     num_workers=num_workers,
+                    augmentation_dir=cfg.augmentation_dir,
                 )
 
                 if cfg.wandb.enable:
@@ -560,5 +567,8 @@ def main(cfg: DictConfig):
 
 
 if __name__ == "__main__":
+
+    import torch.multiprocessing
+    torch.multiprocessing.set_sharing_strategy('file_system')
 
     main()
