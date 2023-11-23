@@ -1,0 +1,59 @@
+test_csv: ''
+
+features_dir: 'hvit/output/feature_extraction'
+output_dir: 'hvit/output'
+experiment_name: 'inference'
+level: 'local'
+
+task: 'regression'
+loss: 'mse'
+
+num_classes: 6
+label_name: 'isup_grade'
+label_mapping:
+label_encoding:
+
+distance_func: 'custom'
+
+model:
+  checkpoints: 'hvit/checkpoints/trained'
+  dropout: 0.25
+  pretrain_vit_patch:
+  freeze_vit_patch: True
+  freeze_vit_patch_pos_embed: True
+  pretrain_vit_region:
+  freeze_vit_region: True
+  freeze_vit_region_pos_embed: True
+  embed_dim_patch: 384
+  embed_dim_region: 192
+  embed_dim_slide: 192
+  region_size: 2048
+  patch_size: 256
+  mini_patch_size: 16
+  agg_method: 'concat'
+  slide_pos_embed:
+    use: False
+    learned: True
+    type: '1d'
+    max_seq_len: 256
+    max_nslide:
+    tile_size:
+
+speed:
+  num_workers: 8
+
+wandb:
+  enable: False
+  project: ''
+  username: ''
+  exp_name: '${experiment_name}'
+  tags: ['panda', '${level}', '${loss}', '${model.region_size}']
+  dir: '/tmp/wandb'
+  to_log:
+    - 'test': ['auc', 'kappa', 'wandb_cm', 'cm']
+  group:
+  resume_id:
+
+hydra:
+  run:
+    dir: /tmp/hydra_output

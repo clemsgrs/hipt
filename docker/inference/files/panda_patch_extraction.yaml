@@ -1,0 +1,70 @@
+slide_csv: ''
+
+output_dir: 'hs2p/output'
+experiment_name: 'patch_extraction'
+resume: False
+
+backend: 'asap'
+
+flags:
+  patch: True
+  visu: True
+  verbose: False
+
+seg_params:
+  seg_level: -1
+  downsample: 64
+  sthresh: 8
+  mthresh: 7
+  close: 10
+  use_otsu: True
+  save_mask: False # save tissue mask to disk as a .tif image
+  visualize_mask: True # save a visualization of the tissue mask as a .jpg image
+  tissue_pixel_value: 2
+
+filter_params:
+  ref_patch_size: 256
+  a_t: 4
+  a_h: 2
+  max_n_holes: 8
+
+vis_params:
+  vis_level: -1
+  downsample: 16
+  downscale: 16
+  line_thickness: 150
+
+patch_params:
+  spacing: 0.5
+  patch_size: 2048
+  overlap: 0.
+  use_padding: True
+  contour_fn: 'pct'
+  tissue_thresh: 0.1
+  drop_holes: False
+  save_patches_to_disk: True
+  format: 'jpg'
+  draw_grid: True
+  grid_thickness: 1
+  bg_color:
+    - 214
+    - 233
+    - 238
+
+speed:
+  multiprocessing: True
+  num_workers: 32
+
+wandb:
+  enable: False
+  project: ''
+  exp_name: '${experiment_name}'
+  username: ''
+  dir: '/tmp/wandb'
+  group:
+  tags: ['panda', '${patch_params.patch_size}']
+
+# hydra
+hydra:
+  run:
+    dir: /tmp/hydra_output
