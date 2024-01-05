@@ -2178,7 +2178,10 @@ def get_slide_heatmaps_patch_level(
 
     nhead_patch = patch_model.num_heads
     offset_ = offset
-    mask_attn = (patch_attn_mask is not None)
+
+    mask_attn_patch = (mini_patch_attn_mask is not None)
+    mask_attn_region = (patch_attn_mask is not None)
+    mask_attention = mask_attn_patch or mask_attn_region
 
     with tqdm.tqdm(
         region_paths,
@@ -2195,9 +2198,10 @@ def get_slide_heatmaps_patch_level(
             x, y = int(fp.stem.split("_")[0]), int(fp.stem.split("_")[1])
 
             pm, mpm = None, None
-            if mask_attn:
-                pm = patch_attn_mask[k].unsqueeze(0)
+            if mask_attn_patch:
                 mpm = mini_patch_attn_mask[k]
+            if mask_attn_region:
+                pm = patch_attn_mask[k].unsqueeze(0)
 
             _, patch_att, _ = get_region_attention_scores(
                 region,
@@ -2223,7 +2227,7 @@ def get_slide_heatmaps_patch_level(
                     color=(255, 255, 255),
                 )
                 pm2, mpm2 = None, None
-                if mask_attn:
+                if mask_attention:
                     pm2, mpm2 = get_mask(
                         slide_path,
                         segmentation_mask_path,
@@ -2441,7 +2445,10 @@ def get_slide_heatmaps_region_level(
 
     nhead_region = region_model.num_heads
     offset_ = offset
-    mask_attn = (patch_attn_mask is not None)
+
+    mask_attn_patch = (mini_patch_attn_mask is not None)
+    mask_attn_region = (patch_attn_mask is not None)
+    mask_attention = mask_attn_patch or mask_attn_region
 
     with tqdm.tqdm(
         region_paths,
@@ -2457,9 +2464,10 @@ def get_slide_heatmaps_region_level(
             x, y = int(fp.stem.split("_")[0]), int(fp.stem.split("_")[1])
 
             pm, mpm = None, None
-            if mask_attn:
-                pm = patch_attn_mask[k].unsqueeze(0)
+            if mask_attn_patch:
                 mpm = mini_patch_attn_mask[k]
+            if mask_attn_region:
+                pm = patch_attn_mask[k].unsqueeze(0)
 
             _, _, region_att = get_region_attention_scores(
                 region,
@@ -2485,7 +2493,7 @@ def get_slide_heatmaps_region_level(
                     color=(255, 255, 255),
                 )
                 pm2, mpm2 = None, None
-                if mask_attn:
+                if mask_attention:
                     pm2, mpm2 = get_mask(
                         slide_path,
                         segmentation_mask_path,
@@ -2510,7 +2518,7 @@ def get_slide_heatmaps_region_level(
                     color=(255, 255, 255),
                 )
                 pm3, mpm3 = None, None
-                if mask_attn:
+                if mask_attention:
                     pm3, mpm3 = get_mask(
                         slide_path,
                         segmentation_mask_path,
@@ -2535,7 +2543,7 @@ def get_slide_heatmaps_region_level(
                     color=(255, 255, 255),
                 )
                 pm4, mpm4 = None, None
-                if mask_attn:
+                if mask_attention:
                     pm4, mpm4 = get_mask(
                         slide_path,
                         segmentation_mask_path,
@@ -3461,7 +3469,10 @@ def get_slide_blended_heatmaps(
     nhead_region = region_model.num_heads
     offset = smoothing.offset.region
     offset_ = offset
-    mask_attn = (patch_attn_mask is not None)
+
+    mask_attn_patch = (mini_patch_attn_mask is not None)
+    mask_attn_region = (patch_attn_mask is not None)
+    mask_attention = mask_attn_patch or mask_attn_region
 
     with tqdm.tqdm(
         region_paths,
@@ -3478,9 +3489,10 @@ def get_slide_blended_heatmaps(
             x, y = int(fp.stem.split("_")[0]), int(fp.stem.split("_")[1])
 
             pm, mpm = None, None
-            if mask_attn:
-                pm = patch_attn_mask[k].unsqueeze(0)
+            if mask_attn_patch:
                 mpm = mini_patch_attn_mask[k]
+            if mask_attn_region:
+                pm = patch_attn_mask[k].unsqueeze(0)
 
             _, patch_att, region_att = get_region_attention_scores(
                 region,
@@ -3507,7 +3519,7 @@ def get_slide_blended_heatmaps(
                     color=(255, 255, 255),
                 )
                 pm2, mpm2 = None, None
-                if mask_attn:
+                if mask_attention:
                     pm2, mpm2 = get_mask(
                         slide_path,
                         segmentation_mask_path,
@@ -3532,7 +3544,7 @@ def get_slide_blended_heatmaps(
                     color=(255, 255, 255),
                 )
                 pm3, mpm3 = None, None
-                if mask_attn:
+                if mask_attention:
                     pm3, mpm3 = get_mask(
                         slide_path,
                         segmentation_mask_path,
@@ -3557,7 +3569,7 @@ def get_slide_blended_heatmaps(
                     color=(255, 255, 255),
                 )
                 pm4, mpm4 = None, None
-                if mask_attn:
+                if mask_attention:
                     pm4, mpm4 = get_mask(
                         slide_path,
                         segmentation_mask_path,

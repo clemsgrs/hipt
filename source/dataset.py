@@ -691,7 +691,6 @@ class ExtractedFeaturesMaskedDataset(ExtractedFeaturesDataset):
                 self.df.segmentation_mask_path.unique().tolist(),
             )
         else:
-            self.segmentation_parameters["tissue_pixel_value"] = 1
             id_path_mask = zip(
                 self.df.slide_id.unique().tolist(),
                 self.df.slide_path.unique().tolist(),

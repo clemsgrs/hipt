@@ -60,6 +60,8 @@ def main(cfg: DictConfig):
         cfg.task == "classification"
     )
 
+    mask_attention = (cfg.model.mask_attn_patch is True) or (cfg.model.mask_attn_region is True)
+
     if isinstance(cfg.test_csv, str):
         test_csvs = {"test": cfg.test_csv}
     else:
@@ -94,8 +96,9 @@ def main(cfg: DictConfig):
         msg = model.load_state_dict(sd)
         print(f"Checkpoint loaded with msg: {msg}")
 
-        # features_dir = Path(features_root_dir, f"{model_name}", "slide_features")
-        features_dir = Path(features_root_dir, f"{model_name}")
+        features_dir = Path(features_root_dir, f"{model_name}", "slide_features")
+        if not features_dir.exists():
+            features_dir = Path(features_root_dir, f"{model_name}")
 
         model_start_time = time.time()
         for test_name, csv_path in test_csvs.items():
@@ -110,7 +113,7 @@ def main(cfg: DictConfig):
                 label_encoding=cfg.label_encoding,
                 blinded=cfg.blinded,
                 num_classes=cfg.num_classes,
-                mask_attention=cfg.mask_attn,
+                mask_attention=mask_attention,
                 region_dir=Path(cfg.region_dir),
                 spacing=cfg.spacing,
                 region_size=cfg.model.region_size,
@@ -128,7 +131,7 @@ def main(cfg: DictConfig):
             print(f"Running inference on {test_name} dataset with {model_name} model")
 
             if cfg.task == "regression":
-                if cfg.mask_attn:
+                if mask_attention:
                     test_results = test_regression_masked(
                         model,
                         test_dataset,

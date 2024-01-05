@@ -70,6 +70,8 @@ def main(cfg: DictConfig):
     if is_main_process():
         output_dir.mkdir(parents=True, exist_ok=True)
 
+    mask_attention = (cfg.mask_attn_patch is True) or (mask_attn_region is True)
+
     # seed everything to ensure reproducible heatmaps
     seed = 0
     random.seed(seed)
@@ -87,7 +89,7 @@ def main(cfg: DictConfig):
     patch_weights = Path(cfg.patch_weights)
     patch_model = get_patch_model(
         pretrained_weights=patch_weights,
-        mask_attn=cfg.mask_attn,
+        mask_attn=cfg.mask_attn_patch,
         device=device,
     )
 
@@ -95,7 +97,7 @@ def main(cfg: DictConfig):
     region_model = get_region_model(
         pretrained_weights=region_weights,
         region_size=cfg.region_size,
-        mask_attn=cfg.mask_attn,
+        mask_attn=cfg.mask_attn_region,
         img_size_pretrained=cfg.img_size_pretrained,
         device=device,
     )
@@ -203,7 +205,7 @@ def main(cfg: DictConfig):
         output_dir_slide = Path(output_dir, slide_id)
 
         mask_p, mask_mp = None, None
-        if cfg.mask_attn:
+        if mask_attention:
             mask_p, mask_mp = generate_masks(
                 slide_id,
                 slide_path,

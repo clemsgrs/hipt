@@ -82,6 +82,8 @@ def main(cfg: DictConfig):
         cfg.task == "classification"
     )
 
+    mask_attn = (cfg.model.mask_attn_patch is True) or (cfg.model.mask_attn_region is True)
+
     fold_root_dir = Path(cfg.data.fold_dir)
     nfold = len([_ for _ in fold_root_dir.glob(f"fold_*")])
     print(f"Training on {nfold} folds")
@@ -150,7 +152,7 @@ def main(cfg: DictConfig):
             label_mapping=cfg.label_mapping,
             label_encoding=cfg.label_encoding,
             transform=transform,
-            mask_attention=cfg.mask_attn,
+            mask_attention=mask_attn,
             region_dir=Path(cfg.region_dir),
             spacing=cfg.spacing,
             region_size=cfg.model.region_size,
@@ -167,7 +169,7 @@ def main(cfg: DictConfig):
             label_name=cfg.label_name,
             label_mapping=cfg.label_mapping,
             label_encoding=cfg.label_encoding,
-            mask_attention=cfg.mask_attn,
+            mask_attention=mask_attn,
             region_dir=Path(cfg.region_dir),
             spacing=cfg.spacing,
             region_size=cfg.model.region_size,
@@ -185,7 +187,7 @@ def main(cfg: DictConfig):
                 label_name=cfg.label_name,
                 label_mapping=cfg.label_mapping,
                 label_encoding=cfg.label_encoding,
-                mask_attention=cfg.mask_attn,
+                mask_attention=mask_attn,
                 region_dir=Path(cfg.region_dir),
                 spacing=cfg.spacing,
                 region_size=cfg.model.region_size,
@@ -261,7 +263,7 @@ def main(cfg: DictConfig):
                     log_dict = {f"train/fold_{i}/epoch": epoch + 1}
 
                 if cfg.task == "regression":
-                    if cfg.mask_attn:
+                    if mask_attn:
                         train_results = train_regression_masked(
                             epoch + 1,
                             model,
@@ -333,7 +335,7 @@ def main(cfg: DictConfig):
 
                 if epoch % cfg.tuning.tune_every == 0:
                     if cfg.task == "regression":
-                        if cfg.mask_attn:
+                        if mask_attn:
                             tune_results = tune_regression_masked(
                                 epoch + 1,
                                 model,
@@ -432,7 +434,7 @@ def main(cfg: DictConfig):
         model.load_state_dict(best_model_sd)
 
         if cfg.task == "regression":
-            if cfg.mask_attn:
+            if mask_attn:
                 tune_results = test_regression_masked(
                     model,
                     tune_dataset,
@@ -498,7 +500,7 @@ def main(cfg: DictConfig):
 
         if test_df_path.is_file():
             if cfg.task == "regression":
-                if cfg.mask_attn:
+                if mask_attn:
                     test_results = test_regression_masked(
                         model,
                         test_dataset,

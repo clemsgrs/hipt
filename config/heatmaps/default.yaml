@@ -24,7 +24,9 @@ region_weights: '/data/pathology/projects/ais-cap/code/git/clemsgrs/hipt/checkpo
 img_size_pretrained:
 slide_weights: # slide-level Transformer weights
 
-mask_attn: False
+mask_attn_patch: False
+mask_attn_region: False
+
 display: False  # whether to display the heatmaps of multiple attention heads on a single image
 spacing: 0.5 # when processing a slide, indicate the pixel spacing which the regions were extracted at (in mpp)
 downscale: 1 # how much to downscale the output image by (e.g. downscale=4 will resize 4096x4096 regions to 1024x1024)
