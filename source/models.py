@@ -89,7 +89,7 @@ class ModelFactory:
                             freeze_vit_region_pos_embed=model_options.freeze_vit_region_pos_embed,
                             dropout=model_options.dropout,
                             slide_pos_embed=model_options.slide_pos_embed,
-                            mask_attn=model_options.mask_attn,
+                            mask_attn_region=model_options.mask_attn_region,
                             img_size_pretrained=model_options.img_size_pretrained,
                         )
                     else:
@@ -102,7 +102,7 @@ class ModelFactory:
                             freeze_vit_region_pos_embed=model_options.freeze_vit_region_pos_embed,
                             dropout=model_options.dropout,
                             slide_pos_embed=model_options.slide_pos_embed,
-                            mask_attn=model_options.mask_attn,
+                            mask_attn_region=model_options.mask_attn_region,
                             img_size_pretrained=model_options.img_size_pretrained,
                         )
                 else:
@@ -117,7 +117,7 @@ class ModelFactory:
                         freeze_vit_region_pos_embed=model_options.freeze_vit_region_pos_embed,
                         dropout=model_options.dropout,
                         slide_pos_embed=model_options.slide_pos_embed,
-                        mask_attn=model_options.mask_attn,
+                        mask_attn_region=model_options.mask_attn_region,
                         img_size_pretrained=model_options.img_size_pretrained,
                     )
             else:
@@ -168,7 +168,7 @@ class ModelFactory:
                         freeze_vit_region_pos_embed=model_options.freeze_vit_region_pos_embed,
                         dropout=model_options.dropout,
                         slide_pos_embed=model_options.slide_pos_embed,
-                        mask_attn=model_options.mask_attn,
+                        mask_attn_region=model_options.mask_attn_region,
                         img_size_pretrained=model_options.img_size_pretrained,
                     )
 
@@ -284,7 +284,7 @@ class LocalGlobalHIPT(nn.Module):
         freeze_vit_region_pos_embed: bool = True,
         dropout: float = 0.25,
         slide_pos_embed: Optional[DictConfig] = None,
-        mask_attn: bool = False,
+        mask_attn_region: bool = False,
         img_size_pretrained: Optional[int] = None,
     ):
         super(LocalGlobalHIPT, self).__init__()
@@ -298,7 +298,7 @@ class LocalGlobalHIPT(nn.Module):
             patch_size=patch_size,
             input_embed_dim=embed_dim_patch,
             output_embed_dim=embed_dim_region,
-            mask_attn=mask_attn,
+            mask_attn=mask_attn_region,
             img_size_pretrained=img_size_pretrained,
         )
 
@@ -449,7 +449,8 @@ class HIPT(nn.Module):
         split_across_gpus: bool = False,
         dropout: float = 0.25,
         slide_pos_embed: Optional[DictConfig] = None,
-        mask_attn: bool = False,
+        mask_attn_patch: bool = False,
+        mask_attn_region: bool = False,
         img_size_pretrained: Optional[int] = None,
     ):
         super(HIPT, self).__init__()
@@ -470,7 +471,7 @@ class HIPT(nn.Module):
             img_size=patch_size,
             patch_size=mini_patch_size,
             embed_dim=embed_dim_patch,
-            mask_attn=mask_attn,
+            mask_attn=mask_attn_patch,
         )
 
         if pretrain_vit_patch and Path(pretrain_vit_patch).is_file():
@@ -512,7 +513,7 @@ class HIPT(nn.Module):
             patch_size=patch_size,
             input_embed_dim=embed_dim_patch,
             output_embed_dim=embed_dim_region,
-            mask_attn=mask_attn,
+            mask_attn=mask_attn_region,
             img_size_pretrained=img_size_pretrained,
         )
 
@@ -701,7 +702,8 @@ class GlobalFeatureExtractor(nn.Module):
         embed_dim_patch: int = 384,
         embed_dim_region: int = 192,
         split_across_gpus: bool = False,
-        mask_attn: bool = False,
+        mask_attn_patch: bool = False,
+        mask_attn_region: bool = False,
         img_size_pretrained: Optional[int] = None,
         verbose: bool = True,
     ):
@@ -720,7 +722,7 @@ class GlobalFeatureExtractor(nn.Module):
             img_size=patch_size,
             patch_size=mini_patch_size,
             embed_dim=embed_dim_patch,
-            mask_attn=mask_attn,
+            mask_attn=mask_attn_patch,
         )
 
         if Path(pretrain_vit_patch).is_file():
@@ -761,7 +763,7 @@ class GlobalFeatureExtractor(nn.Module):
             patch_size=patch_size,
             input_embed_dim=embed_dim_patch,
             output_embed_dim=embed_dim_region,
-            mask_attn=mask_attn,
+            mask_attn=mask_attn_region,
             img_size_pretrained=img_size_pretrained,
         )
 
@@ -851,7 +853,7 @@ class LocalFeatureExtractor(nn.Module):
         mini_patch_size: int = 16,
         pretrain_vit_patch: str = "path/to/pretrained/vit_patch/weights.pth",
         embed_dim_patch: int = 384,
-        mask_attn: bool = False,
+        mask_attn_patch: bool = False,
         verbose: bool = True,
     ):
         super(LocalFeatureExtractor, self).__init__()
@@ -863,7 +865,7 @@ class LocalFeatureExtractor(nn.Module):
             img_size=patch_size,
             patch_size=mini_patch_size,
             embed_dim=embed_dim_patch,
-            mask_attn=mask_attn,
+            mask_attn=mask_attn_patch,
         )
 
         if Path(pretrain_vit_patch).is_file():
@@ -929,7 +931,7 @@ class PatchEmbedder(nn.Module):
         mini_patch_size: int = 16,
         pretrain_vit_patch: str = "path/to/pretrained/vit_patch/weights.pth",
         embed_dim: int = 384,
-        mask_attn: bool = False,
+        mask_attn_patch: bool = False,
         img_size_pretrained: Optional[int] = None,
         verbose: bool = True,
     ):
@@ -940,7 +942,7 @@ class PatchEmbedder(nn.Module):
             img_size=img_size,
             patch_size=mini_patch_size,
             embed_dim=embed_dim,
-            mask_attn=mask_attn,
+            mask_attn=mask_attn_patch,
             img_size_pretrained=img_size_pretrained,
         )
 
@@ -1315,7 +1317,7 @@ class LocalGlobalOrdinalHIPT(LocalGlobalHIPT):
         freeze_vit_region_pos_embed: bool = True,
         dropout: float = 0.25,
         slide_pos_embed: Optional[DictConfig] = None,
-        mask_attn: bool = False,
+        mask_attn_region: bool = False,
         img_size_pretrained: Optional[int] = None,
     ):
         super().__init__(
@@ -1329,7 +1331,7 @@ class LocalGlobalOrdinalHIPT(LocalGlobalHIPT):
             freeze_vit_region_pos_embed,
             dropout,
             slide_pos_embed,
-            mask_attn,
+            mask_attn_region,
             img_size_pretrained,
         )
         self.classifier = nn.Linear(192, num_classes - 1)
@@ -1348,7 +1350,7 @@ class LocalGlobalCoralHIPT(LocalGlobalHIPT):
         freeze_vit_region_pos_embed: bool = True,
         dropout: float = 0.25,
         slide_pos_embed: Optional[DictConfig] = None,
-        mask_attn: bool = False,
+        mask_attn_region: bool = False,
         img_size_pretrained: Optional[int] = None,
     ):
         super().__init__(
@@ -1362,7 +1364,7 @@ class LocalGlobalCoralHIPT(LocalGlobalHIPT):
             freeze_vit_region_pos_embed,
             dropout,
             slide_pos_embed,
-            mask_attn,
+            mask_attn_region,
             img_size_pretrained,
         )
         self.classifier = nn.Linear(192, 1, bias=False)
@@ -1429,7 +1431,7 @@ class LocalGlobalRegressionHIPT(LocalGlobalHIPT):
         freeze_vit_region_pos_embed: bool = True,
         dropout: float = 0.25,
         slide_pos_embed: Optional[DictConfig] = None,
-        mask_attn: bool = False,
+        mask_attn_region: bool = False,
         img_size_pretrained: Optional[int] = None,
     ):
         super().__init__(
@@ -1443,7 +1445,7 @@ class LocalGlobalRegressionHIPT(LocalGlobalHIPT):
             freeze_vit_region_pos_embed,
             dropout,
             slide_pos_embed,
-            mask_attn,
+            mask_attn_region,
             img_size_pretrained,
         )
         self.classifier = nn.Linear(192, 1)

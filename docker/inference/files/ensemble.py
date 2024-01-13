@@ -4,7 +4,6 @@ import wandb
 import hydra
 import torch
 import random
-import datetime
 import pandas as pd
 import multiprocessing as mp
 import matplotlib.pyplot as plt
@@ -23,7 +22,6 @@ from source.utils import (
     test,
     test_ordinal,
     test_regression,
-    test_regression_masked,
     compute_time,
     collate_features,
 )
@@ -31,11 +29,11 @@ from source.utils import (
 
 @hydra.main(
     version_base="1.2.0",
-    config_path="../config/inference/classification",
-    config_name="ecp_masked_attn",
+    config_path="../config/inference",
+    config_name="ensemble",
 )
 def main(cfg: DictConfig):
-    run_id = datetime.datetime.now().strftime("%Y-%m-%d_%H_%M")
+
     # set up wandb
     if cfg.wandb.enable:
         key = os.environ.get("WANDB_API_KEY")
@@ -44,7 +42,7 @@ def main(cfg: DictConfig):
         log_to_wandb = {k: v for e in cfg.wandb.to_log for k, v in e.items()}
         run_id = wandb_run.id
 
-    output_dir = Path(cfg.output_dir, cfg.experiment_name, run_id)
+    output_dir = Path(cfg.output_dir, cfg.experiment_name)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     result_dir = Path(output_dir, "results")
@@ -54,26 +52,24 @@ def main(cfg: DictConfig):
 
     num_workers = min(mp.cpu_count(), cfg.speed.num_workers)
     if "SLURM_JOB_CPUS_PER_NODE" in os.environ:
-        num_workers = min(num_workers, int(os.environ["SLURM_JOB_CPUS_PER_NODE"]))
+        num_workers = min(num_workers, int(os.environ['SLURM_JOB_CPUS_PER_NODE']))
 
     assert (cfg.task != "classification" and cfg.label_encoding != "ordinal") or (
         cfg.task == "classification"
     )
 
-    mask_attention = (cfg.model.mask_attn_patch is True) or (cfg.model.mask_attn_region is True)
-
     if isinstance(cfg.test_csv, str):
-        test_csvs = {"test": cfg.test_csv}
+        test_csvs = {'test': cfg.test_csv}
     else:
         test_csvs = {k: v for e in cfg.test_csv for k, v in e.items()}
 
     checkpoint_root_dir = Path(cfg.model.checkpoints)
-    nfold = len([_ for _ in checkpoint_root_dir.glob(f"fold_*")])
-    print(f"Found {nfold} models")
     checkpoints = {
-        p.name: Path(p, "best.pt")
-        for p in sorted(list(checkpoint_root_dir.glob(f"fold_*")))
+        p.stem: p
+        for p in sorted(list(checkpoint_root_dir.glob(f"*.pt")))
     }
+    nfold = len(checkpoints)
+    print(f"Found {nfold} models")
 
     start_time = time.time()
     for i, (model_name, checkpoint_path) in enumerate(checkpoints.items()):
@@ -97,8 +93,6 @@ def main(cfg: DictConfig):
         print(f"Checkpoint loaded with msg: {msg}")
 
         features_dir = Path(features_root_dir, f"{model_name}", "slide_features")
-        if not features_dir.exists():
-            features_dir = Path(features_root_dir, f"{model_name}")
 
         model_start_time = time.time()
         for test_name, csv_path in test_csvs.items():
@@ -108,21 +102,8 @@ def main(cfg: DictConfig):
             test_dataset_options = ClassificationDatasetOptions(
                 df=test_df,
                 features_dir=features_dir,
-                label_name=cfg.label_name,
-                label_mapping=cfg.label_mapping,
-                label_encoding=cfg.label_encoding,
-                blinded=cfg.blinded,
+                blinded=True,
                 num_classes=cfg.num_classes,
-                mask_attention=mask_attention,
-                region_dir=Path(cfg.region_dir),
-                spacing=cfg.spacing,
-                region_size=cfg.model.region_size,
-                patch_size=cfg.model.patch_size,
-                mini_patch_size=cfg.model.mini_patch_size,
-                backend=cfg.backend,
-                region_format=cfg.region_format,
-                segmentation_parameters=cfg.seg_params,
-                tissue_pct=cfg.tissue_pct,
             )
 
             print(f"Initializing test dataset")
@@ -131,24 +112,15 @@ def main(cfg: DictConfig):
             print(f"Running inference on {test_name} dataset with {model_name} model")
 
             if cfg.task == "regression":
-                if mask_attention:
-                    test_results = test_regression_masked(
-                        model,
-                        test_dataset,
-                        batch_size=1,
-                        num_workers=num_workers,
-                        use_wandb=cfg.wandb.enable,
-                    )
-                else:
-                    test_results = test_regression(
-                        model,
-                        test_dataset,
-                        batch_size=1,
-                        num_workers=num_workers,
-                        use_wandb=cfg.wandb.enable,
-                    )
+                test_regression(
+                    model,
+                    test_dataset,
+                    batch_size=1,
+                    num_workers=num_workers,
+                    use_wandb=cfg.wandb.enable,
+                )
             elif cfg.label_encoding == "ordinal":
-                test_results = test_ordinal(
+                test_ordinal(
                     model,
                     test_dataset,
                     cfg.loss,
@@ -157,7 +129,7 @@ def main(cfg: DictConfig):
                     use_wandb=cfg.wandb.enable,
                 )
             else:
-                test_results = test(
+                test(
                     model,
                     test_dataset,
                     collate_fn=partial(collate_features, label_type="int"),
@@ -169,49 +141,28 @@ def main(cfg: DictConfig):
                 Path(result_dir, f"{model_name}_{test_name}.csv"), index=False
             )
 
-            for r, v in test_results.items():
-                if r == "auc":
-                    v = round(v, 5)
-                if r == "cm":
-                    save_path = Path(result_dir, f"{model_name}_{test_name}.png")
-                    v.savefig(save_path, bbox_inches="tight")
-                    plt.close(v)
-                if cfg.wandb.enable and r in log_to_wandb["test"]:
-                    if r == "cm":
-                        wandb.log(
-                            {
-                                f"{test_name}/{model_name}/{r}": wandb.Image(
-                                    str(save_path)
-                                )
-                            }
-                        )
-                    else:
-                        wandb.log({f"{test_name}/{model_name}/{r}": v})
-                elif "cm" not in r:
-                    print(f"{model_name} ({test_name}): {r} = {v}")
-
         model_end_time = time.time()
         mins, secs = compute_time(model_start_time, model_end_time)
         print(f"Time taken ({model_name}): {mins}m {secs}s")
         print()
 
     distance_func = None
-    if cfg.distance_func == "custom":
+    if cfg.distance_func == 'custom':
         distance_func = custom_isup_grade_dist
     for test_name, csv_path in test_csvs.items():
         dfs = []
-        cols = ["slide_id", "label", "pred"]
+        cols = ["slide_id", "pred"]
         for model_name in checkpoints:
             df = pd.read_csv(Path(result_dir, f"{model_name}_{test_name}.csv"))[cols]
             df = df.rename(columns={"pred": f"pred_{model_name}"})
             dfs.append(df)
         ensemble_df = reduce(
             lambda left, right: pd.merge(
-                left, right, on=["slide_id", "label"], how="outer"
+                left, right, on="slide_id", how="outer"
             ),
             dfs,
         )
-        ensemble_df["agg"] = ensemble_df[
+        ensemble_df["pred"] = ensemble_df[
             [f"pred_{model_name}" for model_name in checkpoints]
         ].apply(lambda x: get_majority_vote(x, distance_func, seed=x.name), axis=1)
 
@@ -222,40 +173,14 @@ def main(cfg: DictConfig):
         missing_df = pd.DataFrame.from_dict(
             {
                 "slide_id": list(missing_sids),
-                "label": test_df[test_df.slide_id.isin(missing_sids)][
-                    f"{cfg.label_name}"
-                ].values.tolist(),
-                "agg": [
+                "pred": [
                     random.randint(0, cfg.num_classes - 1)
                     for _ in range(len(missing_sids))
                 ],
             }
         )
         ensemble_df = pd.concat([ensemble_df, missing_df], ignore_index=True)
-        ensemble_df.to_csv(Path(result_dir, f"{test_name}.csv"), index=False)
-        ensemble_metrics = get_metrics(
-            ensemble_df["agg"].values,
-            ensemble_df.label.values,
-            class_names=[f"isup_{i}" for i in range(cfg.num_classes)],
-            use_wandb=cfg.wandb.enable,
-        )
-
-        for r, v in ensemble_metrics.items():
-            if isinstance(v, float):
-                v = round(v, 5)
-            if r == "cm":
-                save_path = Path(result_dir, f"ensemble_{test_name}.png")
-                v.savefig(save_path, bbox_inches="tight")
-                plt.close(v)
-            if cfg.wandb.enable and r in log_to_wandb["test"]:
-                if r == "cm":
-                    wandb.log(
-                        {f"{test_name}/ensemble_{r}": wandb.Image(str(save_path))}
-                    )
-                else:
-                    wandb.log({f"{test_name}/ensemble_{r}": v})
-            elif "cm" not in r:
-                print(f"{test_name} ensemble: {r} = {v}")
+        ensemble_df.to_csv(Path(result_dir, f"submission.csv"), index=False)
 
     end_time = time.time()
     mins, secs = compute_time(start_time, end_time)
@@ -265,7 +190,6 @@ def main(cfg: DictConfig):
 if __name__ == "__main__":
 
     import torch.multiprocessing
-
     torch.multiprocessing.set_sharing_strategy("file_system")
 
     main()

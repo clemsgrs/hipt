@@ -1,0 +1,36 @@
+region_dir: 'hs2p/output/patch_extraction/patches/2048/${format}'
+
+output_dir: 'hvit/output'
+experiment_name: 'feature_extraction'
+resume: False
+
+fold:
+
+slide_list:
+
+region_size: 2048
+patch_size: 256
+mini_patch_size: 16
+
+format: 'jpg'
+level: 'local'
+save_region_features: False
+num_workers: 8
+
+pretrain_vit_patch: 'hvit/checkpoints/pretrained/vit_256_small_dino_fold_${fold}.pt'
+pretrain_vit_region: 'hvit/checkpoints/pretrained/vit_${region_size}_xs_dino_fold_${fold}.pt'
+img_size_pretrained:
+
+wandb:
+  enable: False
+  project: ''
+  username: ''
+  exp_name: '${experiment_name}'
+  tags: ['feature_ex', 'panda', '${level}', '${region_size}']
+  dir: '/tmp/wandb'
+  group:
+  resume_id:
+
+hydra:
+  run:
+    dir: /tmp/hydra_output

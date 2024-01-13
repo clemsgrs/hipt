@@ -10,6 +10,16 @@ from typing import Dict, List, Tuple, Optional
 Image.MAX_IMAGE_PIXELS = 933120000
 
 
+def find_common_spacings(spacings_1, spacings_2, tolerance: float = 0.05):
+    common_spacings = []
+    for s1 in spacings_1:
+        for s2 in spacings_2:
+            # check how far appart these two spacings are
+            if abs(s1 - s2) / s1 <= tolerance:
+                common_spacings.append((s1, s2))
+    return common_spacings
+
+
 class WholeSlideImage(object):
     def __init__(
         self, path: Path, spacing: Optional[float] = None, backend: str = "asap"
@@ -29,8 +39,6 @@ class WholeSlideImage(object):
         self.spacings = self.get_spacings()
         self.backend = backend
 
-        self.spacing_mapping = {a: b for a, b in zip(self.spacings, self.wsi.spacings)}
-
         self.contours_tissue = None
         self.contours_tumor = None
 
@@ -44,25 +52,7 @@ class WholeSlideImage(object):
 
     def get_spacings(self):
         if self.spacing is None:
-            common_spacings = [
-                0.25,
-                0.5,
-                1.0,
-                2.0,
-                4.0,
-                8.0,
-                16.0,
-                32.0,
-                64.0,
-                128.0,
-                256.0,
-                512.0,
-                1024.0,
-            ]
-            spacings = [
-                common_spacings[np.argmin([abs(cs - s) for cs in common_spacings])]
-                for s in self.wsi.spacings
-            ]
+            spacings = self.wsi.spacings
         else:
             spacings = [
                 self.spacing * s / self.wsi.spacings[0] for s in self.wsi.spacings
@@ -100,42 +90,35 @@ class WholeSlideImage(object):
         self,
         mask_fp: Path,
         downsample: int,
-        sthresh_up: int = 255,
-        tissue_val: int = 1,
-        try_previous_level: bool = True,
     ):
 
         mask = WholeSlideImage(mask_fp, backend=self.backend)
+
+        # ensure mask and slide have at least one common spacing
+        common_spacings = find_common_spacings(self.spacings, mask.spacings, tolerance=0.1)
+        assert len(common_spacings) >= 1, f"The provided segmentation mask (spacings={mask.spacings}) has no common spacing with the slide (spacings={self.spacings}). A minimum of 1 common spacing is required."
+
         seg_level = self.get_best_level_for_downsample_custom(downsample)
-        w, h = self.level_dimensions[seg_level]
+        seg_spacing = self.get_level_spacing(seg_level)
 
-        mask_level = int(np.argmin([abs(x - w) for x, _ in mask.level_dimensions]))
-        mask_width, mask_height = mask.level_dimensions[mask_level]
+        # check if this spacing is present in common spacings
+        is_in_common_spacings = seg_spacing in [s for s,_ in common_spacings]
+        if not is_in_common_spacings:
+            # find spacing that is common to slide and mask and that is the closest to seg_spacing
+            closest = np.argmin([abs(seg_spacing-s) for s,_ in common_spacings])
+            closest_common_spacing = common_spacings[closest][0]
+            seg_spacing = closest_common_spacing
+            seg_level = self.get_best_level_for_spacing(seg_spacing)
 
-        if try_previous_level:
-            while mask_width != w:
-                seg_level = seg_level -1
-                w, h = self.level_dimensions[seg_level]
-                mask_level = int(np.argmin([abs(x - w) for x, _ in mask.level_dimensions]))
-                mask_width, mask_height = mask.level_dimensions[mask_level]
-        else:
-            assert mask_width == w, f"Couldn't match slide's seg_level with correspoding mask level\n If mask's levels are a subset of slide's levels, make sure try_previous_level is set to True"
-
-        mask_spacing = mask.spacings[mask_level]
-        s = mask.spacing_mapping[mask_spacing]
-        m = mask.wsi.get_patch(0, 0, mask_width, mask_height, spacing=s, center=False)
-        m = m[...,0]
-
-        if tissue_val == 2:
-            m = m - np.ones_like(m)
-        if np.max(m) == 1:
-            m = m * sthresh_up
+        m = mask.wsi.get_slide(spacing=seg_spacing)
+        m = m[..., 0]
 
         self.binary_mask = m
+        return seg_level, seg_spacing
 
     def segmentTissue(
         self,
-        seg_level: int = 0,
+        downsample: int,
         sthresh: int = 20,
         sthresh_up: int = 255,
         mthresh: int = 7,
@@ -146,10 +129,9 @@ class WholeSlideImage(object):
         Segment the tissue via HSV -> Median thresholding -> Binary threshold
         """
 
-        seg_spacing = self.spacings[seg_level]
-        s = self.spacing_mapping[seg_spacing]
-        width, height = self.level_dimensions[seg_level]
-        img = self.wsi.get_patch(0, 0, width, height, spacing=s, center=False)
+        seg_level = self.get_best_level_for_downsample_custom(downsample)
+        seg_spacing = self.get_level_spacing(seg_level)
+        img = self.wsi.get_slide(spacing=seg_spacing)
         img = np.array(Image.fromarray(img).convert("RGBA"))
         img_hsv = cv2.cvtColor(img, cv2.COLOR_RGB2HSV)  # Convert to HSV space
         img_med = cv2.medianBlur(img_hsv[:, :, 1], mthresh)  # Apply median blurring
@@ -169,7 +151,10 @@ class WholeSlideImage(object):
             kernel = np.ones((close, close), np.uint8)
             img_thresh = cv2.morphologyEx(img_thresh, cv2.MORPH_CLOSE, kernel)
 
-        self.binary_mask = img_thresh
+        m = img_thresh.astype(int) // 255
+
+        self.binary_mask = m
+        return seg_level, seg_spacing
 
     def detect_contours(
         self, img_thresh, spacing: float, seg_level: int, filter_params: Dict[str, int]

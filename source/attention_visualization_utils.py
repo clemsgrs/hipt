@@ -361,11 +361,10 @@ def DrawMapFromCoords(
         patch_id = indices[idx]
         coord = coords[patch_id]
         x, y = coord
-        spacing = wsi_object.spacings[vis_level]
+        vis_spacing = wsi_object.get_level_spacing(vis_level)
 
-        s = wsi_object.spacing_mapping[spacing]
         width, height = patch_size
-        tile = wsi_object.wsi.get_patch(x, y, width, height, spacing=s, center=False)
+        tile = wsi_object.wsi.get_patch(x, y, width, height, spacing=vis_spacing, center=False)
 
         coord = np.ceil(coord / downsamples).astype(np.int32)
         canvas_crop_shape = canvas[
@@ -395,6 +394,7 @@ def get_mask(
     spacing: float = 0.5,
     backend: str = 'pyvips',
     downsample: int = 4,
+    background_pixel_value: int = 0,
     tissue_pixel_value: int = 1,
     pct_thresh: float = 0.0,
     offset: Optional[int] = None,
@@ -412,7 +412,7 @@ def get_mask(
     # scale region size from true spacing to downsample spacing
     # we excepct mask spacings to be a subset of slide spacings
     # the ratio should thus give an integer
-    sr = int(downsample_spacing / spacing)
+    sr = int(downsample_spacing / wsi.get_real_spacing(spacing))
     scaled_region_size = region_size // sr
     # scale patch_size and mini_patch_size
     scaled_patch_size = patch_size // sr
@@ -428,12 +428,13 @@ def get_mask(
         center=False,
     )
     if offset:
-        region_mask = region_mask[offset:, offset:]
+        scaled_offset = offset // sr
+        region_mask = region_mask[scaled_offset:, scaled_offset:]
         height, width = region_mask.shape[:2]
-        new_height = height + offset
-        new_width = width + offset
-        new_region_mask = np.full((new_height, new_width, region_mask.shape[2]), 0, dtype=region_mask.dtype)
-        new_region_mask[0:height, 0:0+width] = region_mask
+        new_height = height + scaled_offset
+        new_width = width + scaled_offset
+        new_region_mask = np.full((new_height, new_width, region_mask.shape[2]), background_pixel_value, dtype=region_mask.dtype)
+        new_region_mask[0:height, 0:width] = region_mask
         region_mask = new_region_mask
 
     assert region_mask.shape[-1] == 1, f"expecting 1 channel, found {region_mask.shape[-1]} channels"
@@ -510,7 +511,7 @@ def generate_masks(
     # scale region size from true spacing to downsample spacing
     # we excepct mask spacings to be a subset of slide spacings
     # the ratio should thus give an integer
-    sr = int(downsample_spacing / spacing)
+    sr = round(downsample_spacing / wsi.get_real_spacing(spacing))
     scaled_region_size = region_size // sr
     # scale patch_size and mini_patch_size
     scaled_patch_size = patch_size // sr
@@ -536,7 +537,6 @@ def generate_masks(
         )
         assert region.shape[-1] == 1, f"expecting 1 channel, found {region.shape[-1]} channels"
         region = region[...,0]
-        #TODO: make sure there is no issue with slide (x,y) axis gets inverted in numpy
 
         def split_into_blocks(arr, block_size):
             """
@@ -557,12 +557,10 @@ def generate_masks(
 
         # compute tissue percentage for each mini patch in each patch
         region_patches = split_into_blocks(region, scaled_patch_size)
-        # region_patches = region.reshape((-1, scaled_patch_size, scaled_patch_size))
 
         region_mini_patches = []
         for p in region_patches:
             mp = split_into_blocks(p, scaled_mini_patch_size)
-            # mp = p.reshape((-1, scaled_mini_patch_size, scaled_mini_patch_size))
             region_mini_patches.append(mp)
         region_mini_patches = np.stack(region_mini_patches)
         tissue = region_mini_patches == tissue_pixel_value
@@ -2130,6 +2128,7 @@ def get_slide_heatmaps_patch_level(
     segmentation_mask_path: Optional[str] = None,
     spacing: Optional[float] = None,
     downsample: Optional[int] = None,
+    background_pixel_value: Optional[int] = None,
     tissue_pixel_value: Optional[int] = None,
     patch_attn_mask: Optional[torch.Tensor] = None,
     mini_patch_attn_mask: Optional[torch.Tensor] = None,
@@ -2179,7 +2178,10 @@ def get_slide_heatmaps_patch_level(
 
     nhead_patch = patch_model.num_heads
     offset_ = offset
-    mask_attn = (patch_attn_mask is not None)
+
+    mask_attn_patch = (mini_patch_attn_mask is not None)
+    mask_attn_region = (patch_attn_mask is not None)
+    mask_attention = mask_attn_patch or mask_attn_region
 
     with tqdm.tqdm(
         region_paths,
@@ -2196,9 +2198,10 @@ def get_slide_heatmaps_patch_level(
             x, y = int(fp.stem.split("_")[0]), int(fp.stem.split("_")[1])
 
             pm, mpm = None, None
-            if mask_attn:
-                pm = patch_attn_mask[k].unsqueeze(0)
+            if mask_attn_patch:
                 mpm = mini_patch_attn_mask[k]
+            if mask_attn_region:
+                pm = patch_attn_mask[k].unsqueeze(0)
 
             _, patch_att, _ = get_region_attention_scores(
                 region,
@@ -2224,7 +2227,7 @@ def get_slide_heatmaps_patch_level(
                     color=(255, 255, 255),
                 )
                 pm2, mpm2 = None, None
-                if mask_attn:
+                if mask_attention:
                     pm2, mpm2 = get_mask(
                         slide_path,
                         segmentation_mask_path,
@@ -2236,6 +2239,7 @@ def get_slide_heatmaps_patch_level(
                         spacing,
                         backend='asap',
                         downsample=downsample,
+                        background_pixel_value=background_pixel_value,
                         tissue_pixel_value=tissue_pixel_value,
                         offset=offset,
                     )
@@ -2390,6 +2394,7 @@ def get_slide_heatmaps_region_level(
     segmentation_mask_path: Optional[str] = None,
     spacing: Optional[float] = None,
     downsample: Optional[int] = None,
+    background_pixel_value: Optional[int] = None,
     tissue_pixel_value: Optional[int] = None,
     patch_attn_mask: Optional[torch.Tensor] = None,
     mini_patch_attn_mask: Optional[torch.Tensor] = None,
@@ -2440,7 +2445,10 @@ def get_slide_heatmaps_region_level(
 
     nhead_region = region_model.num_heads
     offset_ = offset
-    mask_attn = (patch_attn_mask is not None)
+
+    mask_attn_patch = (mini_patch_attn_mask is not None)
+    mask_attn_region = (patch_attn_mask is not None)
+    mask_attention = mask_attn_patch or mask_attn_region
 
     with tqdm.tqdm(
         region_paths,
@@ -2456,9 +2464,10 @@ def get_slide_heatmaps_region_level(
             x, y = int(fp.stem.split("_")[0]), int(fp.stem.split("_")[1])
 
             pm, mpm = None, None
-            if mask_attn:
-                pm = patch_attn_mask[k].unsqueeze(0)
+            if mask_attn_patch:
                 mpm = mini_patch_attn_mask[k]
+            if mask_attn_region:
+                pm = patch_attn_mask[k].unsqueeze(0)
 
             _, _, region_att = get_region_attention_scores(
                 region,
@@ -2484,7 +2493,7 @@ def get_slide_heatmaps_region_level(
                     color=(255, 255, 255),
                 )
                 pm2, mpm2 = None, None
-                if mask_attn:
+                if mask_attention:
                     pm2, mpm2 = get_mask(
                         slide_path,
                         segmentation_mask_path,
@@ -2496,6 +2505,7 @@ def get_slide_heatmaps_region_level(
                         spacing,
                         backend='asap',
                         downsample=downsample,
+                        background_pixel_value=background_pixel_value,
                         tissue_pixel_value=tissue_pixel_value,
                         offset=offset,
                     )
@@ -2508,7 +2518,7 @@ def get_slide_heatmaps_region_level(
                     color=(255, 255, 255),
                 )
                 pm3, mpm3 = None, None
-                if mask_attn:
+                if mask_attention:
                     pm3, mpm3 = get_mask(
                         slide_path,
                         segmentation_mask_path,
@@ -2520,6 +2530,7 @@ def get_slide_heatmaps_region_level(
                         spacing,
                         backend='asap',
                         downsample=downsample,
+                        background_pixel_value=background_pixel_value,
                         tissue_pixel_value=tissue_pixel_value,
                         offset=offset*2,
                     )
@@ -2532,7 +2543,7 @@ def get_slide_heatmaps_region_level(
                     color=(255, 255, 255),
                 )
                 pm4, mpm4 = None, None
-                if mask_attn:
+                if mask_attention:
                     pm4, mpm4 = get_mask(
                         slide_path,
                         segmentation_mask_path,
@@ -2544,6 +2555,7 @@ def get_slide_heatmaps_region_level(
                         spacing,
                         backend='asap',
                         downsample=downsample,
+                        background_pixel_value=background_pixel_value,
                         tissue_pixel_value=tissue_pixel_value,
                         offset=offset*3,
                     )
@@ -3235,7 +3247,7 @@ def get_slide_hierarchical_heatmaps_region(
 
                     with tqdm.tqdm(
                         range(nhead_patch),
-                        desc=f"Region head [{j}/{nhead_region}]",
+                        desc=f"Region head [{j+1}/{nhead_region}]",
                         unit=" head",
                         leave=False,
                         disable=not main_process,
@@ -3384,6 +3396,7 @@ def get_slide_blended_heatmaps(
     segmentation_mask_path: Optional[str] = None,
     spacing: Optional[float] = None,
     downsample: Optional[int] = None,
+    background_pixel_value: Optional[int] = None,
     tissue_pixel_value: Optional[int] = None,
     patch_attn_mask: Optional[torch.Tensor] = None,
     mini_patch_attn_mask: Optional[torch.Tensor] = None,
@@ -3456,7 +3469,10 @@ def get_slide_blended_heatmaps(
     nhead_region = region_model.num_heads
     offset = smoothing.offset.region
     offset_ = offset
-    mask_attn = (patch_attn_mask is not None)
+
+    mask_attn_patch = (mini_patch_attn_mask is not None)
+    mask_attn_region = (patch_attn_mask is not None)
+    mask_attention = mask_attn_patch or mask_attn_region
 
     with tqdm.tqdm(
         region_paths,
@@ -3473,9 +3489,10 @@ def get_slide_blended_heatmaps(
             x, y = int(fp.stem.split("_")[0]), int(fp.stem.split("_")[1])
 
             pm, mpm = None, None
-            if mask_attn:
-                pm = patch_attn_mask[k].unsqueeze(0)
+            if mask_attn_patch:
                 mpm = mini_patch_attn_mask[k]
+            if mask_attn_region:
+                pm = patch_attn_mask[k].unsqueeze(0)
 
             _, patch_att, region_att = get_region_attention_scores(
                 region,
@@ -3502,7 +3519,7 @@ def get_slide_blended_heatmaps(
                     color=(255, 255, 255),
                 )
                 pm2, mpm2 = None, None
-                if mask_attn:
+                if mask_attention:
                     pm2, mpm2 = get_mask(
                         slide_path,
                         segmentation_mask_path,
@@ -3514,6 +3531,7 @@ def get_slide_blended_heatmaps(
                         spacing,
                         backend='asap',
                         downsample=downsample,
+                        background_pixel_value=background_pixel_value,
                         tissue_pixel_value=tissue_pixel_value,
                         offset=offset,
                     )
@@ -3526,7 +3544,7 @@ def get_slide_blended_heatmaps(
                     color=(255, 255, 255),
                 )
                 pm3, mpm3 = None, None
-                if mask_attn:
+                if mask_attention:
                     pm3, mpm3 = get_mask(
                         slide_path,
                         segmentation_mask_path,
@@ -3538,6 +3556,7 @@ def get_slide_blended_heatmaps(
                         spacing,
                         backend='asap',
                         downsample=downsample,
+                        background_pixel_value=background_pixel_value,
                         tissue_pixel_value=tissue_pixel_value,
                         offset=offset*2,
                     )
@@ -3550,7 +3569,7 @@ def get_slide_blended_heatmaps(
                     color=(255, 255, 255),
                 )
                 pm4, mpm4 = None, None
-                if mask_attn:
+                if mask_attention:
                     pm4, mpm4 = get_mask(
                         slide_path,
                         segmentation_mask_path,
@@ -3562,6 +3581,7 @@ def get_slide_blended_heatmaps(
                         spacing,
                         backend='asap',
                         downsample=downsample,
+                        background_pixel_value=background_pixel_value,
                         tissue_pixel_value=tissue_pixel_value,
                         offset=offset*3,
                     )
@@ -3664,7 +3684,7 @@ def get_slide_blended_heatmaps(
 
                     with tqdm.tqdm(
                         range(nhead_patch),
-                        desc=f"Region head [{j}/{nhead_region}]",
+                        desc=f"Region head [{j+1}/{nhead_region}]",
                         unit=" head",
                         leave=False,
                         disable=not main_process,
@@ -3874,19 +3894,15 @@ def stitch_slide_heatmaps(
             )
 
     vis_level = wsi_object.get_best_level_for_downsample_custom(downsample)
-    (width, height) = wsi_object.level_dimensions[vis_level]
-    vis_spacing = wsi_object.spacings[vis_level]
-    canvas = wsi_object.wsi.get_patch(
-        0,
-        0,
-        width,
-        height,
-        spacing=wsi_object.spacing_mapping[vis_spacing],
-        center=False,
-    )
+    vis_spacing = wsi_object.get_level_spacing(vis_level)
+    canvas = wsi_object.wsi.get_slide(spacing=vis_spacing)
+    # x and y axes get inverted when using get_slide methid
+    width, height = canvas.shape
+
+    canvas_ = np.copy(canvas)
     if highlight:
         # add an alpha channel, slightly transparent (255*alpha)
-        canvas = np.dstack((canvas, np.zeros((height,width),dtype=np.uint8)+int(255*opacity)))
+        canvas = np.dstack((canvas, np.zeros((width,height),dtype=np.uint8)+int(255*opacity)))
         canvas_ = np.copy(canvas)
 
     for hm, (x, y) in zip(heatmaps, coords):
@@ -3913,28 +3929,30 @@ def stitch_slide_heatmaps(
             )
 
         canvas[
-            y_downsampled : min(y_downsampled + h_downsampled, height),
-            x_downsampled : min(x_downsampled + w_downsampled, width),
+            y_downsampled : min(y_downsampled + h_downsampled, width),
+            x_downsampled : min(x_downsampled + w_downsampled, height),
         ] = hm_downsampled[
-            : min(h_downsampled, height - y_downsampled),
-            : min(w_downsampled, width - x_downsampled),
+            : min(h_downsampled, width - y_downsampled),
+            : min(w_downsampled, height - x_downsampled),
         ]
 
         if restrict_to_tissue:
             tissue_mask = wsi_object.binary_mask[
-                y_downsampled : min(y_downsampled + h_downsampled, height),
-                x_downsampled : min(x_downsampled + w_downsampled, width),
+                y_downsampled : min(y_downsampled + h_downsampled, width),
+                x_downsampled : min(x_downsampled + w_downsampled, height),
             ]
             tissue_mask = (tissue_mask > 0).astype(int)
-            # if highlight:
             tissue_mask = tissue_mask[..., np.newaxis]
             canvas[
-                y_downsampled : min(y_downsampled + h_downsampled, height),
-                x_downsampled : min(x_downsampled + w_downsampled, width),
+                y_downsampled : min(y_downsampled + h_downsampled, width),
+                x_downsampled : min(x_downsampled + w_downsampled, height),
             ] = canvas[
-                y_downsampled : min(y_downsampled + h_downsampled, height),
-                x_downsampled : min(x_downsampled + w_downsampled, width),
+                y_downsampled : min(y_downsampled + h_downsampled, width),
+                x_downsampled : min(x_downsampled + w_downsampled, height),
             ] * tissue_mask
+            m_black = (canvas[:, :, 0:3] == [0,0,0]).all(2)
+            canvas[m_black] = canvas_[m_black]
+            stitched_hm = Image.fromarray(canvas)
 
     if highlight:
         m_black = (canvas[:, :, 0:3] == [0,0,0]).all(2)
@@ -3946,11 +3964,11 @@ def stitch_slide_heatmaps(
     if save_to_disk:
         # add colorbar
         sm = plt.cm.ScalarMappable(cmap=cmap)
-        fig, ax = plt.subplots(dpi=100)
+        fig, ax = plt.subplots(dpi=150)
         plt.colorbar(sm, ax=ax)
         ax.remove()
         plt.yticks(fontsize='large')
-        plt.savefig('color_bar.png', bbox_inches='tight')
+        plt.savefig('color_bar.png', bbox_inches='tight', dpi=150)
         plt.close()
         cbar = Image.open('color_bar.png')
         os.remove('color_bar.png')
@@ -3965,7 +3983,7 @@ def stitch_slide_heatmaps(
         canvas.paste(stitched_hm, (0, 0))
         canvas.paste(cbar, (x, y))
         stitched_hm_path = Path(slide_output_dir, f"{fname}.png")
-        canvas.save(stitched_hm_path)
+        canvas.save(stitched_hm_path, dpi=(300, 300))
 
     return stitched_hm
 
@@ -3983,6 +4001,7 @@ def display_stitched_heatmaps(
     downsample: int = 32,
     key: str = "coords",
     font_fp: Path = Path("arial.ttf"),
+    run_id: Optional[str] = None,
 ):
     """
     Display stitched heatmaps from multiple heads together, optionally alongside a visualization of patch extraction results.
@@ -4012,16 +4031,8 @@ def display_stitched_heatmaps(
 
         wsi_object = WholeSlideImage(slide_path)
         vis_level = wsi_object.get_best_level_for_downsample_custom(downsample)
-        (width, height) = wsi_object.level_dimensions[vis_level]
-        vis_spacing = wsi_object.spacings[vis_level]
-        slide_canvas = wsi_object.wsi.get_patch(
-            0,
-            0,
-            width,
-            height,
-            spacing=wsi_object.spacing_mapping[vis_spacing],
-            center=False,
-        )
+        vis_spacing = wsi_object.get_level_spacing(vis_level)
+        slide_canvas = wsi_object.wsi.get_slide(spacing=vis_spacing)
 
         patching_im = DrawMapFromCoords(
             slide_canvas,
@@ -4041,14 +4052,17 @@ def display_stitched_heatmaps(
     pad = 20
 
     sm = plt.cm.ScalarMappable(cmap=cmap)
-    fig, ax = plt.subplots(dpi=100)
+    fig, ax = plt.subplots(dpi=150)
     plt.colorbar(sm, ax=ax)
     ax.remove()
     plt.yticks(fontsize='large')
-    plt.savefig('color_bar.png', bbox_inches='tight')
+    color_bar_name = "color_bar.png"
+    if run_id:
+        color_bar_name = f"color_bar_{run_id}.png"
+    plt.savefig(color_bar_name, bbox_inches='tight', dpi=150)
     plt.close()
-    cbar = Image.open('color_bar.png')
-    os.remove('color_bar.png')
+    cbar = Image.open(color_bar_name)
+    os.remove(color_bar_name)
     w_cbar, h_cbar = cbar.size
 
     modes = set([hm.mode for hm in heatmaps.values()])
@@ -4087,7 +4101,7 @@ def display_stitched_heatmaps(
     canvas.paste(cbar, (x, y))
 
     stitched_hm_path = Path(output_dir, f"{fname}.png")
-    canvas.save(stitched_hm_path)
+    canvas.save(stitched_hm_path, dpi=(300, 300))
 
 
 # Smoothing utility functions

@@ -5,7 +5,6 @@ import wandb
 import torch
 import hydra
 import shutil
-import datetime
 import subprocess
 import pandas as pd
 import multiprocessing as mp
@@ -29,6 +28,7 @@ from source.utils import (
     version_base="1.2.0", config_path="config/feature_extraction", config_name="default"
 )
 def main(cfg: DictConfig):
+
     distributed = torch.cuda.device_count() > 1
     if distributed:
         torch.distributed.init_process_group(backend="nccl")
@@ -40,24 +40,14 @@ def main(cfg: DictConfig):
 
     if is_main_process():
         print(f"torch.cuda.device_count(): {torch.cuda.device_count()}")
-        run_id = datetime.datetime.now().strftime("%Y-%m-%d_%H_%M")
         # set up wandb
         if cfg.wandb.enable:
             key = os.environ.get("WANDB_API_KEY")
             wandb_run = initialize_wandb(cfg, key=key)
             wandb_run.define_metric("processed", summary="max")
             run_id = wandb_run.id
-    else:
-        run_id = ""
 
-    if distributed:
-        obj = [run_id]
-        torch.distributed.broadcast_object_list(
-            obj, 0, device=torch.device(f"cuda:{gpu_id}")
-        )
-        run_id = obj[0]
-
-    output_dir = Path(cfg.output_dir, cfg.experiment_name, run_id)
+    output_dir = Path(cfg.output_dir, cfg.experiment_name, f"fold_{cfg.fold}")
     slide_features_dir = Path(output_dir, "slide_features")
     region_features_dir = Path(output_dir, "region_features")
     if not cfg.resume and is_main_process():
@@ -134,7 +124,7 @@ def main(cfg: DictConfig):
 
     num_workers = min(mp.cpu_count(), cfg.num_workers)
     if "SLURM_JOB_CPUS_PER_NODE" in os.environ:
-        num_workers = min(num_workers, int(os.environ["SLURM_JOB_CPUS_PER_NODE"]))
+        num_workers = min(num_workers, int(os.environ['SLURM_JOB_CPUS_PER_NODE']))
 
     loader = torch.utils.data.DataLoader(
         dataset,
@@ -170,7 +160,7 @@ def main(cfg: DictConfig):
     ) as t1:
         with torch.no_grad():
             for i, batch in enumerate(t1):
-                idx, region_fps, slide_id, pct = batch
+                idx, region_fps, slide_id = batch
                 # sort region filepath for easier reproducibility
                 region_fps = sorted(region_fps)
                 slide_ids.append(slide_id)
@@ -185,7 +175,7 @@ def main(cfg: DictConfig):
                     leave=False,
                     disable=not (gpu_id in [-1, 0]),
                 ) as t2:
-                    for j, fp in enumerate(t2):
+                    for fp in t2:
                         x_y = Path(fp).stem
                         x, y = int(x_y.split("_")[0]), int(x_y.split("_")[1])
                         x_coords.append(x)
@@ -194,10 +184,7 @@ def main(cfg: DictConfig):
                         img = transforms.functional.to_tensor(img)  # [3, 4096, 4096]
                         img = img.unsqueeze(0)  # [1, 3, 4096, 4096]
                         img = img.to(device, non_blocking=True)
-                        p = None
-                        if pct is not None:
-                            p = pct[j]
-                        feature = model(img, pct=p)
+                        feature = model(img)
                         if cfg.save_region_features:
                             save_path = Path(
                                 region_features_dir, f"{slide_id}_{x}_{y}.pt"

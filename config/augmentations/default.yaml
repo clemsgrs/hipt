@@ -7,6 +7,7 @@ region_size: 1024
 label_csv: '/data/pathology/projects/ais-cap/dataset/panda/5-fold_cleaned/fold_${fold}/train.csv'
 # features_root_dir: '/data/pathology/projects/ais-cap/dataset/panda/hipt/feature_extraction/5-fold/${level}/${region_size}/fold_${fold}'
 features_root_dir: '/data/pathology/projects/ais-cap/code/git/clemsgrs/hipt/output/panda/feature_extraction/fyj8xldd'
+augmentation_dir: '/data/pathology/projects/ais-cap/dataset/panda/hipt/augmentations/${level}/${region_size}/fold_${fold}'
 
 level: 'global'
 label_name: 'isup_grade'
@@ -15,8 +16,8 @@ K: 10
 threshold:
 
 speed:
-  multiprocessing: False
-  num_workers: 32
+  multiprocessing: True
+  num_workers: 64
 
 wandb:
   enable: False
