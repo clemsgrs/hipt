@@ -1,17 +1,17 @@
 data_dir: '/data/pathology/projects/ais-cap/dataset/leander_patches'
 
-output_dir: 'output/debug'
+output_dir: '/data/pathology/projects/ais-cap/code/git/clemsgrs/hipt/output/debug'
 experiment_name: 'feature_extraction'
 resume: False
 
-patch_size: 512
+patch_size: 256
 mini_patch_size: 16
 
 num_workers: 4
 batch_size: 1
 
-pretrain_vit_patch: 'checkpoints/vit_256_small_dino.pth'
-img_size_pretrained: 256
+pretrain_vit_patch: '/data/pathology/projects/ais-cap/dataset/panda/hipt/dino/5-fold/vit_256_small_dino_fold_0.pt'
+img_size_pretrained:
 
 wandb:
   enable: False
