@@ -461,7 +461,7 @@ def plot_confusion_matrix(
                     else:
                         annot[i, j] = f"{c}"
 
-    if names:
+    if names and len(names) == cm.shape[0]:
         labels = [f"{str(n).upper()}" for n in names]
     else:
         labels = [f"{i}" for i in range(cm.shape[0])]
