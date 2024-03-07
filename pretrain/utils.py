@@ -44,6 +44,35 @@ def hydra_argv_remapper(argv_map):
     sys.argv = argv
 
 
+# Use timm's names
+IMAGENET_DEFAULT_MEAN = (0.485, 0.456, 0.406)
+IMAGENET_DEFAULT_STD = (0.229, 0.224, 0.225)
+
+
+def make_normalize_transform(
+    mean: Sequence[float] = IMAGENET_DEFAULT_MEAN,
+    std: Sequence[float] = IMAGENET_DEFAULT_STD,
+) -> transforms.Normalize:
+    return transforms.Normalize(mean=mean, std=std)
+
+
+class MaybeToTensor(transforms.ToTensor):
+    """
+    Convert a ``PIL Image`` or ``numpy.ndarray`` to tensor, or keep as is if already a tensor.
+    """
+
+    def __call__(self, pic):
+        """
+        Args:
+            pic (PIL Image, numpy.ndarray or torch.tensor): Image to be converted to tensor.
+        Returns:
+            Tensor: Converted image.
+        """
+        if isinstance(pic, torch.Tensor):
+            return pic
+        return super().__call__(pic)
+
+
 class GaussianBlur(object):
     """
     Apply Gaussian Blur to the PIL image.
@@ -82,7 +111,15 @@ class Solarization(object):
 
 
 class PatchDataAugmentationDINO(object):
-    def __init__(self, global_crops_scale, local_crops_scale, local_crops_number):
+    def __init__(
+        self,
+        global_crops_scale,
+        local_crops_scale,
+        local_crops_number,
+        interpolation=transforms.InterpolationMode.BICUBIC,
+        mean: Sequence[float] = IMAGENET_DEFAULT_MEAN,
+        std: Sequence[float] = IMAGENET_DEFAULT_STD,
+    ):
         flip_and_color_jitter = transforms.Compose(
             [
                 transforms.RandomHorizontalFlip(p=0.5),
@@ -99,8 +136,8 @@ class PatchDataAugmentationDINO(object):
         )
         normalize = transforms.Compose(
             [
-                transforms.ToTensor(),
-                transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
+                MaybeToTensor(),
+                make_normalize_transform(mean=mean, std=std),
             ]
         )
 
@@ -113,7 +150,7 @@ class PatchDataAugmentationDINO(object):
                 transforms.RandomResizedCrop(
                     global_crop_size,
                     scale=global_crops_scale,
-                    interpolation=transforms.InterpolationMode.BICUBIC,
+                    interpolation=interpolation,
                 ),
                 flip_and_color_jitter,
                 GaussianBlur(1.0),
@@ -126,7 +163,7 @@ class PatchDataAugmentationDINO(object):
                 transforms.RandomResizedCrop(
                     global_crop_size,
                     scale=global_crops_scale,
-                    interpolation=transforms.InterpolationMode.BICUBIC,
+                    interpolation=interpolation,
                 ),
                 flip_and_color_jitter,
                 GaussianBlur(0.1),
@@ -141,7 +178,7 @@ class PatchDataAugmentationDINO(object):
                 transforms.RandomResizedCrop(
                     local_crop_size,
                     scale=local_crops_scale,
-                    interpolation=transforms.InterpolationMode.BICUBIC,
+                    interpolation=interpolation,
                 ),
                 flip_and_color_jitter,
                 GaussianBlur(p=0.5),
@@ -210,6 +247,23 @@ class RegionDataAugmentationDINO(object):
         for _ in range(self.local_crops_number):
             crops.append(self.local_transfo(x))
         return crops
+
+
+def make_classification_eval_transform(
+    *,
+    resize_size: int = 256,
+    interpolation=transforms.InterpolationMode.BICUBIC,
+    crop_size: int = 224,
+    mean: Sequence[float] = IMAGENET_DEFAULT_MEAN,
+    std: Sequence[float] = IMAGENET_DEFAULT_STD,
+) -> transforms.Compose:
+    transforms_list = [
+        transforms.Resize(resize_size, interpolation=interpolation),
+        transforms.CenterCrop(crop_size),
+        MaybeToTensor(),
+        make_normalize_transform(mean=mean, std=std),
+    ]
+    return transforms.Compose(transforms_list)
 
 
 def is_dist_avail_and_initialized():
