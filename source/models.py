@@ -91,6 +91,7 @@ class ModelFactory:
                             slide_pos_embed=model_options.slide_pos_embed,
                             mask_attn_region=model_options.mask_attn_region,
                             img_size_pretrained=model_options.img_size_pretrained,
+                            num_register_tokens_region=model_options.num_register_tokens_region,
                         )
                     else:
                         self.model = LocalGlobalOrdinalHIPT(
@@ -104,6 +105,7 @@ class ModelFactory:
                             slide_pos_embed=model_options.slide_pos_embed,
                             mask_attn_region=model_options.mask_attn_region,
                             img_size_pretrained=model_options.img_size_pretrained,
+                            num_register_tokens_region=model_options.num_register_tokens_region,
                         )
                 else:
                     self.model = LocalGlobalHIPT(
@@ -119,6 +121,7 @@ class ModelFactory:
                         slide_pos_embed=model_options.slide_pos_embed,
                         mask_attn_region=model_options.mask_attn_region,
                         img_size_pretrained=model_options.img_size_pretrained,
+                        num_register_tokens_region=model_options.num_register_tokens_region,
                     )
             else:
                 self.model = HIPT(
@@ -286,6 +289,7 @@ class LocalGlobalHIPT(nn.Module):
         slide_pos_embed: Optional[DictConfig] = None,
         mask_attn_region: bool = False,
         img_size_pretrained: Optional[int] = None,
+        num_register_tokens_region: int = 0,
     ):
         super(LocalGlobalHIPT, self).__init__()
         self.npatch = int(region_size // patch_size)
@@ -300,6 +304,7 @@ class LocalGlobalHIPT(nn.Module):
             output_embed_dim=embed_dim_region,
             mask_attn=mask_attn_region,
             img_size_pretrained=img_size_pretrained,
+            num_register_tokens=num_register_tokens_region,
         )
 
         if pretrain_vit_region and Path(pretrain_vit_region).is_file():
@@ -451,6 +456,8 @@ class HIPT(nn.Module):
         slide_pos_embed: Optional[DictConfig] = None,
         mask_attn_patch: bool = False,
         mask_attn_region: bool = False,
+        num_register_tokens_patch: int = 0,
+        num_register_tokens_region: int = 0,
         img_size_pretrained: Optional[int] = None,
     ):
         super(HIPT, self).__init__()
@@ -472,6 +479,7 @@ class HIPT(nn.Module):
             patch_size=mini_patch_size,
             embed_dim=embed_dim_patch,
             mask_attn=mask_attn_patch,
+            num_register_tokens=num_register_tokens_patch,
         )
 
         if pretrain_vit_patch and Path(pretrain_vit_patch).is_file():
@@ -515,6 +523,7 @@ class HIPT(nn.Module):
             output_embed_dim=embed_dim_region,
             mask_attn=mask_attn_region,
             img_size_pretrained=img_size_pretrained,
+            num_register_tokens=num_register_tokens_region,
         )
 
         if pretrain_vit_region and Path(pretrain_vit_region).is_file():
@@ -704,6 +713,8 @@ class GlobalFeatureExtractor(nn.Module):
         split_across_gpus: bool = False,
         mask_attn_patch: bool = False,
         mask_attn_region: bool = False,
+        num_register_tokens_patch: int = 0,
+        num_register_tokens_region: int = 0,
         img_size_pretrained: Optional[int] = None,
         verbose: bool = True,
     ):
@@ -723,6 +734,7 @@ class GlobalFeatureExtractor(nn.Module):
             patch_size=mini_patch_size,
             embed_dim=embed_dim_patch,
             mask_attn=mask_attn_patch,
+            num_register_tokens=num_register_tokens_patch,
         )
 
         if Path(pretrain_vit_patch).is_file():
@@ -765,6 +777,7 @@ class GlobalFeatureExtractor(nn.Module):
             output_embed_dim=embed_dim_region,
             mask_attn=mask_attn_region,
             img_size_pretrained=img_size_pretrained,
+            num_register_tokens=num_register_tokens_region,
         )
 
         if Path(pretrain_vit_region).is_file():
@@ -854,6 +867,7 @@ class LocalFeatureExtractor(nn.Module):
         pretrain_vit_patch: str = "path/to/pretrained/vit_patch/weights.pth",
         embed_dim_patch: int = 384,
         mask_attn_patch: bool = False,
+        num_register_tokens_patch: int = 0,
         verbose: bool = True,
     ):
         super(LocalFeatureExtractor, self).__init__()
@@ -866,6 +880,7 @@ class LocalFeatureExtractor(nn.Module):
             patch_size=mini_patch_size,
             embed_dim=embed_dim_patch,
             mask_attn=mask_attn_patch,
+            num_register_tokens=num_register_tokens_patch,
         )
 
         if Path(pretrain_vit_patch).is_file():
@@ -933,6 +948,7 @@ class PatchEmbedder(nn.Module):
         embed_dim: int = 384,
         mask_attn_patch: bool = False,
         img_size_pretrained: Optional[int] = None,
+        num_register_tokens_patch: int = 0,
         verbose: bool = True,
     ):
         super(PatchEmbedder, self).__init__()
@@ -944,6 +960,7 @@ class PatchEmbedder(nn.Module):
             embed_dim=embed_dim,
             mask_attn=mask_attn_patch,
             img_size_pretrained=img_size_pretrained,
+            num_register_tokens=num_register_tokens_patch,
         )
 
         if Path(pretrain_vit_patch).is_file():
@@ -1319,6 +1336,7 @@ class LocalGlobalOrdinalHIPT(LocalGlobalHIPT):
         slide_pos_embed: Optional[DictConfig] = None,
         mask_attn_region: bool = False,
         img_size_pretrained: Optional[int] = None,
+        num_register_tokens_region: int = 0,
     ):
         super().__init__(
             num_classes,
@@ -1333,6 +1351,7 @@ class LocalGlobalOrdinalHIPT(LocalGlobalHIPT):
             slide_pos_embed,
             mask_attn_region,
             img_size_pretrained,
+            num_register_tokens_region,
         )
         self.classifier = nn.Linear(192, num_classes - 1)
 
@@ -1352,6 +1371,7 @@ class LocalGlobalCoralHIPT(LocalGlobalHIPT):
         slide_pos_embed: Optional[DictConfig] = None,
         mask_attn_region: bool = False,
         img_size_pretrained: Optional[int] = None,
+        num_register_tokens_region: int = 0,
     ):
         super().__init__(
             num_classes,
@@ -1366,6 +1386,7 @@ class LocalGlobalCoralHIPT(LocalGlobalHIPT):
             slide_pos_embed,
             mask_attn_region,
             img_size_pretrained,
+            num_register_tokens_region,
         )
         self.classifier = nn.Linear(192, 1, bias=False)
         self.num_classes = num_classes
@@ -1433,6 +1454,7 @@ class LocalGlobalRegressionHIPT(LocalGlobalHIPT):
         slide_pos_embed: Optional[DictConfig] = None,
         mask_attn_region: bool = False,
         img_size_pretrained: Optional[int] = None,
+        num_register_tokens_region: int = 0,
     ):
         super().__init__(
             num_classes,
@@ -1447,5 +1469,6 @@ class LocalGlobalRegressionHIPT(LocalGlobalHIPT):
             slide_pos_embed,
             mask_attn_region,
             img_size_pretrained,
+            num_register_tokens_region,
         )
         self.classifier = nn.Linear(192, 1)

@@ -265,12 +265,14 @@ class VisionTransformer(nn.Module):
         attn_drop_rate: float = 0.0,
         drop_path_rate: float = 0.0,
         norm_layer: Callable = nn.LayerNorm,
+        num_register_tokens: int = 0,
         mask_attn: bool = False,
         img_size_pretrained: Optional[int] = None,
     ):
         super().__init__()
         self.embed_dim = embed_dim
         self.num_heads = num_heads
+        self.num_register_tokens = num_register_tokens
 
         num_patches = int(img_size * dino_max_crop_scale // patch_size) ** 2
         if img_size_pretrained:
@@ -287,6 +289,11 @@ class VisionTransformer(nn.Module):
         self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
         self.pos_embed = nn.Parameter(torch.zeros(1, num_patches + 1, embed_dim))
         self.pos_drop = nn.Dropout(p=drop_rate)
+
+        assert num_register_tokens >= 0
+        self.register_tokens = (
+            nn.Parameter(torch.zeros(1, num_register_tokens, embed_dim)) if num_register_tokens else None
+        )
 
         dpr = [
             x.item() for x in torch.linspace(0, drop_path_rate, depth)
@@ -317,6 +324,8 @@ class VisionTransformer(nn.Module):
 
         trunc_normal_(self.pos_embed, std=0.02)
         trunc_normal_(self.cls_token, std=0.02)
+        if self.register_tokens is not None:
+            nn.init.normal_(self.register_tokens, std=1e-6)
         self.apply(self._init_weights)
 
     def _init_weights(self, m):
@@ -372,6 +381,16 @@ class VisionTransformer(nn.Module):
         # add positional encoding to each token
         x = x + self.interpolate_pos_encoding(x, w, h)
 
+        if self.register_tokens is not None:
+            x = torch.cat(
+                (
+                    x[:, :1],
+                    self.register_tokens.expand(x.shape[0], -1, -1),
+                    x[:, 1:],
+                ),
+                dim=1,
+            )
+
         return self.pos_drop(x)
 
     def forward(self, x, mask: Optional[torch.Tensor] = None):
@@ -406,6 +425,7 @@ def vit_tiny(
     img_size: int = 256,
     patch_size: int = 16,
     embed_dim: int = 192,
+    num_register_tokens: int = 0,
     **kwargs,
 ):
     model = VisionTransformer(
@@ -417,6 +437,7 @@ def vit_tiny(
         mlp_ratio=4,
         qkv_bias=True,
         norm_layer=partial(nn.LayerNorm, eps=1e-6),
+        num_register_tokens=num_register_tokens,
         **kwargs,
     )
     return model
@@ -426,6 +447,7 @@ def vit_small(
     img_size: int = 256,
     patch_size: int = 16,
     embed_dim: int = 384,
+    num_register_tokens: int = 0,
     **kwargs,
 ):
     model = VisionTransformer(
@@ -437,6 +459,7 @@ def vit_small(
         mlp_ratio=4,
         qkv_bias=True,
         norm_layer=partial(nn.LayerNorm, eps=1e-6),
+        num_register_tokens=num_register_tokens,
         **kwargs,
     )
     return model
@@ -446,6 +469,7 @@ def vit_base(
     img_size: int = 256,
     patch_size: int = 16,
     embed_dim: int = 768,
+    num_register_tokens: int = 0,
     **kwargs,
 ):
     model = VisionTransformer(
@@ -457,6 +481,7 @@ def vit_base(
         mlp_ratio=4,
         qkv_bias=True,
         norm_layer=partial(nn.LayerNorm, eps=1e-6),
+        num_register_tokens=num_register_tokens,
         **kwargs,
     )
     return model
@@ -482,12 +507,14 @@ class VisionTransformer4K(nn.Module):
         attn_drop_rate: float = 0.0,
         drop_path_rate: float = 0.0,
         norm_layer: Callable = nn.LayerNorm,
+        num_register_tokens: int = 0,
         mask_attn: bool = False,
         img_size_pretrained: Optional[int] = None,
     ):
         super().__init__()
         self.embed_dim = output_embed_dim
         self.num_heads = num_heads
+        self.num_register_tokens = num_register_tokens
 
         self.phi = nn.Sequential(
             *[
@@ -507,6 +534,11 @@ class VisionTransformer4K(nn.Module):
             torch.zeros(1, num_patches + 1, self.embed_dim)
         )  # [1, 196+1, 192]
         self.pos_drop = nn.Dropout(p=drop_rate)
+
+        assert num_register_tokens >= 0
+        self.register_tokens = (
+            nn.Parameter(torch.zeros(1, num_register_tokens, self.embed_dim)) if num_register_tokens else None
+        )
 
         dpr = [
             x.item() for x in torch.linspace(0, drop_path_rate, depth)
@@ -537,6 +569,8 @@ class VisionTransformer4K(nn.Module):
 
         trunc_normal_(self.pos_embed, std=0.02)
         trunc_normal_(self.cls_token, std=0.02)
+        if self.register_tokens is not None:
+            nn.init.normal_(self.register_tokens, std=1e-6)
         self.apply(self._init_weights)
 
     def _init_weights(self, m):
@@ -598,6 +632,16 @@ class VisionTransformer4K(nn.Module):
         # add positional encoding to each token
         x = x + self.interpolate_pos_encoding(x, w, h)  # [M, npatch**2+1, 192]
 
+        if self.register_tokens is not None:
+            x = torch.cat(
+                (
+                    x[:, :1],
+                    self.register_tokens.expand(x.shape[0], -1, -1),
+                    x[:, 1:],
+                ),
+                dim=1,
+            )
+
         return self.pos_drop(x)
 
     def forward(self, x, mask: Optional[torch.Tensor] = None):
@@ -634,6 +678,7 @@ def vit4k_xs(
     input_embed_dim: int = 384,
     output_embed_dim: int = 192,
     num_classes: int = 0,
+    num_register_tokens: int = 0,
     **kwargs,
 ):
     model = VisionTransformer4K(
@@ -647,6 +692,7 @@ def vit4k_xs(
         mlp_ratio=4,
         qkv_bias=True,
         norm_layer=partial(nn.LayerNorm, eps=1e-6),
+        num_register_tokens=num_register_tokens,
         **kwargs,
     )
     return model

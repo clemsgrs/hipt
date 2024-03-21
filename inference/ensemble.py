@@ -211,7 +211,7 @@ def main(cfg: DictConfig):
             ),
             dfs,
         )
-        ensemble_df["agg"] = ensemble_df[
+        ensemble_df["pred"] = ensemble_df[
             [f"pred_{model_name}" for model_name in checkpoints]
         ].apply(lambda x: get_majority_vote(x, distance_func, seed=x.name), axis=1)
 
@@ -225,7 +225,7 @@ def main(cfg: DictConfig):
                 "label": test_df[test_df.slide_id.isin(missing_sids)][
                     f"{cfg.label_name}"
                 ].values.tolist(),
-                "agg": [
+                "pred": [
                     random.randint(0, cfg.num_classes - 1)
                     for _ in range(len(missing_sids))
                 ],
@@ -234,7 +234,7 @@ def main(cfg: DictConfig):
         ensemble_df = pd.concat([ensemble_df, missing_df], ignore_index=True)
         ensemble_df.to_csv(Path(result_dir, f"{test_name}.csv"), index=False)
         ensemble_metrics = get_metrics(
-            ensemble_df["agg"].values,
+            ensemble_df["pred"].values,
             ensemble_df.label.values,
             class_names=[f"isup_{i}" for i in range(cfg.num_classes)],
             use_wandb=cfg.wandb.enable,

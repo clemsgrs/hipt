@@ -126,6 +126,7 @@ class ClassificationDatasetOptions:
     num_classes: Optional[int] = None
     mask_attention: bool = False
     region_dir: Optional[Path] = None
+    attention_masks_dir: Optional[Path] = None
     spacing: float = 0.5
     region_size: int = 4096
     patch_size: int = 256
@@ -135,7 +136,6 @@ class ClassificationDatasetOptions:
     segmentation_parameters: Dict[str, Union[bool, int]] = field(
         default_factory=lambda: {}
     )
-    tissue_pct: float = 0.0
 
 
 @dataclass
@@ -174,7 +174,7 @@ class DatasetFactory:
                     options.backend,
                     options.region_format,
                     options.segmentation_parameters,
-                    options.tissue_pct,
+                    options.attention_masks_dir,
                     options.transform,
                     options.label_name,
                     options.label_mapping,
@@ -662,7 +662,7 @@ class ExtractedFeaturesMaskedDataset(ExtractedFeaturesDataset):
         backend: str = "pyvips",
         region_format: str = "jpg",
         segmentation_parameters: Dict[str, Union[bool, int]] = {},
-        tissue_pct: float = 0.0,
+        attention_masks_dir: Optional[Path] = None,
         transform: Optional[Callable] = None,
         label_name: str = "label",
         label_mapping: Dict[int, int] = {},
@@ -677,10 +677,29 @@ class ExtractedFeaturesMaskedDataset(ExtractedFeaturesDataset):
         self.mini_patch_size = mini_patch_size
         self.backend = backend
         self.segmentation_parameters = segmentation_parameters
-        self.tissue_pct = tissue_pct
+        self.attention_masks_dir = attention_masks_dir
         self.verbose = verbose
 
-        self.masks = self.generate_masks()
+        if attention_masks_dir is not None:
+            self.masks = self.load_masks()
+        else:
+            self.masks = self.generate_masks()
+
+    def load_masks(self):
+        self.slide_id_to_tissue_pct = {}
+        with tqdm.tqdm(
+            self.df.slide_id.unique().tolist(),
+            desc=("Loading attention masks"),
+            unit=" slide",
+            total=self.df.slide_id.nunique(),
+            leave=True,
+            disable=(not self.verbose),
+        ) as t:
+            for slide_id in t:
+                mask_path = Path(self.attention_masks_dir, f"{slide_id}.npy")
+                mask = np.load(att_mask_fp)
+                self.slide_id_to_tissue_pct[slide_id] = mask
+                del mask
 
     def generate_masks(self):
         self.slide_id_to_tissue_pct = {}
@@ -698,8 +717,8 @@ class ExtractedFeaturesMaskedDataset(ExtractedFeaturesDataset):
             )
         with tqdm.tqdm(
             id_path_mask,
-            desc=(f"Infering attention masks from tissue content"),
-            unit=f" slide",
+            desc=("Infering attention masks from tissue content"),
+            unit=" slide",
             total=self.df.slide_id.nunique(),
             leave=True,
             disable=(not self.verbose),
@@ -795,6 +814,7 @@ class ExtractedFeaturesMaskedDataset(ExtractedFeaturesDataset):
 
                 tissue_pcts = np.stack(tissue_pcts)  # (M, npatch**2, nminipatch**2)
                 self.slide_id_to_tissue_pct[sid] = tissue_pcts
+                del wsi_object, mask_region, tissue_pcts
 
     def __getitem__(self, idx: int):
         row = self.df.loc[idx]
@@ -940,7 +960,10 @@ class SlideFilepathsDataset(torch.utils.data.Dataset):
     def __getitem__(self, idx: int):
         row = self.df.loc[idx]
         slide_fp = row.slide_path
-        return idx, slide_fp
+        seg_mask_fp = None
+        if "segmentation_mask_path" in self.df.columns:
+            seg_mask_fp = row.segmentation_mask_path
+        return idx, slide_fp, seg_mask_fp
 
     def __len__(self):
         return len(self.df)

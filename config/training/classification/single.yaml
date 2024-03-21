@@ -13,7 +13,7 @@ region_dir: ''
 spacing: 0.5
 backend: 'asap'
 region_format: "jpg"
-tissue_pct: 0.0
+attention_masks_dir:
 seg_params:
   downsample: 16 # find the closest downsample level in the WSI for tissue segmentation computation
   sthresh: 8 # segmentation threshold (positive integer, using a higher threshold leads to less foreground and more background detection) (not used when use_otsu=True)
@@ -60,12 +60,14 @@ model:
   freeze_vit_patch: True
   freeze_vit_patch_pos_embed: True
   mask_attn_patch: False
+  num_register_tokens_patch: 0
   embed_dim_region: 192
   pretrain_vit_region: 'checkpoints/vit_4096_xs_dino.pth'
   img_size_pretrained:
   freeze_vit_region: True
   freeze_vit_region_pos_embed: True
   mask_attn_region: False
+  num_register_tokens_region: 0
   embed_dim_slide: 192
   region_size: 4096
   patch_size: 256

@@ -1,4 +1,5 @@
 import os
+import gc
 import time
 import tqdm
 import wandb
@@ -83,9 +84,13 @@ def main(cfg: DictConfig):
     )
 
     mask_attn = (cfg.model.mask_attn_patch is True) or (cfg.model.mask_attn_region is True)
+    attention_masks_dir = None
+    if cfg.attention_masks_dir is not None:
+        attention_masks_dir = Path(cfg.attention_masks_dir)
+        assert attention_masks_dir.is_dir(), f"{attention_masks_dir} doesn't exist!"
 
     fold_root_dir = Path(cfg.data.fold_dir)
-    nfold = len([_ for _ in fold_root_dir.glob(f"fold_*")])
+    nfold = len([_ for _ in fold_root_dir.glob("fold_*")])
     print(f"Training on {nfold} folds")
 
     tune_metrics = defaultdict(dict)
@@ -103,8 +108,8 @@ def main(cfg: DictConfig):
             slide_features_dir = Path(features_root_dir, f"fold_{i}/slide_features")
             region_features_dir = Path(features_root_dir, f"fold_{i}/region_features")
         else:
-            slide_features_dir = Path(features_root_dir, f"slide_features")
-            region_features_dir = Path(features_root_dir, f"region_features")
+            slide_features_dir = Path(features_root_dir, "slide_features")
+            region_features_dir = Path(features_root_dir, "region_features")
 
         print(f"Loading data for fold {i+1}")
         train_df_path = Path(fold_dir, "train.csv")
@@ -154,6 +159,7 @@ def main(cfg: DictConfig):
             transform=transform,
             mask_attention=mask_attn,
             region_dir=Path(cfg.region_dir),
+            attention_masks_dir=attention_masks_dir,
             spacing=cfg.spacing,
             region_size=cfg.model.region_size,
             patch_size=cfg.model.patch_size,
@@ -161,7 +167,6 @@ def main(cfg: DictConfig):
             backend=cfg.backend,
             region_format=cfg.region_format,
             segmentation_parameters=cfg.seg_params,
-            tissue_pct=cfg.tissue_pct,
         )
         tune_dataset_options = ClassificationDatasetOptions(
             df=tune_df,
@@ -171,6 +176,7 @@ def main(cfg: DictConfig):
             label_encoding=cfg.label_encoding,
             mask_attention=mask_attn,
             region_dir=Path(cfg.region_dir),
+            attention_masks_dir=attention_masks_dir,
             spacing=cfg.spacing,
             region_size=cfg.model.region_size,
             patch_size=cfg.model.patch_size,
@@ -178,7 +184,6 @@ def main(cfg: DictConfig):
             backend=cfg.backend,
             region_format=cfg.region_format,
             segmentation_parameters=cfg.seg_params,
-            tissue_pct=cfg.tissue_pct,
         )
         if test_df_path.is_file():
             test_dataset_options = ClassificationDatasetOptions(
@@ -189,6 +194,7 @@ def main(cfg: DictConfig):
                 label_encoding=cfg.label_encoding,
                 mask_attention=mask_attn,
                 region_dir=Path(cfg.region_dir),
+                attention_masks_dir=attention_masks_dir,
                 spacing=cfg.spacing,
                 region_size=cfg.model.region_size,
                 patch_size=cfg.model.patch_size,
@@ -196,10 +202,9 @@ def main(cfg: DictConfig):
                 backend=cfg.backend,
                 region_format=cfg.region_format,
                 segmentation_parameters=cfg.seg_params,
-                tissue_pct=cfg.tissue_pct,
             )
 
-        print(f"Initializing datasets")
+        print("Initializing datasets")
         train_dataset = DatasetFactory(cfg.task, train_dataset_options).get_dataset()
         tune_dataset = DatasetFactory(cfg.task, tune_dataset_options).get_dataset()
         if test_df_path.is_file():
@@ -551,6 +556,18 @@ def main(cfg: DictConfig):
                         wandb.log({f"test/fold_{i}/{r}": v})
                 elif "cm" not in r:
                     print(f"test {r}: {v}")
+
+        # freeing up memory at the end of each fold
+        del model, train_dataset, tune_dataset, optimizer, scheduler, criterion
+        if test_df_path.is_file():
+            del test_dataset
+
+        # clear PyTorch's cache
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        # explicitly calling garbage collection
+        gc.collect()
 
     metrics = defaultdict(list)
     for _, metric_dict in tune_metrics.items():

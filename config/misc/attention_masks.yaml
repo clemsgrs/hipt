@@ -1,0 +1,37 @@
+data:
+  csv: '/data/pathology/projects/ais-cap/clement/dataset/panda/csv/all_tb.csv'
+  region_dir: '/data/pathology/projects/ais-cap/code/git/clemsgrs/hs2p/output/panda/patch_extraction/nxt0lw7m/patches/2048/jpg'
+
+output_dir: '/data/pathology/projects/ais-cap/code/git/clemsgrs/hipt/output/panda'
+experiment_name: 'attention_masks'
+
+spacing: 0.5
+backend: 'asap'
+region_format: 'jpg'
+
+seg_params:
+  downsample: 32 # find the closest downsample level in the WSI for tissue segmentation computation
+  sthresh: 8 # segmentation threshold (positive integer, using a higher threshold leads to less foreground and more background detection) (not used when use_otsu=True)
+  mthresh: 7 # median filter size (positive, odd integer)
+  close: 10 # additional morphological closing to apply following initial thresholding (positive integer)
+  use_otsu: True # use otsu's method instead of simple binary thresholding
+  tissue_pixel_value: 2 # value of tissue pixel in pre-computed segmentation masks
+
+model:
+  region_size: 2048
+  patch_size: 256
+  mini_patch_size: 16
+
+wandb:
+  enable: True
+  project: 'hipt'
+  username: 'clemsg'
+  exp_name: '${experiment_name}'
+  tags: ['panda', '${model.region_size}']
+  dir: '/home/user'
+  group:
+  resume_id:
+
+hydra:
+  run:
+    dir: /tmp/hydra_output
