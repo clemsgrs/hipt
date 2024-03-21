@@ -680,26 +680,8 @@ class ExtractedFeaturesMaskedDataset(ExtractedFeaturesDataset):
         self.attention_masks_dir = attention_masks_dir
         self.verbose = verbose
 
-        if attention_masks_dir is not None:
-            self.masks = self.load_masks()
-        else:
-            self.masks = self.generate_masks()
-
-    def load_masks(self):
-        self.slide_id_to_tissue_pct = {}
-        with tqdm.tqdm(
-            self.df.slide_id.unique().tolist(),
-            desc=("Loading attention masks"),
-            unit=" slide",
-            total=self.df.slide_id.nunique(),
-            leave=True,
-            disable=(not self.verbose),
-        ) as t:
-            for slide_id in t:
-                mask_path = Path(self.attention_masks_dir, f"{slide_id}.npy")
-                mask = np.load(att_mask_fp)
-                self.slide_id_to_tissue_pct[slide_id] = mask
-                del mask
+        if not attention_masks_dir:
+            self.generate_masks()
 
     def generate_masks(self):
         self.slide_id_to_tissue_pct = {}
@@ -824,9 +806,13 @@ class ExtractedFeaturesMaskedDataset(ExtractedFeaturesDataset):
         label = row.label
         if self.transform:
             features = self.transform(features, slide_id, self.seed)
-        tissue_pct = self.slide_id_to_tissue_pct[
-            slide_id
-        ]  # (M, npatch**2, nminipatch**2)
+        if self.attention_masks_dir is not None:
+            att_mask_fp = Path(self.attention_masks_dir, f"{slide_id}.npy")
+            tissue_pct = np.load(att_mask_fp) # (M, npatch**2, nminipatch**2)
+        else:
+            tissue_pct = self.slide_id_to_tissue_pct[
+                slide_id
+            ]  # (M, npatch**2, nminipatch**2)
         tissue_pct = torch.Tensor(tissue_pct)
         return idx, features, label, tissue_pct
 
