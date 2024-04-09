@@ -90,6 +90,7 @@ class WholeSlideImage(object):
         self,
         mask_fp: Path,
         downsample: int,
+        tissue_val: int = 1,
     ):
 
         mask = WholeSlideImage(mask_fp, backend=self.backend)
@@ -112,6 +113,8 @@ class WholeSlideImage(object):
 
         m = mask.wsi.get_slide(spacing=seg_spacing)
         m = m[..., 0]
+
+        m = (m == tissue_val).astype('uint8')
 
         self.binary_mask = m
         return seg_level, seg_spacing

@@ -139,6 +139,27 @@ class Attention(nn.Module):
 
 
 class MaskedAttention(Attention):
+
+    def __init__(
+        self,
+        dim,
+        num_heads=8,
+        qkv_bias=False,
+        qk_scale=None,
+        attn_drop: float = 0.0,
+        proj_drop: float = 0.0,
+        num_register_tokens: int = 0
+    ):
+        super().__init__(
+            dim,
+            num_heads=num_heads,
+            qkv_bias=qkv_bias,
+            qk_scale=qk_scale,
+            attn_drop=attn_drop,
+            proj_drop=proj_drop,
+        )
+        self.num_register_tokens = num_register_tokens
+
     def forward(self, x, mask):
         B, seq_length, embed_dim = x.shape
         qkv = (

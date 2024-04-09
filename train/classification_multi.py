@@ -75,6 +75,11 @@ def main(cfg: DictConfig):
 
     features_root_dir = Path(cfg.features_root_dir)
 
+    region_dir = None
+    if cfg.region_dir is not None:
+        region_dir = Path(cfg.region_dir)
+        assert region_dir.is_dir(), f"{region_dir} doesn't exist!"
+
     num_workers = min(mp.cpu_count(), cfg.speed.num_workers)
     if "SLURM_JOB_CPUS_PER_NODE" in os.environ:
         num_workers = min(num_workers, int(os.environ["SLURM_JOB_CPUS_PER_NODE"]))
@@ -158,7 +163,7 @@ def main(cfg: DictConfig):
             label_encoding=cfg.label_encoding,
             transform=transform,
             mask_attention=mask_attn,
-            region_dir=Path(cfg.region_dir),
+            region_dir=region_dir,
             attention_masks_dir=attention_masks_dir,
             spacing=cfg.spacing,
             region_size=cfg.model.region_size,
@@ -175,7 +180,7 @@ def main(cfg: DictConfig):
             label_mapping=cfg.label_mapping,
             label_encoding=cfg.label_encoding,
             mask_attention=mask_attn,
-            region_dir=Path(cfg.region_dir),
+            region_dir=region_dir,
             attention_masks_dir=attention_masks_dir,
             spacing=cfg.spacing,
             region_size=cfg.model.region_size,
@@ -193,7 +198,7 @@ def main(cfg: DictConfig):
                 label_mapping=cfg.label_mapping,
                 label_encoding=cfg.label_encoding,
                 mask_attention=mask_attn,
-                region_dir=Path(cfg.region_dir),
+                region_dir=region_dir,
                 attention_masks_dir=attention_masks_dir,
                 spacing=cfg.spacing,
                 region_size=cfg.model.region_size,

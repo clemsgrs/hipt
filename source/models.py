@@ -173,6 +173,7 @@ class ModelFactory:
                         slide_pos_embed=model_options.slide_pos_embed,
                         mask_attn_region=model_options.mask_attn_region,
                         img_size_pretrained=model_options.img_size_pretrained,
+                        num_register_tokens_region=model_options.num_register_tokens_region,
                     )
 
     def get_model(self):
@@ -294,6 +295,7 @@ class LocalGlobalHIPT(nn.Module):
         super(LocalGlobalHIPT, self).__init__()
         self.npatch = int(region_size // patch_size)
         self.slide_pos_embed = slide_pos_embed
+        self.num_register_tokens_region = num_register_tokens_region
 
         checkpoint_key = "teacher"
 
@@ -385,8 +387,16 @@ class LocalGlobalHIPT(nn.Module):
             pct_patch = torch.sum(pct, axis=-1) / pct[0].numel()
             mask_patch = (pct_patch > pct_thresh).int()  # (M, npatch**2) e.g. (M, 64)
             # add the [CLS] token to the mask
-            cls_token = mask_patch.new_ones((mask_patch.size(0),1))
-            mask_patch = torch.cat((cls_token, mask_patch), dim=1)  # [M, num_patches+1]
+            cls_token = mask_patch.new_ones((mask_patch.size(0), 1))
+            # eventually add register tokens to the mask
+            # they're added after the [CLS] token in the input sequence
+            if self.num_register_tokens_region:
+                register_tokens = mask_patch.new_ones(
+                    (mask_patch.size(0), self.num_register_tokens_region)
+                )
+                mask_patch = torch.cat((cls_token, register_tokens, mask_patch), dim=1) # [M, num_patches+1+self.num_register_tokens_region]
+            else:
+                mask_patch = torch.cat((cls_token, mask_patch), dim=1)  # [M, num_patches+1]
         # x = [M, 256, 384]
         x = self.vit_region(
             x.unfold(1, self.npatch, self.npatch).transpose(1, 2),
@@ -604,15 +614,21 @@ class HIPT(nn.Module):
     def forward(self, x, pct: Optional[torch.Tensor] = None, pct_thresh: float = 0.0):
         mask_patch, mask_mini_patch = None, None
         if pct is not None:
-            mask_mini_patch = (pct > pct_thresh).int()  # (M, num_patches, nminipatch**2)
+            mask_mini_patch = (
+                pct > pct_thresh
+            ).int()  # (M, num_patches, nminipatch**2)
             # add the [CLS] token to the mask
-            cls_token = mask_mini_patch.new_ones((mask_mini_patch.size(0),mask_mini_patch.size(1),1))
-            mask_mini_patch = torch.cat((cls_token, mask_mini_patch), dim=2)  # [M, num_patches, nminipatch**2+1]
+            cls_token = mask_mini_patch.new_ones(
+                (mask_mini_patch.size(0), mask_mini_patch.size(1), 1)
+            )
+            mask_mini_patch = torch.cat(
+                (cls_token, mask_mini_patch), dim=2
+            )  # [M, num_patches, nminipatch**2+1]
             # infer patch-level mask
             pct_patch = torch.sum(pct, axis=-1) / pct[0].numel()
             mask_patch = (pct_patch > pct_thresh).int()
             # add the [CLS] token to the mask
-            cls_token = mask_patch.new_ones((mask_patch.size(0),1))
+            cls_token = mask_patch.new_ones((mask_patch.size(0), 1))
             mask_patch = torch.cat((cls_token, mask_patch), dim=1)  # [M, num_patches+1]
         # x = [M, 3, region_size, region_size]
         # TODO: add prepare_img_tensor method
@@ -818,15 +834,19 @@ class GlobalFeatureExtractor(nn.Module):
     def forward(self, x, pct: Optional[torch.Tensor] = None, pct_thresh: float = 0.0):
         mask_patch, mask_mini_patch = None, None
         if pct is not None:
-            mask_mini_patch = (pct > pct_thresh).int() # [num_patches, nminipatch**2]
+            mask_mini_patch = (pct > pct_thresh).int()  # [num_patches, nminipatch**2]
             # add the [CLS] token to the mask
-            cls_token = mask_mini_patch.new_ones((mask_mini_patch.size(0),mask_mini_patch.size(1),1))
-            mask_mini_patch = torch.cat((cls_token, mask_mini_patch), dim=2)  # [M, num_patches, nminipatch**2+1]
+            cls_token = mask_mini_patch.new_ones(
+                (mask_mini_patch.size(0), mask_mini_patch.size(1), 1)
+            )
+            mask_mini_patch = torch.cat(
+                (cls_token, mask_mini_patch), dim=2
+            )  # [M, num_patches, nminipatch**2+1]
             # infer patch-level mask
             pct_patch = torch.sum(pct, axis=-1) / pct[0].numel()
             mask_patch = (pct_patch > pct_thresh).int()
             # add the [CLS] token to the mask
-            cls_token = mask_patch.new_ones((mask_patch.size(0),1))
+            cls_token = mask_patch.new_ones((mask_patch.size(0), 1))
             mask_patch = torch.cat((cls_token, mask_patch), dim=1)  # [M, num_patches+1]
         # x = [1, 3, region_size, region_size]
         # TODO: add prepare_img_tensor method
@@ -918,8 +938,10 @@ class LocalFeatureExtractor(nn.Module):
         if pct is not None:
             mask_mini_patch = (pct > pct_thresh).int()  # [num_patches, nminipatch**2]
             # add the [CLS] token to the mask
-            cls_token = mask_patch.new_ones((mask_mini_patch.size(dim=0),1))
-            mask_mini_patch = torch.cat((cls_tokens, mask_mini_patch), dim=1)  # [num_patches, num_mini_patches+1]
+            cls_token = mask_patch.new_ones((mask_mini_patch.size(dim=0), 1))
+            mask_mini_patch = torch.cat(
+                (cls_tokens, mask_mini_patch), dim=1
+            )  # [num_patches, num_mini_patches+1]
         # x = [1, 3, region_size, region_size]
         # TODO: add prepare_img_tensor method
         x = x.unfold(2, self.ps, self.ps).unfold(
@@ -1398,8 +1420,16 @@ class LocalGlobalCoralHIPT(LocalGlobalHIPT):
             pct_patch = torch.sum(pct, axis=-1) / pct[0].numel()
             mask_patch = (pct_patch > pct_thresh).int()  # (M, npatch**2) e.g. (M, 64)
             # add the [CLS] token to the mask
-            cls_token = mask_patch.new_ones((mask_patch.size(0),1))
-            mask_patch = torch.cat((cls_token, mask_patch), dim=1)  # [M, num_patches+1]
+            cls_token = mask_patch.new_ones((mask_patch.size(0), 1))
+            # eventually add register tokens to the mask
+            # they're added after the [CLS] token in the input sequence
+            if self.num_register_tokens_region:
+                register_tokens = mask_patch.new_ones(
+                    (mask_patch.size(0), self.num_register_tokens_region)
+                )
+                mask_patch = torch.cat((cls_token, register_tokens, mask_patch), dim=1) # [M, num_patches+1+self.num_register_tokens_region]
+            else:
+                mask_patch = torch.cat((cls_token, mask_patch), dim=1)  # [M, num_patches+1]
         # x = [M, 256, 384]
         x = self.vit_region(
             x.unfold(1, self.npatch, self.npatch).transpose(1, 2),

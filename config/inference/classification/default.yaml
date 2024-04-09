@@ -15,11 +15,11 @@ label_mapping:
 label_encoding:
 
 # required when model.mask_attn_patch is True or model.mask_attn_region is True
-region_dir: ''
+region_dir:
+attention_masks_dir:
 spacing: 0.5
 backend: 'asap'
 region_format: 'jpg'
-tissue_pct: 0.0
 seg_params:
   downsample: 16 # find the closest downsample level in the WSI for tissue segmentation computation
   sthresh: 8 # segmentation threshold (positive integer, using a higher threshold leads to less foreground and more background detection) (not used when use_otsu=True)
@@ -41,11 +41,13 @@ model:
   freeze_vit_patch: True
   freeze_vit_patch_pos_embed: True
   mask_attn_patch: False
+  num_register_tokens_patch: 0
   pretrain_vit_region:
   img_size_pretrained: ${model.region_size}
   freeze_vit_region: True
   freeze_vit_region_pos_embed: True
   mask_attn_region: False
+  num_register_tokens_region: 0
   agg_method: 'concat'
   slide_pos_embed:
     use: False

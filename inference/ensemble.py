@@ -52,6 +52,11 @@ def main(cfg: DictConfig):
 
     features_root_dir = Path(cfg.features_dir)
 
+    region_dir = None
+    if cfg.region_dir is not None:
+        region_dir = Path(cfg.region_dir)
+        assert region_dir.is_dir(), f"{region_dir} doesn't exist!"
+
     num_workers = min(mp.cpu_count(), cfg.speed.num_workers)
     if "SLURM_JOB_CPUS_PER_NODE" in os.environ:
         num_workers = min(num_workers, int(os.environ["SLURM_JOB_CPUS_PER_NODE"]))
@@ -60,7 +65,13 @@ def main(cfg: DictConfig):
         cfg.task == "classification"
     )
 
-    mask_attention = (cfg.model.mask_attn_patch is True) or (cfg.model.mask_attn_region is True)
+    mask_attention = (cfg.model.mask_attn_patch is True) or (
+        cfg.model.mask_attn_region is True
+    )
+    attention_masks_dir = None
+    if cfg.attention_masks_dir is not None:
+        attention_masks_dir = Path(cfg.attention_masks_dir)
+        assert attention_masks_dir.is_dir(), f"{attention_masks_dir} doesn't exist!"
 
     if isinstance(cfg.test_csv, str):
         test_csvs = {"test": cfg.test_csv}
@@ -114,7 +125,8 @@ def main(cfg: DictConfig):
                 blinded=cfg.blinded,
                 num_classes=cfg.num_classes,
                 mask_attention=mask_attention,
-                region_dir=Path(cfg.region_dir),
+                region_dir=region_dir,
+                attention_masks_dir=attention_masks_dir,
                 spacing=cfg.spacing,
                 region_size=cfg.model.region_size,
                 patch_size=cfg.model.patch_size,
@@ -122,10 +134,9 @@ def main(cfg: DictConfig):
                 backend=cfg.backend,
                 region_format=cfg.region_format,
                 segmentation_parameters=cfg.seg_params,
-                tissue_pct=cfg.tissue_pct,
             )
 
-            print(f"Initializing test dataset")
+            print("Initializing test dataset")
             test_dataset = DatasetFactory(cfg.task, test_dataset_options).get_dataset()
 
             print(f"Running inference on {test_name} dataset with {model_name} model")
@@ -214,6 +225,9 @@ def main(cfg: DictConfig):
         ensemble_df["pred"] = ensemble_df[
             [f"pred_{model_name}" for model_name in checkpoints]
         ].apply(lambda x: get_majority_vote(x, distance_func, seed=x.name), axis=1)
+        ensemble_df["comment"] = [
+            "majority vote" for _ in range(len(ensemble_df))
+        ]
 
         test_df = pd.read_csv(csv_path)
         missing_sids = set(test_df.slide_id.values).difference(
@@ -222,13 +236,15 @@ def main(cfg: DictConfig):
         missing_df = pd.DataFrame.from_dict(
             {
                 "slide_id": list(missing_sids),
-                "label": test_df[test_df.slide_id.isin(missing_sids)][
-                    f"{cfg.label_name}"
-                ].values.tolist(),
+                "label": [
+                    test_df[test_df.slide_id == slide_id][f"{cfg.label_name}"].values[0]
+                    for slide_id in missing_sids
+                ],
                 "pred": [
                     random.randint(0, cfg.num_classes - 1)
                     for _ in range(len(missing_sids))
                 ],
+                "comment": ["no regions extracted ; assigning a random prediction" for _ in range(len(missing_sids))],
             }
         )
         ensemble_df = pd.concat([ensemble_df, missing_df], ignore_index=True)
