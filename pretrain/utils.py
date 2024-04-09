@@ -250,19 +250,25 @@ class RegionDataAugmentationDINO(object):
 
 
 def make_classification_eval_transform(
-    *,
+    image_size: int,
     resize_size: int = 256,
     interpolation=transforms.InterpolationMode.BICUBIC,
     crop_size: int = 224,
     mean: Sequence[float] = IMAGENET_DEFAULT_MEAN,
     std: Sequence[float] = IMAGENET_DEFAULT_STD,
 ) -> transforms.Compose:
-    transforms_list = [
-        transforms.Resize(resize_size, interpolation=interpolation),
-        transforms.CenterCrop(crop_size),
-        MaybeToTensor(),
-        make_normalize_transform(mean=mean, std=std),
-    ]
+    if image_size == 224:
+        transforms_list = [
+            MaybeToTensor(),
+            make_normalize_transform(mean=mean, std=std),
+        ]
+    elif image_size > 224:
+        transforms_list = [
+            transforms.Resize(resize_size, interpolation=interpolation),
+            transforms.CenterCrop(crop_size),
+            MaybeToTensor(),
+            make_normalize_transform(mean=mean, std=std),
+        ]
     return transforms.Compose(transforms_list)
 
 

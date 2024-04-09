@@ -76,7 +76,7 @@ def main(cfg: DictConfig):
         img_size_pretrained=cfg.img_size_pretrained,
     )
 
-    transform = make_classification_eval_transform()
+    transform = make_classification_eval_transform(img_size=cfg.patch_size)
     dataset = ImageFolderWithNameDataset(cfg.data_dir, transform)
 
     if distributed and is_main_process() and cfg.wandb.enable:
