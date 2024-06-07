@@ -19,8 +19,6 @@ from source.components import LossFactory
 from source.dataset import (
     SurvivalDatasetOptions,
     DatasetFactory,
-    ppcess_survival_data,
-    ppcess_tcga_survival_data,
 )
 from source.utils import (
     initialize_wandb,
@@ -30,8 +28,6 @@ from source.utils import (
     compute_time,
     update_log_dict,
     aggregated_cindex,
-    get_cumulative_dynamic_auc,
-    plot_cumulative_dynamic_auc,
     EarlyStopping,
     OptimizerFactory,
     SchedulerFactory,
@@ -89,11 +85,16 @@ def main(cfg: DictConfig):
 
         print(f"Loading data for fold {i}")
         dfs = {}
+        do_test = True
         for p in ["train", "tune", "test"]:
             df_path = Path(fold_dir, f"{p}.csv")
-            df = pd.read_csv(df_path)
-            df["partition"] = [p] * len(df)
-            dfs[p] = df
+            if not df_path.is_file():
+                print(f"WARNING: {df_path} does not exist! Skipping {p}...")
+                do_test = False
+            else:
+                df = pd.read_csv(df_path)
+                df["partition"] = [p] * len(df)
+                dfs[p] = df
 
         if cfg.training.pct:
             print(f"Training on {cfg.training.pct*100}% of the data")
@@ -101,50 +102,32 @@ def main(cfg: DictConfig):
                 dfs["train"].sample(frac=cfg.training.pct).reset_index(drop=True)
             )
 
-        df = pd.concat([df for df in dfs.values()], ignore_index=True)
-        patient_df, slide_df = ppcess_survival_data(df, cfg.label_name, nbins=cfg.nbins)
-
-        patient_dfs, slide_dfs = {}, {}
-        for p in ["train", "tune", "test"]:
-            patient_dfs[p] = patient_df[patient_df.partition == p].reset_index(
-                drop=True
-            )
-            slide_dfs[p] = slide_df[slide_df.partition == p]
-
         train_dataset_options = SurvivalDatasetOptions(
-            patient_df=patient_dfs["train"],
-            slide_df=slide_dfs["train"],
-            tiles_df=tiles_df,
+            df=dfs["train"],
             features_dir=features_dir,
             label_name=cfg.label_name,
         )
         tune_dataset_options = SurvivalDatasetOptions(
-            patient_df=patient_dfs["tune"],
-            slide_df=slide_dfs["tune"],
-            tiles_df=tiles_df,
+            df=dfs["tune"],
             features_dir=features_dir,
             label_name=cfg.label_name,
         )
-        test_dataset_options = SurvivalDatasetOptions(
-            patient_df=patient_dfs["test"],
-            slide_df=slide_dfs["test"],
-            tiles_df=tiles_df,
-            features_dir=features_dir,
-            label_name=cfg.label_name,
-        )
+        if do_test:
+            test_dataset_options = SurvivalDatasetOptions(
+                df=dfs["test"],
+                features_dir=features_dir,
+                label_name=cfg.label_name,
+            )
 
-        train_dataset = DatasetFactory(
-            "survival", train_dataset_options, cfg.model.agg_method
-        ).get_dataset()
-        tune_dataset = DatasetFactory(
-            "survival", tune_dataset_options, cfg.model.agg_method
-        ).get_dataset()
-        test_dataset = DatasetFactory(
-            "survival", test_dataset_options, cfg.model.agg_method
-        ).get_dataset()
+        train_dataset = DatasetFactory("survival", train_dataset_options).get_dataset()
+        tune_dataset = DatasetFactory("survival", tune_dataset_options).get_dataset()
+        if do_test:
+            test_dataset = DatasetFactory("survival", test_dataset_options).get_dataset()
+
+        num_classes = train_dataset.num_classes
 
         model = ModelFactory(
-            cfg.level, cfg.nbins, "survival", cfg.loss, cfg.label_encoding, cfg.model
+            cfg.level, num_classes, "survival", cfg.loss, cfg.label_encoding, cfg.model
         ).get_model()
         model.relocate()
         print(model)
@@ -227,13 +210,6 @@ def main(cfg: DictConfig):
                         num_workers=num_workers,
                     )
 
-                    auc, mean_auc, times = None, None, None
-                    # auc, mean_auc, times = get_cumulative_dynamic_auc(
-                    #     patient_dfs["train"],
-                    #     patient_dfs["tune"],
-                    #     tune_results["risks"],
-                    #     cfg.label_name,
-                    # )
                     if cfg.wandb.enable:
                         update_log_dict(
                             f"tune/fold_{i}",
@@ -242,18 +218,6 @@ def main(cfg: DictConfig):
                             step=f"train/fold_{i}/epoch",
                             to_log=log_to_wandb["tune"],
                         )
-                        if auc is not None:
-                            fig = plot_cumulative_dynamic_auc(
-                                auc, mean_auc, times, epoch
-                            )
-                            log_dict.update(
-                                {
-                                    f"tune/fold_{i}/cumulative_dynamic_auc": wandb.Image(
-                                        fig
-                                    )
-                                }
-                            )
-                            plt.close(fig)
 
                     tune_dataset.df.to_csv(
                         Path(result_dir, f"tune_{epoch+1}.csv"), index=False
@@ -293,41 +257,40 @@ def main(cfg: DictConfig):
         fold_mins, fold_secs = compute_time(fold_start_time, fold_end_time)
         print(f"Total time taken for fold {i}: {fold_mins}m {fold_secs}s")
 
-        # load best model
-        best_model_fp = Path(checkpoint_dir, f"{cfg.testing.retrieve_checkpoint}.pt")
-        if cfg.wandb.enable:
-            wandb.save(str(best_model_fp))
-        best_model_sd = torch.load(best_model_fp)
-        model.load_state_dict(best_model_sd)
+        if do_test:
 
-        test_results = test_survival(
-            model,
-            test_dataset,
-            agg_method=cfg.model.agg_method,
-            batch_size=1,
-            num_workers=num_workers,
-        )
-        test_dataset.df.to_csv(Path(result_dir, f"test.csv"), index=False)
+            # load best model
+            best_model_fp = Path(checkpoint_dir, f"{cfg.testing.retrieve_checkpoint}.pt")
+            if cfg.wandb.enable:
+                wandb.save(str(best_model_fp))
+            best_model_sd = torch.load(best_model_fp)
+            model.load_state_dict(best_model_sd)
 
-        for r, v in test_results.items():
-            if r == "c-index":
-                if test_dataset.agg_level == "slide":
-                    v = aggregated_cindex(test_dataset.df, label_name=cfg.label_name)
+            test_results = test_survival(
+                model,
+                test_dataset,
+                agg_method=cfg.model.agg_method,
+                batch_size=1,
+                num_workers=num_workers,
+            )
+            test_dataset.df.to_csv(Path(result_dir, f"test.csv"), index=False)
+
+            for r, v in test_results.items():
+                if r == "c-index":
                     test_metrics.append(v)
                     v = round(v, 5)
-                else:
-                    test_metrics.append(v)
-                    v = round(v, 5)
-            if cfg.wandb.enable and r in log_to_wandb["test"]:
-                wandb.log({f"test/fold_{i}/{r}": v})
-            elif "cm" not in r:
-                print(f"test {r}: {v}")
+                if cfg.wandb.enable and r in log_to_wandb["test"]:
+                    wandb.log({f"test/fold_{i}/{r}": v})
+                elif "cm" not in r:
+                    print(f"test {r}: {v}")
 
-    mean_test_metric = round(np.mean(test_metrics), 5)
-    std_test_metric = round(statistics.stdev(test_metrics), 5)
-    if cfg.wandb.enable and "c-index" in log_to_wandb["test"]:
-        wandb.log({f"test/c-index_mean": mean_test_metric})
-        wandb.log({f"test/c-index_std": std_test_metric})
+    if do_test:
+
+        mean_test_metric = round(np.mean(test_metrics), 5)
+        std_test_metric = round(statistics.stdev(test_metrics), 5)
+        if cfg.wandb.enable and "c-index" in log_to_wandb["test"]:
+            wandb.log({f"test/c-index_mean": mean_test_metric})
+            wandb.log({f"test/c-index_std": std_test_metric})
 
     end_time = time.time()
     mins, secs = compute_time(start_time, end_time)

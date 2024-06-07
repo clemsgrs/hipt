@@ -61,7 +61,7 @@ def nll_loss(hazards, survival, Y, c, alpha=0.4, eps=1e-7):
     """
     batch_size = len(Y)
     Y = Y.view(batch_size, 1)  # ground truth bin, 0, 1, 2, ..., k-1
-    c = c.view(batch_size, 1).float()  # censorship status, 0 or 1
+    c = c.view(batch_size, 1).float()  # censoring status, 0 or 1
     if survival is None:
         survival = torch.cumprod(
             1 - hazards, dim=1

@@ -26,6 +26,7 @@ slide_weights: # slide-level Transformer weights
 
 mask_attn_patch: False
 mask_attn_region: False
+attention_masks_dir: # path to folder containing pre-computed attention masks (if empty, will compute attention masks at the beginning)
 
 display: False  # whether to display the heatmaps of multiple attention heads on a single image
 spacing: 0.5 # when processing a slide, indicate the pixel spacing which the regions were extracted at (in mpp)

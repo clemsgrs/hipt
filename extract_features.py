@@ -109,24 +109,6 @@ def main(cfg: DictConfig):
     df = initialize_df(slide_ids)
     dataset = RegionFilepathsDataset(df, region_dir, cfg.format)
 
-    if distributed and is_main_process() and cfg.wandb.enable:
-        command_line = [
-            "python3",
-            "log_nproc.py",
-            "--output_dir",
-            f"{slide_features_dir}",
-            "--fmt",
-            "pt",
-            "--total",
-            f"{len(dataset)}",
-            "--log_to_wandb",
-            "--id",
-            f"{run_id}",
-        ]
-        subprocess.Popen(command_line)
-
-    time.sleep(5)
-
     if distributed:
         sampler = torch.utils.data.DistributedSampler(dataset, shuffle=True)
     else:

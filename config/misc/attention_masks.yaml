@@ -1,6 +1,6 @@
 data:
   csv: '/data/pathology/projects/ais-cap/clement/dataset/panda/csv/all_tb.csv'
-  region_dir: '/data/pathology/projects/ais-cap/code/git/clemsgrs/hs2p/output/panda/patch_extraction/nxt0lw7m/patches/2048/jpg'
+  region_dir: '/data/pathology/projects/ais-cap/code/git/clemsgrs/hs2p/output/panda/patch_extraction/24my4kvh/patches/2048/jpg'
 
 output_dir: '/data/pathology/projects/ais-cap/code/git/clemsgrs/hipt/output/panda'
 experiment_name: 'attention_masks'

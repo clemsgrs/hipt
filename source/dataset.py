@@ -140,9 +140,7 @@ class ClassificationDatasetOptions:
 
 @dataclass
 class SurvivalDatasetOptions:
-    patient_df: pd.DataFrame
-    slide_df: pd.DataFrame
-    tiles_df: pd.DataFrame
+    df: pd.DataFrame
     features_dir: Path
     label_name: str
     transform: Optional[Callable] = (None,)
@@ -196,7 +194,8 @@ class DatasetFactory:
                     options.label_mapping,
                 )
         elif task == "survival":
-            if options.tiles_df is not None:
+            # if options.tiles_df is not None:
+            if False:
                 if agg_method == "concat":
                     self.dataset = ExtractedFeaturesCoordsSurvivalDataset(
                         options.patient_df,
@@ -214,26 +213,11 @@ class DatasetFactory:
                         options.label_name,
                     )
             else:
-                if agg_method == "concat":
-                    self.dataset = ExtractedFeaturesSurvivalDataset(
-                        options.patient_df,
-                        options.slide_df,
-                        options.features_dir,
-                        options.label_name,
-                    )
-                elif agg_method == "self_att":
-                    self.dataset = ExtractedFeaturesPatientLevelSurvivalDataset(
-                        options.patient_df,
-                        options.slide_df,
-                        options.features_dir,
-                        options.label_name,
-                    )
-                elif not agg_method:
-                    self.dataset = ExtractedFeaturesSlideLevelSurvivalDataset(
-                        options.slide_df,
-                        options.features_dir,
-                        options.label_name,
-                    )
+                self.dataset = ExtractedFeaturesSurvivalDataset(
+                    options.df,
+                    options.features_dir,
+                    options.label_name,
+                )
         else:
             raise ValueError(f"task ({task}) not supported")
 
@@ -371,64 +355,49 @@ class BlindedExtractedFeaturesDataset(torch.utils.data.Dataset):
 class ExtractedFeaturesSurvivalDataset(torch.utils.data.Dataset):
     def __init__(
         self,
-        patient_df: pd.DataFrame,
-        slide_df: pd.DataFrame,
+        df: pd.DataFrame,
         features_dir: Path,
         label_name: str = "label",
         nfeats_max: Optional[int] = 1000,
     ):
         self.features_dir = features_dir
         self.label_name = label_name
-        self.use_coords = False
-        self.agg_level = "patient"
         self.nfeats_max = nfeats_max
 
         self.seed = 0
+        self.use_coords = False
 
-        self.slide_df, case_ids = self.filter_df(slide_df)
-        self.df = patient_df[patient_df.case_id.isin(case_ids)].reset_index(drop=True)
+        self.df = self.filter_df(df)
+        self.num_classes = self.df.discrete_label.nunique()
 
     def filter_df(self, df):
-        missing_slide_ids = []
-        for slide_id in df.slide_id:
-            if not Path(self.features_dir, f"{slide_id}.pt").is_file():
-                missing_slide_ids.append(slide_id)
-        if len(missing_slide_ids) > 0:
+        missing_ids = []
+        for case_id in df.case_id:
+            if not Path(self.features_dir, f"{case_id}.pt").is_file():
+                missing_ids.append(case_id)
+        if len(missing_ids) > 0:
             print(
-                f"WARNING: {len(missing_slide_ids)} slides dropped because missing on disk"
+                f"WARNING: {len(missing_ids)} cases dropped because feature missing on disk"
             )
-        filtered_df = df[~df.slide_id.isin(missing_slide_ids)].reset_index(drop=True)
-        remaining_case_ids = filtered_df.case_id.unique().tolist()
-        return filtered_df, remaining_case_ids
+        filtered_df = df[~df.case_id.isin(missing_ids)].reset_index(drop=True)
+        return filtered_df
 
     def __getitem__(self, idx: int):
         row = self.df.loc[idx]
         case_id = row.case_id
-        slide_ids = self.slide_df[
-            self.slide_df.case_id == case_id
-        ].slide_id.values.tolist()
-
-        assert len(slide_ids) == len(set(slide_ids))
-
-        label = row.disc_label
+        label = row.discrete_label
         event_time = row[self.label_name]
-        c = row.censorship
+        censored = row.censored
 
-        features = []
-        for slide_id in slide_ids:
-            fp = Path(self.features_dir, f"{slide_id}.pt")
-            f = torch.load(fp)
-            features.append(f)
-
-        # when multiple slides, concatenate region features
-        features = torch.cat(features, dim=0)
+        fp = Path(self.features_dir, f"{case_id}.pt")
+        feature = torch.load(fp)
 
         # if more than nfeats_max features, randomly sample nfeats_max features
-        if self.nfeats_max and len(features) > self.nfeats_max:
+        if self.nfeats_max and len(feature) > self.nfeats_max:
             torch.manual_seed(self.seed)
-            features = features[torch.randperm(len(features))[: self.nfeats_max]]
+            feature = feature[torch.randperm(len(feature))[: self.nfeats_max]]
 
-        return idx, features, label, event_time, c
+        return idx, feature, label, event_time, censored
 
     def __len__(self):
         return len(self.df)
