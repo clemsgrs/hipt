@@ -3,6 +3,7 @@ import torch
 import random
 import numpy as np
 import pandas as pd
+import wholeslidedata as wsd
 
 from PIL import Image
 from pathlib import Path
@@ -924,6 +925,26 @@ class SlideFilepathsDataset(torch.utils.data.Dataset):
         return len(self.df)
 
 
+class RegionCoordinatesDataset(torch.utils.data.Dataset):
+    def __init__(
+        self,
+        df: pd.DataFrame,
+        patch_dir: Path,
+    ):
+        self.df = df
+        self.patch_dir = patch_dir
+
+    def __getitem__(self, idx: int):
+        row = self.df.loc[idx]
+        slide_id = row.slide_id
+        slide_path = row.slide_path
+        patch_coordinates = np.load(Path(self.patch_dir, f"{slide_id}.npy"))
+        return idx, slide_path, patch_coordinates
+
+    def __len__(self):
+        return len(self.df)
+
+
 class HierarchicalPretrainingDataset(torch.utils.data.Dataset):
     def __init__(
         self,
@@ -997,3 +1018,28 @@ class ImageFolderWithNameDataset(datasets.ImageFolder):
             sample = self.transform(sample)
 
         return sample, fname
+
+
+class PatchDataset(torch.utils.data.Dataset):
+    def __init__(self, wsi_fp, coordinates, backend):
+        _, _, patch_size_resized, patch_level, factor = coordinates[0]
+        self.coordinates =coordinates[:, :2]
+        self.wsi = wsd.WholeSlideImage(wsi_fp, backend=backend)
+        self.patch_spacing = self.wsi.spacings[patch_level]
+        self.resize = (factor != 1)
+        self.width = patch_size_resized
+        self.height = patch_size_resized
+        self.target_width = self.width // factor
+        self.target_height = self.height // factor
+
+    def __len__(self):
+        return len(self.coordinates)
+
+    def __getitem__(self, idx):
+        x, y = self.coordinates[idx]
+        patch = self.wsi.get_patch(x, y, self.width, self.height, spacing=self.patch_spacing, center=False)
+        pil_patch = Image.fromarray(patch).convert("RGB")
+        if self.resize:
+            pil_patch = pil_patch.resize((self.target_width, self.target_height))
+        img = transforms.functional.to_tensor(pil_patch)
+        return img, x, y

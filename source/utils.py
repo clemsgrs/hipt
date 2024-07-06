@@ -113,7 +113,7 @@ def initialize_wandb(
     else:
         tags = [str(t) for t in cfg.wandb.tags]
     config = OmegaConf.to_container(cfg, resolve=True, throw_on_missing=True)
-    if cfg.wandb.resume_id:
+    if cfg.resume_id:
         run = wandb.init(
             project=cfg.wandb.project,
             entity=cfg.wandb.username,
@@ -122,7 +122,7 @@ def initialize_wandb(
             dir=cfg.wandb.dir,
             config=config,
             tags=tags,
-            id=cfg.wandb.resume_id,
+            id=cfg.resume_id,
             resume="must",
         )
     else:
@@ -144,13 +144,17 @@ def initialize_wandb(
     return run
 
 
-def initialize_df(slide_ids):
+def initialize_df(slide_ids, slide_paths: Optional[List[Path]] = None, segmentation_mask_paths: Optional[List[Path]] = None):
     nslide = len(slide_ids)
     df_dict = {
         "slide_id": slide_ids,
         "process": np.full((nslide), 1, dtype=np.uint8),
         "status": np.full((nslide), "tbp"),
     }
+    if slide_paths is not None:
+        df_dict["slide_path"] = slide_paths
+    if segmentation_mask_paths is not None:
+        df_dict["segmentation_mask_path"] = segmentation_mask_paths
     df = pd.DataFrame(df_dict)
     return df
 
@@ -165,16 +169,28 @@ def extract_coord_from_path(path):
 
 
 def update_state_dict(model_dict, state_dict):
-    success, failure = 0, 0
+    success, shape_mismatch, missing_keys = 0, 0, 0
     updated_state_dict = {}
-    for k, v in zip(model_dict.keys(), state_dict.values()):
-        if v.size() != model_dict[k].size():
-            updated_state_dict[k] = model_dict[k]
-            failure += 1
+    shape_mismatch_list = []
+    missing_keys_list = []
+    for k, v in state_dict.items():
+        if k in model_dict:
+            if v.size() == model_dict[k].size():
+                updated_state_dict[k] = v
+                success += 1
+            else:
+                updated_state_dict[k] = model_dict[k]
+                shape_mismatch += 1
+                shape_mismatch_list.append(k)
         else:
-            updated_state_dict[k] = v
-            success += 1
-    msg = f"{success} weight(s) loaded succesfully ; {failure} weight(s) not loaded because of mismatching shapes"
+            missing_keys += 1
+            missing_keys_list.append(k)
+    if shape_mismatch > 0 or missing_keys > 0:
+        msg = (f"{success}/{len(state_dict)} weight(s) loaded successfully\n"
+           f"{shape_mismatch} weight(s) not loaded due to mismatching shapes: {shape_mismatch_list}\n"
+           f"{missing_keys} key(s) not found in model: {missing_keys_list}")
+    else:
+        msg = f"{success}/{len(state_dict)} weight(s) loaded successfully."
     return updated_state_dict, msg
 
 
@@ -357,6 +373,24 @@ def collate_region_filepaths(batch):
     return [idx, fp, sid, pct]
 
 
+def collate_filepaths(batch):
+    item = batch[0]
+    idx = torch.LongTensor([item[0]])
+    slide_fp = Path(item[1])
+    mask_fp = None
+    if item[2] is not None:
+        mask_fp = Path(item[2])
+    return [idx, slide_fp, mask_fp]
+
+
+def collate_coordinates(batch):
+    item = batch[0]
+    idx = torch.LongTensor([item[0]])
+    slide_fp = Path(item[1])
+    coordinates = item[2]
+    return [idx, slide_fp, coordinates]
+
+
 def get_roc_auc_curve(
     probs: np.array(float), labels: List[int], log_to_wandb: bool = False
 ):
@@ -510,6 +544,15 @@ def custom_isup_grade_dist(x: int, y: int):
         return abs(x - y)
 
 
+def build_slide_level_feature(region_feature_paths):
+    region_features = []
+    for fp in sorted(region_feature_paths):
+        f = torch.load(fp)
+        region_features.append(f)
+    feature = torch.stack(region_features, dim=0).squeeze(1)
+    return feature
+
+
 def get_majority_vote(
     preds, distance_func: Optional[Callable] = None, nfold: int = 5, seed: int = 0
 ):
@@ -552,6 +595,13 @@ def update_log_dict(
         if r in to_log:
             wandb.define_metric(f"{prefix}/{r}", step_metric=step)
             log_dict.update({f"{prefix}/{r}": v})
+
+
+def sort_coords(coords):
+    mock_filenames = [f"{x}_{y}.jpg" for x, y in coords]
+    sorted_filenames = sorted(mock_filenames)
+    sorted_coords = [(int(name.split('_')[0]), int(name.split('_')[1].split('.')[0])) for name in sorted_filenames]
+    return sorted_coords
 
 
 def make_weights_for_balanced_classes(dataset):

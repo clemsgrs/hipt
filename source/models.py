@@ -938,9 +938,9 @@ class LocalFeatureExtractor(nn.Module):
         if pct is not None:
             mask_mini_patch = (pct > pct_thresh).int()  # [num_patches, nminipatch**2]
             # add the [CLS] token to the mask
-            cls_token = mask_patch.new_ones((mask_mini_patch.size(dim=0), 1))
+            cls_token = mask_mini_patch.new_ones((mask_mini_patch.size(dim=0), 1))
             mask_mini_patch = torch.cat(
-                (cls_tokens, mask_mini_patch), dim=1
+                (cls_token, mask_mini_patch), dim=1
             )  # [num_patches, num_mini_patches+1]
         # x = [1, 3, region_size, region_size]
         # TODO: add prepare_img_tensor method

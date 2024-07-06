@@ -1,8 +1,13 @@
 region_dir: '/data/pathology/projects/ais-cap/code/git/clemsgrs/hs2p/output/tcga_brca_survival_debug/patches/'
 
+csv:
+patch_dir:
+backend: "asap"
+
 output_dir: 'output/tcga_brca_survival_debug'
 experiment_name: 'feature_extraction'
 resume: False
+resume_id:
 
 slide_list:
 
@@ -27,7 +32,6 @@ wandb:
   tags:
   dir: '/home/user/'
   group:
-  resume_id:
 
 hydra:
   run:
