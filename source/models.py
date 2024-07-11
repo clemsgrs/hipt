@@ -1513,11 +1513,19 @@ class LocalGlobalRegressionHIPT(LocalGlobalHIPT):
 
 
 class LocalFeatureExtractorFM(nn.Module):
-    def __init__(self, name: str, pretrained_weights: Path, verbose: bool = False):
+    def __init__(
+            self,
+            name: str,
+            patch_size: int = 256,
+            mini_patch_size: int = 16,
+            pretrained_weights: str = "path/to/pretrained/vit_patch/weights.pth",
+            verbose: bool = False,
+        ):
         super(LocalFeatureExtractorFM, self).__init__()
+        self.ps = patch_size
         self.name = name
         if self.name == "uni":
-            self.tile_encoder = timm.create_model("vit_large_patch16_224", img_size=224, patch_size=16, init_values=1e-5, num_classes=0, dynamic_img_size=True)
+            self.tile_encoder = timm.create_model("vit_large_patch16_224", img_size=patch_size, patch_size=mini_patch_size, init_values=1e-5, num_classes=0, dynamic_img_size=True)
         else:
             raise ValueError(f"Unknown model name: {self.name}")
 

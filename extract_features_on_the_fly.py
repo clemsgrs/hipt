@@ -80,7 +80,7 @@ def main(cfg: DictConfig):
         if cfg.fm is not None:
             model = LocalFeatureExtractorFM(
                 cfg.fm,
-                cfg.pretrain_vit_patch,
+                pretrained_weights=cfg.pretrain_vit_patch,
                 verbose=(gpu_id in [-1, 0]),
             )
         else:
@@ -159,8 +159,9 @@ def main(cfg: DictConfig):
         collate_fn=collate_coordinates,
     )
 
-    processed_count = 0
-    processed_count_tensor = torch.tensor(processed_count).to(device)
+    local_processed_count = 0
+    agg_processed_count = 0
+    dfs = []
 
     with tqdm.tqdm(
         loader,
@@ -204,23 +205,31 @@ def main(cfg: DictConfig):
                     save_path = Path(slide_features_dir, f"{slide_id}.pt")
                     torch.save(slide_feature, save_path)
 
-                    processed_count += 1
-                    dist.reduce(processed_count_tensor, dst=0, op=dist.ReduceOp.SUM)
+                    local_processed_count += 1
+                    dist.reduce(local_processed_count, dst=0, op=dist.ReduceOp.SUM)
 
                     mask = process_df["slide_id"] == slide_id
-                    process_df.loc[mask, "status"] = "processed"
-                    process_df.loc[mask, "error"] = np.nan
-                    process_df.loc[mask, "feature_path"] = str(save_path)
+                    local_process_df = process_df[mask].copy()
+                    local_process_df.loc[0, "status"] = "processed"
+                    local_process_df.loc[0, "error"] = np.nan
+                    local_process_df.loc[0, "feature_path"] = str(save_path)
+                    dfs.append(local_process_df)
 
                     if cfg.wandb.enable and is_main_process():
-                        wandb.log({"processed": processed_count_tensor.item()+already_processed})
+                        agg_processed_count += local_processed_count
+                        wandb.log({"processed": agg_processed_count})
+
+                    local_processed_count = 0
 
                 except Exception as e:
 
                     mask = process_df["slide_id"] == slide_id
-                    process_df.loc[mask, "status"] = "error"
-                    process_df.loc[mask, "error"] = str(e)
+                    local_process_df = process_df[mask].copy()
+                    local_process_df.loc[0, "status"] = "error"
+                    local_process_df.loc[0, "error"] = str(e)
+                    dfs.append(local_process_df)
 
+    process_df = pd.concat(dfs, ignore_index=True)
     process_csv_path = Path(output_dir, f"process_list.csv")
     if distributed:
         torch.distributed.barrier()
