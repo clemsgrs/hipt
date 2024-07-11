@@ -7,12 +7,13 @@ import datetime
 import numpy as np
 import pandas as pd
 import multiprocessing as mp
+import torch.distributed as dist
 
 from pathlib import Path
 from omegaconf import DictConfig
 
 from source.dataset import RegionCoordinatesDataset, PatchDataset
-from source.models import GlobalFeatureExtractor, LocalFeatureExtractor
+from source.models import GlobalFeatureExtractor, LocalFeatureExtractor, LocalFeatureExtractorFM
 from source.utils import (
     initialize_wandb,
     collate_coordinates,
@@ -60,7 +61,7 @@ def main(cfg: DictConfig):
     else:
         region_features_dir = Path("/tmp/region_features")
 
-    if not cfg.resume and is_main_process():
+    if is_main_process():
         output_dir.mkdir(exist_ok=True, parents=True)
         slide_features_dir.mkdir(exist_ok=True, parents=True)
         region_features_dir.mkdir(exist_ok=True, parents=True)
@@ -76,12 +77,19 @@ def main(cfg: DictConfig):
             verbose=(gpu_id in [-1, 0]),
         )
     elif cfg.level == "local":
-        model = LocalFeatureExtractor(
-            patch_size=cfg.patch_size,
-            mini_patch_size=cfg.mini_patch_size,
-            pretrain_vit_patch=cfg.pretrain_vit_patch,
-            verbose=(gpu_id in [-1, 0]),
-        )
+        if cfg.fm is not None:
+            model = LocalFeatureExtractorFM(
+                cfg.fm,
+                cfg.pretrain_vit_patch,
+                verbose=(gpu_id in [-1, 0]),
+            )
+        else:
+            model = LocalFeatureExtractor(
+                patch_size=cfg.patch_size,
+                mini_patch_size=cfg.mini_patch_size,
+                pretrain_vit_patch=cfg.pretrain_vit_patch,
+                verbose=(gpu_id in [-1, 0]),
+            )
     else:
         raise ValueError(f"cfg.level ({cfg.level}) not supported")
 
@@ -124,9 +132,10 @@ def main(cfg: DictConfig):
             "error": [np.nan] * len(slide_ids),
             "feature_path": [np.nan] * len(slide_ids),
         })
+        process_df["error"] = process_df["error"].astype(str)
         process_df["feature_path"] = process_df["feature_path"].astype(str)
 
-    mask = process_df["status"] == "not processed"
+    mask = process_df["status"] != "processed"
     process_stack = process_df[mask]
     total = len(process_stack)
     already_processed = len(process_df) - total
@@ -150,7 +159,8 @@ def main(cfg: DictConfig):
         collate_fn=collate_coordinates,
     )
 
-    processed_count = already_processed
+    processed_count = 0
+    processed_count_tensor = torch.tensor(processed_count).to(device)
 
     with tqdm.tqdm(
         loader,
@@ -195,6 +205,7 @@ def main(cfg: DictConfig):
                     torch.save(slide_feature, save_path)
 
                     processed_count += 1
+                    dist.reduce(processed_count_tensor, dst=0, op=dist.ReduceOp.SUM)
 
                     mask = process_df["slide_id"] == slide_id
                     process_df.loc[mask, "status"] = "processed"
@@ -202,7 +213,7 @@ def main(cfg: DictConfig):
                     process_df.loc[mask, "feature_path"] = str(save_path)
 
                     if cfg.wandb.enable and is_main_process():
-                        wandb.log({"processed": processed_count})
+                        wandb.log({"processed": processed_count_tensor.item()+already_processed})
 
                 except Exception as e:
 
@@ -210,8 +221,12 @@ def main(cfg: DictConfig):
                     process_df.loc[mask, "status"] = "error"
                     process_df.loc[mask, "error"] = str(e)
 
-    if is_main_process():
-        process_csv_path = Path(output_dir, f"process_list.csv")
+    process_csv_path = Path(output_dir, f"process_list.csv")
+    if distributed:
+        torch.distributed.barrier()
+        if is_main_process():
+            process_df.to_csv(process_csv_path, index=False)
+    else:
         process_df.to_csv(process_csv_path, index=False)
 
 

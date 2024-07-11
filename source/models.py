@@ -1,3 +1,4 @@
+import timm
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -114,6 +115,7 @@ class ModelFactory:
                         patch_size=model_options.patch_size,
                         embed_dim_patch=model_options.embed_dim_patch,
                         embed_dim_region=model_options.embed_dim_region,
+                        embed_dim_slide=model_options.embed_dim_slide,
                         pretrain_vit_region=model_options.pretrain_vit_region,
                         freeze_vit_region=model_options.freeze_vit_region,
                         freeze_vit_region_pos_embed=model_options.freeze_vit_region_pos_embed,
@@ -166,6 +168,9 @@ class ModelFactory:
                         num_classes=num_classes,
                         region_size=model_options.region_size,
                         patch_size=model_options.patch_size,
+                        embed_dim_patch=model_options.embed_dim_patch,
+                        embed_dim_region=model_options.embed_dim_region,
+                        embed_dim_slide=model_options.embed_dim_slide,
                         pretrain_vit_region=model_options.pretrain_vit_region,
                         freeze_vit_region=model_options.freeze_vit_region,
                         freeze_vit_region_pos_embed=model_options.freeze_vit_region_pos_embed,
@@ -284,6 +289,7 @@ class LocalGlobalHIPT(nn.Module):
         pretrain_vit_region: Optional[str] = None,
         embed_dim_patch: int = 384,
         embed_dim_region: int = 192,
+        embed_dim_slide: int = 192,
         freeze_vit_region: bool = True,
         freeze_vit_region_pos_embed: bool = True,
         dropout: float = 0.25,
@@ -344,7 +350,7 @@ class LocalGlobalHIPT(nn.Module):
 
         # Global Aggregation
         self.global_phi = nn.Sequential(
-            nn.Linear(embed_dim_region, 192), nn.ReLU(), nn.Dropout(dropout)
+            nn.Linear(embed_dim_region, embed_dim_slide), nn.ReLU(), nn.Dropout(dropout)
         )
 
         if self.slide_pos_embed.use:
@@ -364,22 +370,22 @@ class LocalGlobalHIPT(nn.Module):
 
         self.global_transformer = nn.TransformerEncoder(
             nn.TransformerEncoderLayer(
-                d_model=192,
+                d_model=embed_dim_slide,
                 nhead=3,
-                dim_feedforward=192,
+                dim_feedforward=embed_dim_slide,
                 dropout=dropout,
                 activation="relu",
             ),
             num_layers=2,
         )
         self.global_attn_pool = Attn_Net_Gated(
-            L=192, D=192, dropout=dropout, num_classes=1
+            L=embed_dim_slide, D=embed_dim_slide, dropout=dropout, num_classes=1
         )
         self.global_rho = nn.Sequential(
-            *[nn.Linear(192, 192), nn.ReLU(), nn.Dropout(dropout)]
+            *[nn.Linear(embed_dim_slide, embed_dim_slide), nn.ReLU(), nn.Dropout(dropout)]
         )
 
-        self.classifier = nn.Linear(192, num_classes)
+        self.classifier = nn.Linear(embed_dim_slide, num_classes)
 
     def forward(self, x, pct: Optional[torch.Tensor] = None, pct_thresh: float = 0.0):
         mask_patch = None
@@ -1478,6 +1484,7 @@ class LocalGlobalRegressionHIPT(LocalGlobalHIPT):
         pretrain_vit_region: Optional[str] = None,
         embed_dim_patch: int = 384,
         embed_dim_region: int = 192,
+        embed_dim_slide: int = 192,
         freeze_vit_region: bool = True,
         freeze_vit_region_pos_embed: bool = True,
         dropout: float = 0.25,
@@ -1493,6 +1500,7 @@ class LocalGlobalRegressionHIPT(LocalGlobalHIPT):
             pretrain_vit_region,
             embed_dim_patch,
             embed_dim_region,
+            embed_dim_slide,
             freeze_vit_region,
             freeze_vit_region_pos_embed,
             dropout,
@@ -1501,4 +1509,59 @@ class LocalGlobalRegressionHIPT(LocalGlobalHIPT):
             img_size_pretrained,
             num_register_tokens_region,
         )
-        self.classifier = nn.Linear(192, 1)
+        self.classifier = nn.Linear(embed_dim_slide, 1)
+
+
+class LocalFeatureExtractorFM(nn.Module):
+    def __init__(self, name: str, pretrained_weights: Path, verbose: bool = False):
+        super(LocalFeatureExtractorFM, self).__init__()
+        self.name = name
+        if self.name == "uni":
+            self.tile_encoder = timm.create_model("vit_large_patch16_224", img_size=224, patch_size=16, init_values=1e-5, num_classes=0, dynamic_img_size=True)
+        else:
+            raise ValueError(f"Unknown model name: {self.name}")
+
+        if Path(pretrained_weights).is_file():
+            if verbose:
+                print("Loading pretrained weights")
+            state_dict = torch.load(pretrained_weights, map_location="cpu")
+            state_dict, msg = update_state_dict(self.tile_encoder.state_dict(), state_dict)
+            self.tile_encoder.load_state_dict(state_dict, strict=True)
+            if verbose:
+                print(f"Pretrained weights found at {pretrained_weights}")
+                print(msg)
+
+        elif verbose:
+            print(
+                f"{pretrained_weights} doesnt exist ; please provide path to existing file"
+            )
+
+        for param in self.tile_encoder.parameters():
+            param.requires_grad = False
+
+    def forward(self, x, pct: Optional[torch.Tensor] = None, pct_thresh: float = 0.0):
+        mask_mini_patch = None
+        if pct is not None:
+            mask_mini_patch = (pct > pct_thresh).int()  # [num_patches, nminipatch**2]
+            # add the [CLS] token to the mask
+            cls_token = mask_mini_patch.new_ones((mask_mini_patch.size(dim=0), 1))
+            mask_mini_patch = torch.cat(
+                (cls_token, mask_mini_patch), dim=1
+            )  # [num_patches, num_mini_patches+1]
+        # x = [1, 3, region_size, region_size]
+        # TODO: add prepare_img_tensor method
+        x = x.unfold(2, self.ps, self.ps).unfold(
+            3, self.ps, self.ps
+        )  # [1, 3, npatch, region_size, ps] -> [1, 3, npatch, npatch, ps, ps]
+        x = rearrange(x, "b c p1 p2 w h -> (b p1 p2) c w h")  # [num_patches, 3, ps, ps]
+
+        if pct is not None:
+            mask_mini_patch = rearrange(
+                mask_mini_patch, "b c p -> (b c) p"
+            )  # [1*num_patches, nminipatch**2]
+
+        patch_feature = (
+            self.tile_encoder(x, mask=mask_mini_patch).detach().cpu()
+        )  # [num_patches, 384]
+
+        return patch_feature

@@ -71,8 +71,8 @@ wandb:
   to_log:
     - 'test': ['auc', 'kappa', 'cm']
   group:
-  resume_id:
 
+resume_id:
 hydra:
   run:
     dir: /tmp/hydra_output
