@@ -145,6 +145,7 @@ class SurvivalDatasetOptions:
     features_dir: Path
     label_name: str
     transform: Optional[Callable] = (None,)
+    nfeats_max: Optional[int] = None
 
 
 class DatasetFactory:
@@ -218,6 +219,7 @@ class DatasetFactory:
                     options.df,
                     options.features_dir,
                     options.label_name,
+                    options.nfeats_max,
                 )
         else:
             raise ValueError(f"task ({task}) not supported")
@@ -359,7 +361,7 @@ class ExtractedFeaturesSurvivalDataset(torch.utils.data.Dataset):
         df: pd.DataFrame,
         features_dir: Path,
         label_name: str = "label",
-        nfeats_max: Optional[int] = 1000,
+        nfeats_max: Optional[int] = None,
     ):
         self.features_dir = features_dir
         self.label_name = label_name
@@ -396,7 +398,8 @@ class ExtractedFeaturesSurvivalDataset(torch.utils.data.Dataset):
         # if more than nfeats_max features, randomly sample nfeats_max features
         if self.nfeats_max and len(feature) > self.nfeats_max:
             torch.manual_seed(self.seed)
-            feature = feature[torch.randperm(len(feature))[: self.nfeats_max]]
+            sampled_indices = torch.randperm(len(feature))[:self.nfeats_max].sort().values
+            feature = feature[sampled_indices]
 
         return idx, feature, label, event_time, censored
 

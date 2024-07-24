@@ -73,6 +73,7 @@ model:
   patch_size: 256
   mini_patch_size: 16
   dropout: 0.25
+  nfeats_max:
   agg_method: 'concat'
   slide_pos_embed:
     use: False
@@ -114,8 +115,8 @@ wandb:
     - 'tune': ['loss', 'auc', 'kappa', 'cm']
     - 'test': ['loss', 'auc', 'kappa', 'cm']
   group:
-  resume_id:
 
+resume_id:
 hydra:
   run:
     dir: /tmp/hydra_output

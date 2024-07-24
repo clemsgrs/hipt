@@ -106,17 +106,20 @@ def main(cfg: DictConfig):
             df=dfs["train"],
             features_dir=features_dir,
             label_name=cfg.label_name,
+            nfeats_max=cfg.model.nfeats_max,
         )
         tune_dataset_options = SurvivalDatasetOptions(
             df=dfs["tune"],
             features_dir=features_dir,
             label_name=cfg.label_name,
+            nfeats_max=cfg.model.nfeats_max,
         )
         if do_test:
             test_dataset_options = SurvivalDatasetOptions(
                 df=dfs["test"],
                 features_dir=features_dir,
                 label_name=cfg.label_name,
+                nfeats_max=cfg.model.nfeats_max,
             )
 
         train_dataset = DatasetFactory("survival", train_dataset_options).get_dataset()
