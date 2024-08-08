@@ -3,7 +3,7 @@ data:
   tune_csv: ''
   test_csv: ''
 
-features_root_dir:
+features_dir:
 output_dir: 'output'
 experiment_name: 'tcga_brca'
 level: 'global'

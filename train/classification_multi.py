@@ -15,13 +15,12 @@ import matplotlib.pyplot as plt
 
 from pathlib import Path
 from functools import partial
-from omegaconf import OmegaConf, DictConfig
+from omegaconf import DictConfig
 from collections import defaultdict
 
 from source.models import ModelFactory
 from source.components import LossFactory
 from source.dataset import ClassificationDatasetOptions, DatasetFactory
-from source.augmentations import AugmentationOptions, FeatureSpaceAugmentation
 from source.utils import (
     initialize_wandb,
     train,
@@ -48,7 +47,7 @@ from source.utils import (
 @hydra.main(
     version_base="1.2.0",
     config_path="../config/training/classification",
-    config_name="multi",
+    config_name="default_multi",
 )
 def main(cfg: DictConfig):
     run_id = datetime.datetime.now().strftime("%Y-%m-%d_%H_%M")
@@ -73,7 +72,7 @@ def main(cfg: DictConfig):
         aug_root_dir = Path(output_dir, "augmentation")
         aug_root_dir.mkdir(parents=True, exist_ok=True)
 
-    features_root_dir = Path(cfg.features_root_dir)
+    features_dir = Path(cfg.features_dir)
 
     region_dir = None
     if cfg.region_dir is not None:
@@ -110,11 +109,7 @@ def main(cfg: DictConfig):
         result_dir.mkdir(parents=True, exist_ok=True)
 
         if cfg.data.fold_specific_features:
-            slide_features_dir = Path(features_root_dir, f"fold_{i}/slide_features")
-            region_features_dir = Path(features_root_dir, f"fold_{i}/region_features")
-        else:
-            slide_features_dir = Path(features_root_dir, "slide_features")
-            region_features_dir = Path(features_root_dir, "region_features")
+            features_dir = Path(features_dir, f"fold_{i}")
 
         print(f"Loading data for fold {i+1}")
         train_df_path = Path(fold_dir, "train.csv")
@@ -130,34 +125,9 @@ def main(cfg: DictConfig):
             train_df = train_df.sample(frac=cfg.training.pct).reset_index(drop=True)
             tune_df = tune_df.sample(frac=cfg.training.pct).reset_index(drop=True)
 
-        transform = None
-        if cfg.augmentation.use:
-            aug_dir = Path(aug_root_dir, f"fold_{i}")
-            aug_dir.mkdir(parents=True, exist_ok=True)
-            csv_path = Path(region_features_dir.parent, "region_features.csv")
-            if csv_path.is_file():
-                region_df = pd.read_csv(csv_path)
-            elif cfg.augmentation.name in ["interpolation", "extrapolation"]:
-                raise OSError(f"{csv_path} doesn't exist!")
-            else:
-                region_df = None
-            kwargs = {k: v for e in cfg.augmentation.kwargs for k, v in e.items()}
-            aug_options = AugmentationOptions(
-                name=cfg.augmentation.name,
-                output_dir=aug_dir,
-                region_features_dir=region_features_dir,
-                region_df=region_df,
-                label_df=train_df,
-                label_name=cfg.label_name,
-                level=cfg.level,
-                multiprocessing=(num_workers == 0),
-                kwargs=kwargs,
-            )
-            transform = FeatureSpaceAugmentation(aug_options)
-
         train_dataset_options = ClassificationDatasetOptions(
             df=train_df,
-            features_dir=slide_features_dir,
+            features_dir=features_dir,
             label_name=cfg.label_name,
             label_mapping=cfg.label_mapping,
             label_encoding=cfg.label_encoding,
@@ -175,7 +145,7 @@ def main(cfg: DictConfig):
         )
         tune_dataset_options = ClassificationDatasetOptions(
             df=tune_df,
-            features_dir=slide_features_dir,
+            features_dir=features_dir,
             label_name=cfg.label_name,
             label_mapping=cfg.label_mapping,
             label_encoding=cfg.label_encoding,
@@ -193,7 +163,7 @@ def main(cfg: DictConfig):
         if test_df_path.is_file():
             test_dataset_options = ClassificationDatasetOptions(
                 df=test_df,
-                features_dir=slide_features_dir,
+                features_dir=features_dir,
                 label_name=cfg.label_name,
                 label_mapping=cfg.label_mapping,
                 label_encoding=cfg.label_encoding,

@@ -50,7 +50,7 @@ def main(cfg: DictConfig):
     result_dir = Path(output_dir, "results")
     result_dir.mkdir(parents=True, exist_ok=True)
 
-    features_root_dir = Path(cfg.features_dir)
+    features_dir = Path(cfg.features_dir)
 
     region_dir = None
     if cfg.region_dir is not None:
@@ -107,9 +107,7 @@ def main(cfg: DictConfig):
         msg = model.load_state_dict(sd)
         print(f"Checkpoint loaded with msg: {msg}")
 
-        features_dir = Path(features_root_dir, f"{model_name}", "slide_features")
-        if not features_dir.exists():
-            features_dir = Path(features_root_dir, f"{model_name}")
+        features_dir = Path(features_dir, f"{model_name}")
 
         model_start_time = time.time()
         for test_name, csv_path in test_csvs.items():

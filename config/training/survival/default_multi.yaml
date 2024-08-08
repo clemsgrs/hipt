@@ -1,5 +1,5 @@
 defaults:
-  - single
+  - default
   - _self_
 
 data:

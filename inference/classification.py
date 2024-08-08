@@ -45,8 +45,7 @@ def main(cfg: DictConfig):
     result_dir = Path(output_dir, "results")
     result_dir.mkdir(parents=True, exist_ok=True)
 
-    features_root_dir = Path(cfg.features_root_dir)
-    slide_features_dir = Path(features_root_dir, f"slide_features")
+    features_dir = Path(cfg.features_dir)
 
     num_workers = min(mp.cpu_count(), cfg.speed.num_workers)
     if "SLURM_JOB_CPUS_PER_NODE" in os.environ:
@@ -77,7 +76,7 @@ def main(cfg: DictConfig):
 
         test_dataset_options = ClassificationDatasetOptions(
             df=test_df,
-            features_dir=slide_features_dir,
+            features_dir=features_dir,
             label_name=cfg.label_name,
             label_mapping=cfg.label_mapping,
             label_encoding=cfg.label_encoding,

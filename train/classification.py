@@ -11,12 +11,11 @@ import matplotlib.pyplot as plt
 
 from pathlib import Path
 from functools import partial
-from omegaconf import OmegaConf, DictConfig
+from omegaconf import DictConfig
 
 from source.models import ModelFactory
 from source.components import LossFactory
 from source.dataset import ClassificationDatasetOptions, DatasetFactory
-from source.augmentations import AugmentationOptions, FeatureSpaceAugmentation
 from source.utils import (
     initialize_wandb,
     train,
@@ -40,7 +39,7 @@ from source.utils import (
 @hydra.main(
     version_base="1.2.0",
     config_path="../config/training/classification",
-    config_name="panda",
+    config_name="default",
 )
 def main(cfg: DictConfig):
     run_id = datetime.datetime.now().strftime("%Y-%m-%d_%H_%M")
@@ -61,9 +60,7 @@ def main(cfg: DictConfig):
     result_dir = Path(output_dir, "results")
     result_dir.mkdir(parents=True, exist_ok=True)
 
-    features_root_dir = Path(cfg.features_root_dir)
-    slide_features_dir = Path(features_root_dir, f"slide_features")
-    region_features_dir = Path(features_root_dir, f"region_features")
+    features_dir = Path(cfg.features_dir)
 
     num_workers = min(mp.cpu_count(), cfg.speed.num_workers)
     if "SLURM_JOB_CPUS_PER_NODE" in os.environ:
@@ -83,42 +80,16 @@ def main(cfg: DictConfig):
         print(f"Training on {cfg.training.pct*100}% of the data")
         train_df = train_df.sample(frac=cfg.training.pct).reset_index(drop=True)
 
-    transform = None
-    if cfg.augmentation.use:
-        aug_dir = Path(output_dir, "augmentation")
-        aug_dir.mkdir(parents=True, exist_ok=True)
-        csv_path = Path(features_root_dir, "region_features.csv")
-        if Path(csv_path).is_file():
-            region_df = pd.read_csv(csv_path)
-        elif cfg.augmentation.name in ["interpolation", "extrapolation"]:
-            raise OSError(f"{csv_path} doesn't exist!")
-        else:
-            region_df = None
-        kwargs = {k: v for e in cfg.augmentation.kwargs for k, v in e.items()}
-        aug_options = AugmentationOptions(
-            name=cfg.augmentation.name,
-            output_dir=aug_dir,
-            region_features_dir=region_features_dir,
-            region_df=region_df,
-            label_df=train_df,
-            level=cfg.level,
-            label_name=cfg.label_name,
-            multiprocessing=False,
-            kwargs=kwargs,
-        )
-        transform = FeatureSpaceAugmentation(aug_options)
-
     train_dataset_options = ClassificationDatasetOptions(
         df=train_df,
-        features_dir=slide_features_dir,
+        features_dir=features_dir,
         label_name=cfg.label_name,
         label_mapping=cfg.label_mapping,
         label_encoding=cfg.label_encoding,
-        transform=transform,
     )
     tune_dataset_options = ClassificationDatasetOptions(
         df=tune_df,
-        features_dir=slide_features_dir,
+        features_dir=features_dir,
         label_name=cfg.label_name,
         label_mapping=cfg.label_mapping,
         label_encoding=cfg.label_encoding,
@@ -126,7 +97,7 @@ def main(cfg: DictConfig):
     if cfg.data.test_csv:
         test_dataset_options = ClassificationDatasetOptions(
             df=test_df,
-            features_dir=slide_features_dir,
+            features_dir=features_dir,
             label_name=cfg.label_name,
             label_mapping=cfg.label_mapping,
             label_encoding=cfg.label_encoding,

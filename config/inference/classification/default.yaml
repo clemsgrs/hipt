@@ -1,7 +1,7 @@
 test_csv:
 blinded: False
 
-features_root_dir:
+features_dir:
 output_dir: 'output/debug'
 experiment_name: 'inference'
 level: 'global'

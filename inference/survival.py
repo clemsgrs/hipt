@@ -47,7 +47,7 @@ def main(cfg: DictConfig):
     result_dir = Path(output_dir, "results", cfg.level)
     result_dir.mkdir(parents=True, exist_ok=True)
 
-    features_dir = Path(cfg.features_root_dir)
+    features_dir = Path(cfg.features_dir)
 
     num_workers = min(mp.cpu_count(), cfg.speed.num_workers)
     if "SLURM_JOB_CPUS_PER_NODE" in os.environ:
