@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Optional
 from einops import rearrange
 from omegaconf import DictConfig, OmegaConf
+from torchvision.transforms import CenterCrop
 
 from source.vision_transformer import vit_small, vit4k_xs
 from source.model_utils import Attn_Net_Gated, PositionalEncoderFactory
@@ -1523,9 +1524,11 @@ class LocalFeatureExtractorFM(nn.Module):
         ):
         super(LocalFeatureExtractorFM, self).__init__()
         self.ps = patch_size
+        self.center_crop = CenterCrop(224)
+        assert mini_patch_size == 16, "mini_patch_size must be 16"
         self.name = name
         if self.name == "uni":
-            self.tile_encoder = timm.create_model("vit_large_patch16_224", img_size=patch_size, patch_size=mini_patch_size, init_values=1e-5, num_classes=0, dynamic_img_size=True)
+            self.tile_encoder = timm.create_model("vit_large_patch16_224", img_size=224, patch_size=16, init_values=1e-5, num_classes=0, dynamic_img_size=True)
         else:
             raise ValueError(f"Unknown model name: {self.name}")
 
@@ -1547,15 +1550,7 @@ class LocalFeatureExtractorFM(nn.Module):
         for param in self.tile_encoder.parameters():
             param.requires_grad = False
 
-    def forward(self, x, pct: Optional[torch.Tensor] = None, pct_thresh: float = 0.0):
-        mask_mini_patch = None
-        if pct is not None:
-            mask_mini_patch = (pct > pct_thresh).int()  # [num_patches, nminipatch**2]
-            # add the [CLS] token to the mask
-            cls_token = mask_mini_patch.new_ones((mask_mini_patch.size(dim=0), 1))
-            mask_mini_patch = torch.cat(
-                (cls_token, mask_mini_patch), dim=1
-            )  # [num_patches, num_mini_patches+1]
+    def forward(self, x, pct: Optional[torch.Tensor] = None):
         # x = [1, 3, region_size, region_size]
         # TODO: add prepare_img_tensor method
         x = x.unfold(2, self.ps, self.ps).unfold(
@@ -1563,13 +1558,11 @@ class LocalFeatureExtractorFM(nn.Module):
         )  # [1, 3, npatch, region_size, ps] -> [1, 3, npatch, npatch, ps, ps]
         x = rearrange(x, "b c p1 p2 w h -> (b p1 p2) c w h")  # [num_patches, 3, ps, ps]
 
-        if pct is not None:
-            mask_mini_patch = rearrange(
-                mask_mini_patch, "b c p -> (b c) p"
-            )  # [1*num_patches, nminipatch**2]
+        # apply center crop to fit expected input size
+        cropped_x = torch.stack([self.center_crop(patch) for patch in x])
 
         patch_feature = (
-            self.tile_encoder(x, mask=mask_mini_patch).detach().cpu()
-        )  # [num_patches, 384]
+            self.tile_encoder(cropped_x).detach().cpu()
+        )  # [num_patches, 1024]
 
         return patch_feature
