@@ -1518,17 +1518,50 @@ class LocalFeatureExtractorFM(nn.Module):
             self,
             name: str,
             patch_size: int = 256,
-            mini_patch_size: int = 16,
             pretrained_weights: str = "path/to/pretrained/vit_patch/weights.pth",
             verbose: bool = False,
         ):
         super(LocalFeatureExtractorFM, self).__init__()
         self.ps = patch_size
         self.center_crop = CenterCrop(224)
-        assert mini_patch_size == 16, "mini_patch_size must be 16"
         self.name = name
         if self.name == "uni":
             self.tile_encoder = timm.create_model("vit_large_patch16_224", img_size=224, patch_size=16, init_values=1e-5, num_classes=0, dynamic_img_size=True)
+        elif self.name == "kaiko":
+            pretrained_cfg = {
+                'tag': 'augreg2_in21k_ft_in1k',
+                'custom_load': False,
+                'input_size': [3, 224, 224],
+                'fixed_input_size': True,
+                'interpolation': 'bicubic',
+                'crop_pct': 0.9,
+                'crop_mode': 'center',
+                'mean': [0.5, 0.5, 0.5],
+                'std': [0.5, 0.5, 0.5],
+                'num_classes': 0,
+                'pool_size': None,
+                'first_conv': 'patch_embed.proj',
+                'classifier': 'head',
+            }
+            self.tile_encoder = timm.create_model("vit_base_patch16_224", pretrained_cfg=pretrained_cfg)
+        elif self.name == "virchow2":
+            pretrained_cfg = {
+                'tag': 'virchow_v2',
+                'custom_load': False,
+                'input_size': [3, 224, 224],
+                'fixed_input_size': False,
+                'interpolation': 'bicubic',
+                'crop_pct': 1.0,
+                'crop_mode': 'center',
+                'mean': [0.485, 0.456, 0.406],
+                'std': [0.229, 0.224, 0.225],
+                'num_classes': 0,
+                'pool_size': None,
+                'first_conv': 'patch_embed.proj',
+                'classifier': 'head',
+                "license": "CC-BY-NC-ND-4.0"
+            }
+            self.tile_encoder = timm.create_model("hf-hub:paige-ai/Virchow2", pretrained=False, mlp_layer=timm.layers.SwiGLUPacked, act_layer=torch.nn.SiLU)
         else:
             raise ValueError(f"Unknown model name: {self.name}")
 

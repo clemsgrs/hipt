@@ -281,7 +281,7 @@ class ExtractedFeaturesDataset(torch.utils.data.Dataset):
         row = self.df.loc[idx]
         slide_id = row.slide_id
         fp = Path(self.features_dir, f"{slide_id}.pt")
-        features = torch.load(fp)
+        features = torch.load(fp, map_location='cpu')
         label = row.label
         if self.transform:
             features = self.transform(features, slide_id, self.seed)
@@ -306,7 +306,7 @@ class ExtractedFeaturesOrdinalDataset(ExtractedFeaturesDataset):
         row = self.df.loc[idx]
         slide_id = row.slide_id
         fp = Path(self.features_dir, f"{slide_id}.pt")
-        features = torch.load(fp)
+        features = torch.load(fp, map_location='cpu')
         label = np.zeros(self.num_classes - 1).astype(np.float32)
         label[: row.label] = 1.0
         if self.transform:
@@ -346,7 +346,7 @@ class BlindedExtractedFeaturesDataset(torch.utils.data.Dataset):
         row = self.df.loc[idx]
         slide_id = row.slide_id
         fp = Path(self.features_dir, f"{slide_id}.pt")
-        features = torch.load(fp)
+        features = torch.load(fp, map_location='cpu')
         if self.transform:
             features = self.transform(features, slide_id, self.seed)
         return idx, features, _
@@ -393,7 +393,7 @@ class ExtractedFeaturesSurvivalDataset(torch.utils.data.Dataset):
         censored = row.censored
 
         fp = Path(self.features_dir, f"{case_id}.pt")
-        feature = torch.load(fp)
+        feature = torch.load(fp, map_location='cpu')
 
         # if more than nfeats_max features, randomly sample nfeats_max features
         if self.nfeats_max and len(feature) > self.nfeats_max:
@@ -433,7 +433,7 @@ class ExtractedFeaturesPatientLevelSurvivalDataset(ExtractedFeaturesSurvivalData
         features = []
         for slide_id in slide_ids:
             fp = Path(self.features_dir, f"{slide_id}.pt")
-            f = torch.load(fp)
+            f = torch.load(fp, map_location='cpu')
             features.append(f)
 
         return idx, features, label, event_time, c
@@ -511,7 +511,7 @@ class ExtractedFeaturesCoordsSurvivalDataset(torch.utils.data.Dataset):
             ].values
             for x, y in coords:
                 fp = Path(self.features_dir, f"{slide_id}_{x}_{y}.pt")
-                f = torch.load(fp)
+                f = torch.load(fp, map_location='cpu')
                 features.append(f)
                 coordinates.append((i, x, y))
         coordinates = np.array(coordinates)
@@ -568,7 +568,7 @@ class ExtractedFeaturesPatientLevelCoordsSurvivalDataset(
             ].values
             for x, y in coords:
                 fp = Path(self.features_dir, f"{slide_id}_{x}_{y}.pt")
-                f = torch.load(fp)
+                f = torch.load(fp, map_location='cpu')
                 feats.append(f)
             feats = torch.cat(feats, dim=0)
             features.append(feats)
@@ -614,7 +614,7 @@ class ExtractedFeaturesSlideLevelSurvivalDataset(torch.utils.data.Dataset):
         c = row.censorship
 
         fp = Path(self.features_dir, f"{slide_id}.pt")
-        feature = torch.load(fp)
+        feature = torch.load(fp, map_location='cpu')
 
         return idx, feature, label, event_time, c
 
@@ -775,7 +775,7 @@ class ExtractedFeaturesMaskedDataset(ExtractedFeaturesDataset):
         row = self.df.loc[idx]
         slide_id = row.slide_id
         fp = Path(self.features_dir, f"{slide_id}.pt")
-        features = torch.load(fp)
+        features = torch.load(fp, map_location='cpu')
         label = row.label
         if self.transform:
             features = self.transform(features, slide_id, self.seed)
@@ -901,7 +901,7 @@ class RegionFilepathsDataset(torch.utils.data.Dataset):
     def __getitem__(self, idx: int):
         row = self.df.loc[idx]
         slide_id = row.slide_id
-        slide_dir = Path(self.region_dir, slide_id, "imgs")
+        slide_dir = Path(self.region_dir, slide_id)
         regions = [str(fp) for fp in slide_dir.glob(f"*.{self.format}")]
         return idx, regions, slide_id, None
 
@@ -958,7 +958,7 @@ class HierarchicalPretrainingDataset(torch.utils.data.Dataset):
         self.transform = transform
 
     def __getitem__(self, idx: int):
-        f = torch.load(self.features_list[idx])
+        f = torch.load(self.features_list[idx], map_location='cpu')
         f = self.transform(f)
         label = torch.zeros(1, 1)
         return f, label
