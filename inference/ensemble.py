@@ -50,7 +50,7 @@ def main(cfg: DictConfig):
     result_dir = Path(output_dir, "results")
     result_dir.mkdir(parents=True, exist_ok=True)
 
-    features_dir = Path(cfg.features_dir)
+    features_root_dir = Path(cfg.features_dir)
 
     region_dir = None
     if cfg.region_dir is not None:
@@ -107,7 +107,8 @@ def main(cfg: DictConfig):
         msg = model.load_state_dict(sd)
         print(f"Checkpoint loaded with msg: {msg}")
 
-        features_dir = Path(features_dir, f"{model_name}")
+        if cfg.fold_specific_features:
+            features_dir = Path(features_root_dir, f"{model_name}")
 
         model_start_time = time.time()
         for test_name, csv_path in test_csvs.items():
@@ -209,10 +210,12 @@ def main(cfg: DictConfig):
         distance_func = custom_isup_grade_dist
     for test_name, csv_path in test_csvs.items():
         dfs = []
-        cols = ["slide_id", "label", "pred"]
+        cols = ["slide_id", "label", "raw_logit", "pred"]
         for model_name in checkpoints:
             df = pd.read_csv(Path(result_dir, f"{model_name}_{test_name}.csv"))[cols]
             df = df.rename(columns={"pred": f"pred_{model_name}"})
+            if "raw_logit" in df.columns:
+                df = df.rename(columns={"raw_logit": f"raw_logit_{model_name}"})
             dfs.append(df)
         ensemble_df = reduce(
             lambda left, right: pd.merge(
@@ -223,6 +226,9 @@ def main(cfg: DictConfig):
         ensemble_df["pred"] = ensemble_df[
             [f"pred_{model_name}" for model_name in checkpoints]
         ].apply(lambda x: get_majority_vote(x, distance_func, seed=x.name), axis=1)
+        ensemble_df["agg_logit"] = ensemble_df[
+            [f"raw_logit_{model_name}" for model_name in checkpoints]
+        ].mean(axis=1)
         ensemble_df["comment"] = [
             "majority vote" for _ in range(len(ensemble_df))
         ]
@@ -245,6 +251,10 @@ def main(cfg: DictConfig):
                 "comment": ["no regions extracted ; assigning a random prediction" for _ in range(len(missing_sids))],
             }
         )
+        if "raw_logit" in ensemble_df.columns:
+            missing_df["raw_logit"] = [
+                [None for _ in range(cfg.num_classes)] for _ in range(len(missing_sids))
+            ]
         ensemble_df = pd.concat([ensemble_df, missing_df], ignore_index=True)
         ensemble_df.to_csv(Path(result_dir, f"{test_name}.csv"), index=False)
         ensemble_metrics = get_metrics(

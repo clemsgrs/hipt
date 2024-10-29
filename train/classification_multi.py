@@ -131,7 +131,6 @@ def main(cfg: DictConfig):
             label_name=cfg.label_name,
             label_mapping=cfg.label_mapping,
             label_encoding=cfg.label_encoding,
-            transform=transform,
             mask_attention=mask_attn,
             region_dir=region_dir,
             attention_masks_dir=attention_masks_dir,

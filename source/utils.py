@@ -1099,7 +1099,7 @@ def train_regression(
 
     model.train()
     epoch_loss = 0
-    preds, labels = [], []
+    raw_logits, preds, labels = [], [], []
     idxs = []
 
     sampler = torch.utils.data.RandomSampler(dataset)
@@ -1157,7 +1157,9 @@ def train_regression(
 
             labels.extend(label.clone().tolist())
             idxs.extend(list(idx))
+            raw_logits.extend(logits.cpu().tolist())
 
+    dataset.df.loc[idxs, f"raw_logit"] = raw_logits
     dataset.df.loc[idxs, f"pred"] = preds
 
     metrics = get_metrics(
@@ -1188,7 +1190,7 @@ def tune_regression(
 
     model.eval()
     epoch_loss = 0
-    preds, labels = [], []
+    raw_logits, preds, labels = [], [], []
     idxs = []
 
     sampler = torch.utils.data.SequentialSampler(dataset)
@@ -1227,9 +1229,11 @@ def tune_regression(
 
                 labels.extend(label.clone().tolist())
                 idxs.extend(list(idx))
+                raw_logits.extend(logits.cpu().tolist())
 
                 epoch_loss += loss.item()
 
+    dataset.df.loc[idxs, f"raw_logit"] = raw_logits
     dataset.df.loc[idxs, f"pred"] = preds
 
     metrics = get_metrics(
@@ -1257,7 +1261,7 @@ def test_regression(
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     model.eval()
-    preds, labels = [], []
+    raw_logits, preds, labels = [], [], []
     idxs = []
 
     sampler = torch.utils.data.SequentialSampler(dataset)
@@ -1295,7 +1299,9 @@ def test_regression(
 
                 labels.extend(label.clone().tolist())
                 idxs.extend(list(idx))
+                raw_logits.extend(logits.cpu().tolist())
 
+    dataset.df.loc[idxs, f"raw_logit"] = raw_logits
     dataset.df.loc[idxs, f"pred"] = preds
 
     metrics = get_metrics(
