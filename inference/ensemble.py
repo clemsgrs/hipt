@@ -109,6 +109,8 @@ def main(cfg: DictConfig):
 
         if cfg.fold_specific_features:
             features_dir = Path(features_root_dir, f"{model_name}")
+        else:
+            features_dir = features_root_dir
 
         model_start_time = time.time()
         for test_name, csv_path in test_csvs.items():

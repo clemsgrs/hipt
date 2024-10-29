@@ -1274,6 +1274,7 @@ def test_regression(
         num_workers=num_workers,
     )
 
+    blinded = False
     results = {}
 
     with tqdm.tqdm(
@@ -1287,9 +1288,14 @@ def test_regression(
         with torch.no_grad():
             for i, batch in enumerate(t):
                 idx, x, label = batch
-                x, label = x.to(device, non_blocking=True), label.to(
-                    device, non_blocking=True
-                )
+                if label is None:
+                    blinded = True
+                if not blinded:
+                    x, label = x.to(device, non_blocking=True), label.to(
+                        device, non_blocking=True
+                    )
+                else:
+                    x = x.to(device, non_blocking=True)
                 logits = model(x)
 
                 pred = get_label_from_regression_logits(
@@ -1304,13 +1310,14 @@ def test_regression(
     dataset.df.loc[idxs, f"raw_logit"] = raw_logits
     dataset.df.loc[idxs, f"pred"] = preds
 
-    metrics = get_metrics(
-        preds,
-        labels,
-        class_names=[f"isup_{i}" for i in range(dataset.num_classes)],
-        use_wandb=use_wandb,
-    )
-    results.update(metrics)
+    if not blinded:
+        metrics = get_metrics(
+            preds,
+            labels,
+            class_names=[f"isup_{i}" for i in range(dataset.num_classes)],
+            use_wandb=use_wandb,
+        )
+        results.update(metrics)
 
     return results
 
