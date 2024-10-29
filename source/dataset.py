@@ -349,7 +349,7 @@ class BlindedExtractedFeaturesDataset(torch.utils.data.Dataset):
         features = torch.load(fp, map_location='cpu')
         if self.transform:
             features = self.transform(features, slide_id, self.seed)
-        return idx, features, None
+        return idx, features, -1
 
     def __len__(self):
         return len(self.df)

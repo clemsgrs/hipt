@@ -1257,6 +1257,7 @@ def test_regression(
     batch_size: Optional[int] = 1,
     num_workers: int = 0,
     use_wandb: bool = False,
+    blinded: bool = False,
 ):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -1274,7 +1275,6 @@ def test_regression(
         num_workers=num_workers,
     )
 
-    blinded = False
     results = {}
 
     with tqdm.tqdm(
@@ -1288,8 +1288,6 @@ def test_regression(
         with torch.no_grad():
             for i, batch in enumerate(t):
                 idx, x, label = batch
-                if label is None:
-                    blinded = True
                 if not blinded:
                     x, label = x.to(device, non_blocking=True), label.to(
                         device, non_blocking=True

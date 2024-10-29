@@ -158,6 +158,7 @@ def main(cfg: DictConfig):
                         batch_size=1,
                         num_workers=num_workers,
                         use_wandb=cfg.wandb.enable,
+                        blinded=cfg.blinded,
                     )
             elif cfg.label_encoding == "ordinal":
                 test_results = test_ordinal(
