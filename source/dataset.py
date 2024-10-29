@@ -161,6 +161,7 @@ class DatasetFactory:
                     options.df,
                     options.features_dir,
                     options.transform,
+                    options.num_classes,
                 )
             elif options.mask_attention:
                 self.dataset = ExtractedFeaturesMaskedDataset(
