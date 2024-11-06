@@ -129,11 +129,9 @@ def main(cfg: DictConfig):
         process_df = pd.DataFrame({
             "slide_id": slide_ids,
             "status": ["not processed"] * len(slide_ids),
-            "error": [np.nan] * len(slide_ids),
-            "feature_path": [np.nan] * len(slide_ids),
+            "error": [str(np.nan)] * len(slide_ids),
+            "feature_path": [str(np.nan)] * len(slide_ids),
         })
-        process_df["error"] = process_df["error"].astype(str)
-        process_df["feature_path"] = process_df["feature_path"].astype(str)
 
     mask = process_df["status"] != "processed"
     process_stack = process_df[mask]
@@ -159,9 +157,9 @@ def main(cfg: DictConfig):
         collate_fn=collate_coordinates,
     )
 
-    local_processed_count = 0
-    agg_processed_count = 0
-    dfs = []
+    local_processed_count = torch.tensor(0).to(device)
+    agg_processed_count = already_processed
+    dfs = [process_df[~mask]]
 
     with tqdm.tqdm(
         loader,
@@ -211,15 +209,15 @@ def main(cfg: DictConfig):
                     mask = process_df["slide_id"] == slide_id
                     local_process_df = process_df[mask].copy()
                     local_process_df.loc[0, "status"] = "processed"
-                    local_process_df.loc[0, "error"] = np.nan
+                    local_process_df.loc[0, "error"] = str(np.nan)
                     local_process_df.loc[0, "feature_path"] = str(save_path)
                     dfs.append(local_process_df)
 
                     if cfg.wandb.enable and is_main_process():
-                        agg_processed_count += local_processed_count
+                        agg_processed_count += local_processed_count.item()
                         wandb.log({"processed": agg_processed_count})
 
-                    local_processed_count = 0
+                    local_processed_count = torch.tensor(0).to(device)
 
                 except Exception as e:
 
@@ -229,13 +227,14 @@ def main(cfg: DictConfig):
                     local_process_df.loc[0, "error"] = str(e)
                     dfs.append(local_process_df)
 
-    process_df = pd.concat(dfs, ignore_index=True)
     process_csv_path = Path(output_dir, f"process_list.csv")
     if distributed:
         torch.distributed.barrier()
+        process_df = pd.concat(dfs, ignore_index=True)
         if is_main_process():
             process_df.to_csv(process_csv_path, index=False)
     else:
+        process_df = pd.concat(dfs, ignore_index=True)
         process_df.to_csv(process_csv_path, index=False)
 
 
