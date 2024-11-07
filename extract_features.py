@@ -1,12 +1,10 @@
 import os
 import tqdm
-import time
 import wandb
 import torch
 import hydra
 import shutil
 import datetime
-import subprocess
 import pandas as pd
 import multiprocessing as mp
 
@@ -15,13 +13,16 @@ from pathlib import Path
 from omegaconf import DictConfig
 from torchvision import transforms
 
-from source.dataset import RegionFilepathsDataset
+from source.wsi import WholeSlideImage
+from source.dataset import SlideFilepathsDataset, RegionFilepathsDataset, PatchDataset
 from source.models import GlobalFeatureExtractor, LocalFeatureExtractor
 from source.utils import (
     initialize_wandb,
     initialize_df,
+    collate_filepaths,
     collate_region_filepaths,
     is_main_process,
+    sort_coords,
 )
 
 
@@ -95,8 +96,15 @@ def main(cfg: DictConfig):
     else:
         raise ValueError(f"cfg.level ({cfg.level}) not supported")
 
-    region_dir = Path(cfg.region_dir)
-    slide_ids = sorted([s.name for s in region_dir.iterdir()])
+    if cfg.region_dir is not None:
+        region_dir = Path(cfg.region_dir)
+        slide_ids = sorted([s.name for s in region_dir.iterdir()])
+    elif cfg.csv is not None:
+        df = pd.read_csv(cfg.csv)
+        patch_dir = Path(cfg.patch_dir, f"patches/{cfg.region_size}/npy")
+        slide_paths = df.slide_path.unique().tolist()
+        slide_ids = [Path(s).stem for s in slide_paths if Path(patch_dir, f"{Path(s).stem}.npy").is_file()]
+
     if is_main_process():
         print(f"{len(slide_ids)} slides with extracted patches found")
 
@@ -106,27 +114,9 @@ def main(cfg: DictConfig):
         if is_main_process():
             print(f"restricting to {len(slide_ids)} slides from slide list .txt file")
 
-    df = initialize_df(slide_ids)
-    dataset = RegionFilepathsDataset(df, region_dir, cfg.format)
-
-    if distributed:
-        sampler = torch.utils.data.DistributedSampler(dataset, shuffle=True)
-    else:
-        sampler = torch.utils.data.RandomSampler(dataset)
-
     num_workers = min(mp.cpu_count(), cfg.num_workers)
     if "SLURM_JOB_CPUS_PER_NODE" in os.environ:
         num_workers = min(num_workers, int(os.environ["SLURM_JOB_CPUS_PER_NODE"]))
-
-    loader = torch.utils.data.DataLoader(
-        dataset,
-        sampler=sampler,
-        batch_size=1,
-        num_workers=num_workers,
-        shuffle=False,
-        drop_last=False,
-        collate_fn=collate_region_filepaths,
-    )
 
     if gpu_id == -1:
         device = torch.device(f"cuda")
@@ -137,72 +127,159 @@ def main(cfg: DictConfig):
     if is_main_process():
         print()
 
-    slide_ids, region_slide_ids = [], []
+    processed_slide_ids, processed_region_slide_ids = [], []
     slide_feature_paths, region_feature_paths = [], []
     x_coords, y_coords = [], []
 
-    with tqdm.tqdm(
-        loader,
-        desc="Slide Encoding",
-        unit=" slide",
-        ncols=80,
-        position=0,
-        leave=True,
-        disable=not (gpu_id in [-1, 0]),
-    ) as t1:
-        with torch.no_grad():
-            for i, batch in enumerate(t1):
-                idx, region_fps, slide_id, pct = batch
-                # sort region filepath for easier reproducibility
-                region_fps = sorted(region_fps)
-                slide_ids.append(slide_id)
-                features = []
+    if cfg.region_dir is not None:
 
-                with tqdm.tqdm(
-                    region_fps,
-                    desc=(f"{slide_id}"),
-                    unit=" region",
-                    ncols=80 + len(slide_id),
-                    position=1,
-                    leave=False,
-                    disable=not (gpu_id in [-1, 0]),
-                ) as t2:
-                    for j, fp in enumerate(t2):
-                        x_y = Path(fp).stem
-                        x, y = int(x_y.split("_")[0]), int(x_y.split("_")[1])
-                        x_coords.append(x)
-                        y_coords.append(y)
-                        img = Image.open(fp)
-                        img = transforms.functional.to_tensor(img)  # [3, 4096, 4096]
-                        img = img.unsqueeze(0)  # [1, 3, 4096, 4096]
-                        img = img.to(device, non_blocking=True)
-                        p = None
-                        if pct is not None:
-                            p = pct[j]
-                        feature = model(img, pct=p)
-                        if cfg.save_region_features:
-                            save_path = Path(
-                                region_features_dir, f"{slide_id}_{x}_{y}.pt"
-                            )
-                            torch.save(feature, save_path)
-                            region_feature_paths.append(save_path.resolve())
-                            region_slide_ids.append(slide_id)
-                        features.append(feature)
+        df = initialize_df(slide_ids)
+        dataset = RegionFilepathsDataset(df, region_dir, cfg.format)
+        if distributed:
+            sampler = torch.utils.data.DistributedSampler(dataset, shuffle=True)
+        else:
+            sampler = torch.utils.data.RandomSampler(dataset)
 
-                stacked_features = torch.stack(features, dim=0).squeeze(1)
-                save_path = Path(slide_features_dir, f"{slide_id}.pt")
-                torch.save(stacked_features, save_path)
-                slide_feature_paths.append(save_path.resolve())
+        loader = torch.utils.data.DataLoader(
+            dataset,
+            sampler=sampler,
+            batch_size=1,
+            num_workers=num_workers,
+            shuffle=False,
+            drop_last=False,
+            collate_fn=collate_region_filepaths,
+        )
 
-                if cfg.wandb.enable and not distributed:
-                    wandb.log({"processed": i + 1})
+        with tqdm.tqdm(
+            loader,
+            desc="Slide Encoding",
+            unit=" slide",
+            ncols=80,
+            position=0,
+            leave=True,
+            disable=not (gpu_id in [-1, 0]),
+        ) as t1:
+            with torch.no_grad():
+                for i, batch in enumerate(t1):
+                    idx, region_fps, slide_id, pct = batch
+                    # sort region filepath for easier reproducibility
+                    region_fps = sorted(region_fps)
+                    processed_slide_ids.append(slide_id)
+                    features = []
+
+                    with tqdm.tqdm(
+                        region_fps,
+                        desc=(f"{slide_id}"),
+                        unit=" region",
+                        ncols=80 + len(slide_id),
+                        position=1,
+                        leave=False,
+                        disable=not (gpu_id in [-1, 0]),
+                    ) as t2:
+                        for j, fp in enumerate(t2):
+                            x_y = Path(fp).stem
+                            x, y = int(x_y.split("_")[0]), int(x_y.split("_")[1])
+                            x_coords.append(x)
+                            y_coords.append(y)
+                            img = Image.open(fp)
+                            img = transforms.functional.to_tensor(img)  # [3, 4096, 4096]
+                            img = img.unsqueeze(0)  # [1, 3, 4096, 4096]
+                            img = img.to(device, non_blocking=True)
+                            p = None
+                            if pct is not None:
+                                p = pct[j]
+                            feature = model(img, pct=p)
+                            if cfg.save_region_features:
+                                save_path = Path(
+                                    region_features_dir, f"{slide_id}_{x}_{y}.pt"
+                                )
+                                torch.save(feature, save_path)
+                                region_feature_paths.append(save_path.resolve())
+                                processed_region_slide_ids.append(slide_id)
+                            features.append(feature)
+
+                    slide_feature = torch.stack(features, dim=0).squeeze(1)
+                    save_path = Path(slide_features_dir, f"{slide_id}.pt")
+                    torch.save(slide_feature, save_path)
+                    slide_feature_paths.append(save_path.resolve())
+
+                    if cfg.wandb.enable and not distributed:
+                        wandb.log({"processed": i + 1})
+
+    elif cfg.csv is not None:
+
+        sub_df = df[df.slide_id.isin(slide_ids)].reset_index(drop=True)
+        dataset = SlideFilepathsDataset(sub_df)
+        if distributed:
+            sampler = torch.utils.data.DistributedSampler(dataset, shuffle=True)
+        else:
+            sampler = torch.utils.data.RandomSampler(dataset)
+
+        loader = torch.utils.data.DataLoader(
+            dataset,
+            sampler=sampler,
+            batch_size=1,
+            num_workers=num_workers,
+            shuffle=False,
+            drop_last=False,
+            collate_fn=collate_filepaths,
+        )
+
+        with tqdm.tqdm(
+            loader,
+            desc="Slide Encoding",
+            unit=" slide",
+            unit_scale=1,
+            position=0,
+            leave=True,
+            disable=not (gpu_id in [-1, 0]),
+        ) as t1:
+            with torch.no_grad():
+                for i, batch in enumerate(t1):
+                    _, wsi_fp, mask_fp = batch
+                    wsi = WholeSlideImage(wsi_fp, mask_fp)
+                    processed_slide_ids.append(wsi.name)
+                    coordinates, patch_level, resize_factor = wsi.get_patch_coordinates(cfg.spacing, cfg.region_size)
+                    sorted_coordinates = sort_coords(coordinates)
+                    region_dataset = PatchDataset(wsi_fp, sorted_coordinates, patch_level, resize_factor, cfg.region_size, cfg.backend)
+                    region_dataloader = torch.utils.data.DataLoader(region_dataset, batch_size=1, shuffle=False, pin_memory=True, drop_last=False)
+                    region_features = []
+                    with tqdm.tqdm(
+                        region_dataloader,
+                        desc=f"Processing {wsi_fp.stem}",
+                        unit=" region",
+                        unit_scale=1,
+                        leave=False,
+                        disable=not (gpu_id in [-1, 0]),
+                    ) as t2:
+                        for j, (img, x, y) in enumerate(t2):
+                            x_coords.append(x)
+                            y_coords.append(y)
+                            img = img.to(device, non_blocking=True)
+                            p = None
+                            feature = model(img, pct=p)
+                            if cfg.save_region_features:
+                                save_path = Path(
+                                    region_features_dir, f"{wsi.name}_{x}_{y}.pt"
+                                )
+                                torch.save(feature, save_path)
+                                region_feature_paths.append(save_path.resolve())
+                                processed_region_slide_ids.append(wsi.name)
+                            region_features.append(feature)
+                    slide_feature = torch.stack(region_features, dim=0).squeeze(1)
+                    save_path = Path(slide_features_dir, f"{wsi.name}.pt")
+                    torch.save(slide_feature, save_path)
+                    slide_feature_paths.append(save_path.resolve())
+
+                    if cfg.wandb.enable and not distributed:
+                        wandb.log({"processed": i + 1})
 
     slide_features_df = pd.DataFrame.from_dict(
         {
             "feature_path": slide_feature_paths,
-            "slide_id": slide_ids,
-            "level": [f"{cfg.level}"] * len(slide_ids),
-            "tile_size": [cfg.region_size] * len(slide_ids),
+            "slide_id": processed_slide_ids,
+            "level": [f"{cfg.level}"] * len(processed_slide_ids),
+            "tile_size": [cfg.region_size] * len(processed_slide_ids),
         }
     )
 
@@ -216,9 +293,9 @@ def main(cfg: DictConfig):
         region_features_df = pd.DataFrame.from_dict(
             {
                 "feature_path": region_feature_paths,
-                "slide_id": region_slide_ids,
-                "level": [f"{cfg.level}"] * len(region_slide_ids),
-                "tile_size": [cfg.region_size] * len(region_slide_ids),
+                "slide_id": processed_region_slide_ids,
+                "level": [f"{cfg.level}"] * len(processed_region_slide_ids),
+                "tile_size": [cfg.region_size] * len(processed_region_slide_ids),
                 "x": x_coords,
                 "y": y_coords,
             }

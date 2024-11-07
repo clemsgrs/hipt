@@ -9,7 +9,6 @@ import statistics
 import numpy as np
 import pandas as pd
 import multiprocessing as mp
-import matplotlib.pyplot as plt
 
 from pathlib import Path
 from omegaconf import DictConfig
@@ -27,7 +26,6 @@ from source.utils import (
     test_survival,
     compute_time,
     update_log_dict,
-    aggregated_cindex,
     EarlyStopping,
     OptimizerFactory,
     SchedulerFactory,
@@ -73,7 +71,7 @@ def main(cfg: DictConfig):
     nfold = len([_ for _ in fold_root_dir.glob(f"fold_*")])
     print(f"Training on {nfold} folds")
 
-    test_metrics = []
+    tune_metrics, test_metrics = [], []
 
     start_time = time.time()
     for i in range(nfold):
@@ -260,15 +258,34 @@ def main(cfg: DictConfig):
         fold_mins, fold_secs = compute_time(fold_start_time, fold_end_time)
         print(f"Total time taken for fold {i}: {fold_mins}m {fold_secs}s")
 
+        # run best/latest model against tune (and test) dataset
+
+        # load best/latest model
+        best_model_fp = Path(checkpoint_dir, f"{cfg.testing.retrieve_checkpoint}.pt")
+        if cfg.wandb.enable:
+            wandb.save(str(best_model_fp))
+        best_model_sd = torch.load(best_model_fp)
+        model.load_state_dict(best_model_sd)
+
+        best_tune_results = test_survival(
+            model,
+            tune_dataset,
+            agg_method=cfg.model.agg_method,
+            batch_size=1,
+            num_workers=num_workers,
+        )
+        tune_dataset.df.to_csv(Path(result_dir, f"tune-{cfg.testing.retrieve_checkpoint}.csv"), index=False)
+
+        for r, v in best_tune_results.items():
+            if r == "c-index":
+                tune_metrics.append(v)
+                v = round(v, 5)
+            if cfg.wandb.enable and r in log_to_wandb["tune"]:
+                wandb.log({f"tune/fold_{i}/{r}": v})
+            elif "cm" not in r:
+                print(f"tune {r}: {v}")
+
         if do_test:
-
-            # load best model
-            best_model_fp = Path(checkpoint_dir, f"{cfg.testing.retrieve_checkpoint}.pt")
-            if cfg.wandb.enable:
-                wandb.save(str(best_model_fp))
-            best_model_sd = torch.load(best_model_fp)
-            model.load_state_dict(best_model_sd)
-
             test_results = test_survival(
                 model,
                 test_dataset,
@@ -276,7 +293,7 @@ def main(cfg: DictConfig):
                 batch_size=1,
                 num_workers=num_workers,
             )
-            test_dataset.df.to_csv(Path(result_dir, f"test.csv"), index=False)
+            test_dataset.df.to_csv(Path(result_dir, f"test-{cfg.testing.retrieve_checkpoint}.csv"), index=False)
 
             for r, v in test_results.items():
                 if r == "c-index":
@@ -286,6 +303,12 @@ def main(cfg: DictConfig):
                     wandb.log({f"test/fold_{i}/{r}": v})
                 elif "cm" not in r:
                     print(f"test {r}: {v}")
+
+    mean_tune_metric = round(np.mean(tune_metrics), 5)
+    std_tune_metric = round(statistics.stdev(tune_metrics), 5)
+    if cfg.wandb.enable and "c-index" in log_to_wandb["tune"]:
+        wandb.log({f"tune/c-index_mean": mean_tune_metric})
+        wandb.log({f"tune/c-index_std": std_tune_metric})
 
     if do_test:
 
