@@ -33,10 +33,11 @@ from source.attention_visualization_utils import (
     get_slide_blended_heatmaps,
     stitch_slide_heatmaps,
     display_stitched_heatmaps,
+    load_heatmaps_from_disk,
 )
 
 
-@hydra.main(version_base="1.2.0", config_path="config/heatmaps", config_name="ecp_masked_attn")
+@hydra.main(version_base="1.2.0", config_path="config/heatmaps", config_name="default")
 def main(cfg: DictConfig):
     distributed = torch.cuda.device_count() > 1
     if distributed:
@@ -70,7 +71,7 @@ def main(cfg: DictConfig):
     if is_main_process():
         output_dir.mkdir(parents=True, exist_ok=True)
 
-    mask_attention = (cfg.mask_attn_patch is True) or (mask_attn_region is True)
+    mask_attention = (cfg.mask_attn_patch is True) or (cfg.mask_attn_region is True)
 
     # seed everything to ensure reproducible heatmaps
     seed = 0
@@ -91,6 +92,7 @@ def main(cfg: DictConfig):
         pretrained_weights=patch_weights,
         mask_attn=cfg.mask_attn_patch,
         device=device,
+        verbose=is_main_process(),
     )
 
     region_weights = Path(cfg.region_weights)
@@ -100,6 +102,7 @@ def main(cfg: DictConfig):
         mask_attn=cfg.mask_attn_region,
         img_size_pretrained=cfg.img_size_pretrained,
         device=device,
+        verbose=is_main_process(),
     )
 
     if cfg.slide_weights:
@@ -113,11 +116,13 @@ def main(cfg: DictConfig):
             for i, (k, v) in enumerate(sd.items())
             if i >= start_idx and i <= end_idx
         }
-        print(f"Pretrained weights found at {slide_weights}")
+        if is_main_process():
+            print(f"Pretrained weights found at {slide_weights}")
 
         slide_model = get_slide_model(sd, device=device)
 
-    light_jet = cmap_map(lambda x: x / 2 + 0.5, matplotlib.cm.jet)
+    custom_cmap = cmap_map(lambda x: x / 2 + 0.5, matplotlib.cm.jet)
+    # custom_cmap = cmap_map(lambda x: x / 2 + 0.5, matplotlib.colors.LinearSegmentedColormap.from_list("", ["blue","white","lime"]))
 
     if cfg.patch_fp and is_main_process():
         patch = Image.open(cfg.patch_fp)
@@ -131,7 +136,7 @@ def main(cfg: DictConfig):
             output_dir_patch,
             threshold=0.5,
             alpha=0.5,
-            cmap=light_jet,
+            cmap=custom_cmap,
             granular=cfg.smoothing.patch,
             offset=cfg.smoothing.offset.patch,
             downscale=cfg.downscale,
@@ -148,7 +153,7 @@ def main(cfg: DictConfig):
             output_dir_patch_concat,
             threshold=0.5,
             alpha=0.5,
-            cmap=light_jet,
+            cmap=custom_cmap,
             granular=cfg.smoothing.patch,
             offset=cfg.smoothing.offset.patch,
             downscale=cfg.downscale,
@@ -170,7 +175,7 @@ def main(cfg: DictConfig):
             downscale=cfg.downscale,
             threshold=0.5,
             alpha=0.5,
-            cmap=light_jet,
+            cmap=custom_cmap,
             granular=cfg.smoothing.region,
             offset=cfg.smoothing.offset.region,
             patch_device=device,
@@ -188,7 +193,7 @@ def main(cfg: DictConfig):
             output_dir_region_concat,
             downscale=cfg.downscale,
             alpha=0.5,
-            cmap=light_jet,
+            cmap=custom_cmap,
             granular=cfg.smoothing.region,
             offset=cfg.smoothing.offset.region,
             patch_device=device,
@@ -205,30 +210,56 @@ def main(cfg: DictConfig):
         output_dir_slide = Path(output_dir, slide_id)
 
         mask_p, mask_mp = None, None
+        print(f"mask_attention: {mask_attention}")
+        print(f"restrict_to_tissue: {cfg.restrict_to_tissue}")
         if mask_attention:
-            mask_p, mask_mp = generate_masks(
-                slide_id,
-                slide_path,
-                cfg.segmentation_mask_fp,
-                region_dir,
-                region_size=cfg.region_size,
-                spacing=cfg.spacing,
-                downsample=1,
-                tissue_pixel_value=cfg.tissue_pixel_value,
-            )
+            if cfg.attention_masks_dir is not None:
+                att_mask_fp = Path(cfg.attention_masks_dir, f"{slide_id}.npy")
+                attn_mask = np.load(att_mask_fp) # (M, npatch**2, nminipatch**2)
+                pct = torch.Tensor(attn_mask)
+                if cfg.mask_attn_region:
+                    # infer patch-level mask
+                    pct_patch = torch.sum(pct, axis=-1) / pct[0].numel()
+                    mask_p = (pct_patch > 0.0).int()
+                    # add the [CLS] token to the mask
+                    cls_token = mask_p.new_ones((mask_p.size(0),1))
+                    mask_p = torch.cat((cls_token, mask_p), dim=1)  # [M, num_patches+1]
+                if cfg.mask_attn_patch:
+                    # infer mini-patch-level mask
+                    mask_mp = (pct > 0.0).int()  # (M, num_patches, nminipatch**2)
+                    # add the [CLS] token to the mask
+                    cls_token = mask_mp.new_ones((mask_mp.size(0),mask_mp.size(1),1))
+                    mask_mp = torch.cat((cls_token, mask_mp), dim=2)  # [M, num_patches, nminipatch**2+1]
+            else:
+                mask_p, mask_mp = generate_masks(
+                    slide_id,
+                    slide_path,
+                    cfg.segmentation_mask_fp,
+                    region_dir,
+                    region_size=cfg.region_size,
+                    spacing=cfg.spacing,
+                    downsample=1,
+                    tissue_pixel_value=cfg.tissue_pixel_value,
+                )
+                if not cfg.mask_attn_patch:
+                    mask_mp = None
+                if not cfg.mask_attn_region:
+                    mask_p = None
 
         ########################
         # PATCH-LEVEL HEATMAPS #
         ########################
 
-        hms, hms_thresh, hms_highlight, coords = get_slide_heatmaps_patch_level(
+        print("Computing patch-level heatmaps")
+
+        load_from_disk, hms, hms_thresh, hms_highlight, coords = get_slide_heatmaps_patch_level(
             slide_id,
             region_dir,
             patch_model,
             region_model,
             output_dir_slide,
             downscale=cfg.downscale,
-            cmap=light_jet,
+            cmap=custom_cmap,
             threshold=cfg.threshold,
             highlight=cfg.highlight,
             save_to_disk=False,
@@ -246,24 +277,37 @@ def main(cfg: DictConfig):
             region_device=device,
         )
 
+        if load_from_disk:
+            patch_hm_output_dir = Path(output_dir_slide, "patch", "256")
+            hms, coords = load_heatmaps_from_disk(patch_hm_output_dir, disable=is_main_process())
+
         stitched_hms = {}
-        for head_num, heatmaps in hms.items():
-            stitched_hm = stitch_slide_heatmaps(
-                slide_path,
-                heatmaps,
-                coords[head_num],
-                output_dir_slide,
-                fname=f"patch_head_{head_num}",
-                spacing=cfg.spacing,
-                downsample=cfg.downsample,
-                downscale=cfg.downscale,
-                cmap=light_jet,
-                save_to_disk=True,
-                restrict_to_tissue=cfg.restrict_to_tissue,
-                segmentation_mask_path=cfg.segmentation_mask_fp,
-                tissue_pixel_value=cfg.tissue_pixel_value,
-            )
-            stitched_hms[f"Head {head_num}"] = stitched_hm
+        with tqdm.tqdm(
+            hms.items(),
+            desc=f"Stitching {slide_id} patch-level heatmaps",
+            unit=" head",
+            leave=False,
+            disable=not is_main_process(),
+        ) as t:
+            for head_num, heatmaps in t:
+                stitched_hm = stitch_slide_heatmaps(
+                    slide_path,
+                    heatmaps,
+                    coords[head_num],
+                    output_dir_slide,
+                    fname=f"patch_head_{head_num}",
+                    spacing=cfg.spacing,
+                    downsample=cfg.downsample,
+                    downscale=cfg.downscale,
+                    cmap=custom_cmap,
+                    save_to_disk=True,
+                    restrict_to_tissue=cfg.restrict_to_tissue,
+                    segmentation_mask_path=cfg.segmentation_mask_fp,
+                    tissue_pixel_value=cfg.tissue_pixel_value,
+                )
+                stitched_hms[f"Head {head_num}"] = stitched_hm
+
+        del hms
 
         stitched_hms_thresh = {}
         if len(hms_thresh) > 0:
@@ -277,7 +321,7 @@ def main(cfg: DictConfig):
                     spacing=cfg.spacing,
                     downsample=cfg.downsample,
                     downscale=cfg.downscale,
-                    cmap=light_jet,
+                    cmap=custom_cmap,
                     save_to_disk=True,
                 )
                 stitched_hms_thresh[f"Head {head_num}"] = stitched_hm
@@ -294,7 +338,7 @@ def main(cfg: DictConfig):
                     spacing=cfg.spacing,
                     downsample=cfg.downsample,
                     downscale=cfg.downscale,
-                    cmap=light_jet,
+                    cmap=custom_cmap,
                     save_to_disk=True,
                     highlight=(cfg.highlight != None),
                     opacity=cfg.opacity,
@@ -310,7 +354,7 @@ def main(cfg: DictConfig):
                 output_dir_slide,
                 fname=f"patch",
                 display_patching=True,
-                cmap=light_jet,
+                cmap=custom_cmap,
                 region_dir=region_dir,
                 region_size=cfg.region_size,
                 downsample=cfg.downsample,
@@ -324,7 +368,7 @@ def main(cfg: DictConfig):
                     output_dir_slide,
                     fname=f"patch_thresh",
                     display_patching=True,
-                    cmap=light_jet,
+                    cmap=custom_cmap,
                     region_dir=region_dir,
                     region_size=cfg.region_size,
                     downsample=cfg.downsample,
@@ -338,7 +382,7 @@ def main(cfg: DictConfig):
                     output_dir_slide,
                     fname=f"patch_highlight",
                     display_patching=True,
-                    cmap=light_jet,
+                    cmap=custom_cmap,
                     region_dir=region_dir,
                     region_size=cfg.region_size,
                     downsample=cfg.downsample,
@@ -350,6 +394,8 @@ def main(cfg: DictConfig):
         # REGION-LEVEL HEATMAPS #
         #########################
 
+        print("Computing region-level heatmaps")
+
         hms, hms_thresh, hms_highlight, coords = get_slide_heatmaps_region_level(
             slide_id,
             region_dir,
@@ -357,8 +403,8 @@ def main(cfg: DictConfig):
             region_model,
             output_dir_slide,
             downscale=cfg.downscale,
-            cmap=light_jet,
-            save_to_disk=False,
+            cmap=custom_cmap,
+            save_to_disk=True,
             threshold=cfg.threshold,
             highlight=cfg.highlight,
             granular=cfg.smoothing.region,
@@ -370,6 +416,7 @@ def main(cfg: DictConfig):
             downsample=1,
             background_pixel_value=cfg.background_pixel_value,
             tissue_pixel_value=cfg.tissue_pixel_value,
+            restrict_to_tissue=cfg.restrict_to_tissue,
             patch_attn_mask=mask_p,
             mini_patch_attn_mask=mask_mp,
             patch_device=device,
@@ -387,7 +434,7 @@ def main(cfg: DictConfig):
                 spacing=cfg.spacing,
                 downsample=cfg.downsample,
                 downscale=cfg.downscale,
-                cmap=light_jet,
+                cmap=custom_cmap,
                 save_to_disk=True,
                 restrict_to_tissue=cfg.restrict_to_tissue,
                 segmentation_mask_path=cfg.segmentation_mask_fp,
@@ -407,7 +454,7 @@ def main(cfg: DictConfig):
                     spacing=cfg.spacing,
                     downsample=cfg.downsample,
                     downscale=cfg.downscale,
-                    cmap=light_jet,
+                    cmap=custom_cmap,
                     save_to_disk=True,
                 )
                 stitched_hms_thresh[f"Head {head_num}"] = stitched_hm
@@ -424,7 +471,7 @@ def main(cfg: DictConfig):
                     spacing=cfg.spacing,
                     downsample=cfg.downsample,
                     downscale=cfg.downscale,
-                    cmap=light_jet,
+                    cmap=custom_cmap,
                     save_to_disk=True,
                     highlight=(cfg.highlight != None),
                     opacity=cfg.opacity,
@@ -440,7 +487,7 @@ def main(cfg: DictConfig):
                 output_dir_slide,
                 fname=f"region",
                 display_patching=True,
-                cmap=light_jet,
+                cmap=custom_cmap,
                 region_dir=region_dir,
                 region_size=cfg.region_size,
                 downsample=cfg.downsample,
@@ -454,7 +501,7 @@ def main(cfg: DictConfig):
                     output_dir_slide,
                     fname=f"region_thresh",
                     display_patching=True,
-                    cmap=light_jet,
+                    cmap=custom_cmap,
                     region_dir=region_dir,
                     region_size=cfg.region_size,
                     downsample=cfg.downsample,
@@ -468,7 +515,7 @@ def main(cfg: DictConfig):
                     output_dir_slide,
                     fname=f"region_highlight",
                     display_patching=True,
-                    cmap=light_jet,
+                    cmap=custom_cmap,
                     region_dir=region_dir,
                     region_size=cfg.region_size,
                     downsample=cfg.downsample,
@@ -487,7 +534,7 @@ def main(cfg: DictConfig):
         #     region_dir,
         #     output_dir_slide,
         #     downscale=cfg.downscale,
-        #     cmap=light_jet,
+        #     cmap=custom_cmap,
         #     threshold=None,
         #     save_to_disk=True,
         #     granular=cfg.smoothing.region,
@@ -544,7 +591,7 @@ def main(cfg: DictConfig):
         #             output_dir_slide,
         #             fname=f"rhead_{rhead_num}",
         #             display_patching=True,
-        #             cmap=light_jet,
+        #             cmap=custom_cmap,
         #             region_dir=region_dir,
         #             region_size=cfg.region_size,
         #             downsample=cfg.downsample,
@@ -558,6 +605,8 @@ def main(cfg: DictConfig):
             # SLIDE-LEVEL HEATMAPS #
             ########################
 
+            print("Computing slide-level heatmaps")
+
             hms, thresh_hms, highlight_hms, coords = get_slide_heatmaps_slide_level(
                 slide_id,
                 region_dir,
@@ -568,7 +617,7 @@ def main(cfg: DictConfig):
                 downscale=cfg.downscale,
                 threshold=cfg.threshold,
                 highlight=cfg.highlight,
-                cmap=light_jet,
+                cmap=custom_cmap,
                 region_fmt="jpg",
                 granular=cfg.smoothing.slide,
                 offset=cfg.smoothing.offset.slide,
@@ -593,9 +642,9 @@ def main(cfg: DictConfig):
                 spacing=cfg.spacing,
                 downsample=cfg.downsample,
                 downscale=cfg.downscale,
-                cmap=light_jet,
+                cmap=custom_cmap,
                 save_to_disk=True,
-                restrict_to_tissue=False,
+                restrict_to_tissue=cfg.restrict_to_tissue,
                 segmentation_mask_path=cfg.segmentation_mask_fp,
                 tissue_pixel_value=cfg.tissue_pixel_value,
             )
@@ -641,7 +690,7 @@ def main(cfg: DictConfig):
                     fname=f"wsi",
                     display_patching=True,
                     draw_grid=False,
-                    cmap=light_jet,
+                    cmap=custom_cmap,
                     region_dir=region_dir,
                     region_size=cfg.region_size,
                     downsample=cfg.downsample,
@@ -652,6 +701,8 @@ def main(cfg: DictConfig):
             ####################
             # BLENDED HEATMAPS #
             ####################
+
+            print("Computing factorized heatmaps")
 
             hms, thresh_hms, coords = get_slide_blended_heatmaps(
                 slide_id,
@@ -666,7 +717,7 @@ def main(cfg: DictConfig):
                 mini_patch_size=16,
                 downscale=cfg.downscale,
                 threshold=cfg.threshold,
-                cmap=light_jet,
+                cmap=custom_cmap,
                 region_fmt="jpg",
                 save_to_disk=False,
                 smoothing=cfg.smoothing,
@@ -697,7 +748,7 @@ def main(cfg: DictConfig):
                         spacing=cfg.spacing,
                         downsample=cfg.downsample,
                         downscale=cfg.downscale,
-                        cmap=light_jet,
+                        cmap=custom_cmap,
                         save_to_disk=True,
                         restrict_to_tissue=cfg.restrict_to_tissue,
                         segmentation_mask_path=cfg.segmentation_mask_fp,
@@ -720,7 +771,7 @@ def main(cfg: DictConfig):
                             spacing=cfg.spacing,
                             downsample=cfg.downsample,
                             downscale=cfg.downscale,
-                            cmap=light_jet,
+                            cmap=custom_cmap,
                             save_to_disk=True,
                         )
                         stitched_hms_thresh[rhead_num].append(stitched_hm)
@@ -737,7 +788,7 @@ def main(cfg: DictConfig):
                         output_dir_slide,
                         fname=f"rhead_{rhead_num}",
                         display_patching=True,
-                        cmap=light_jet,
+                        cmap=custom_cmap,
                         region_dir=region_dir,
                         region_size=cfg.region_size,
                         downsample=cfg.downsample,
@@ -775,50 +826,89 @@ def main(cfg: DictConfig):
         ) as t1:
             for i, batch in enumerate(t1):
 
-                _, fp = batch
-                slide_path = Path(fp[0])
+                _, slide_fp, seg_mask_path = batch
+                slide_path = Path(slide_fp[0])
+                if seg_mask_path != None:
+                    seg_mask_path = Path(seg_mask_path[0])
                 slide_id = slide_path.stem
                 region_dir = Path(cfg.region_dir)
 
                 output_dir_slide = Path(output_dir, slide_id)
 
+                mask_p, mask_mp = None, None
+                if mask_attention:
+                    mask_p, mask_mp = generate_masks(
+                        slide_id,
+                        slide_path,
+                        seg_mask_path,
+                        region_dir,
+                        region_size=cfg.region_size,
+                        spacing=cfg.spacing,
+                        downsample=1,
+                        tissue_pixel_value=cfg.tissue_pixel_value,
+                    )
+
                 ########################
                 # PATCH-LEVEL HEATMAPS #
                 ########################
 
-                hms, hms_thresh, hms_highlight, coords = get_slide_heatmaps_patch_level(
+                load_from_disk, hms, hms_thresh, hms_highlight, coords = get_slide_heatmaps_patch_level(
                     slide_id,
                     region_dir,
                     patch_model,
                     region_model,
                     output_dir_slide,
                     downscale=cfg.downscale,
-                    cmap=light_jet,
+                    cmap=custom_cmap,
                     threshold=cfg.threshold,
                     highlight=cfg.highlight,
-                    save_to_disk=False,
+                    save_to_disk=True,
                     granular=cfg.smoothing.patch,
                     offset=cfg.smoothing.offset.patch,
+                    slide_path=slide_path,
+                    segmentation_mask_path=seg_mask_path,
+                    spacing=cfg.spacing,
+                    downsample=1,
+                    background_pixel_value=cfg.background_pixel_value,
+                    tissue_pixel_value=cfg.tissue_pixel_value,
+                    patch_attn_mask=mask_p,
+                    mini_patch_attn_mask=mask_mp,
                     patch_device=device,
                     region_device=device,
                     main_process=is_main_process(),
                 )
 
+                if load_from_disk:
+                    patch_hm_output_dir = Path(output_dir_slide, "patch", "256")
+                    hms, coords = load_heatmaps_from_disk(patch_hm_output_dir, disable=is_main_process())
+
                 stitched_hms = {}
-                for head_num, heatmaps in hms.items():
-                    stitched_hm = stitch_slide_heatmaps(
-                        slide_path,
-                        heatmaps,
-                        coords[head_num],
-                        output_dir_slide,
-                        fname=f"patch_head_{head_num}",
-                        spacing=cfg.spacing,
-                        downsample=cfg.downsample,
-                        downscale=cfg.downscale,
-                        cmap=light_jet,
-                        save_to_disk=True,
-                    )
-                    stitched_hms[f"Head {head_num}"] = stitched_hm
+                with tqdm.tqdm(
+                    hms.items(),
+                    desc=f"Stitching {slide_id} patch-level heatmaps",
+                    unit=" head",
+                    leave=False,
+                    disable=not is_main_process(),
+                ) as t2:
+                    for head_num, heatmaps in t2:
+                        stitched_hm = stitch_slide_heatmaps(
+                            slide_path,
+                            heatmaps,
+                            coords[head_num],
+                            output_dir_slide,
+                            fname=f"patch_head_{head_num}",
+                            spacing=cfg.spacing,
+                            downsample=cfg.downsample,
+                            downscale=cfg.downscale,
+                            cmap=custom_cmap,
+                            save_to_disk=True,
+                            restrict_to_tissue=cfg.restrict_to_tissue,
+                            segmentation_mask_path=seg_mask_path,
+                            tissue_pixel_value=cfg.tissue_pixel_value,
+                        )
+                        stitched_hms[f"Head {head_num}"] = stitched_hm
+
+                del hms
 
                 stitched_hms_thresh = {}
                 if len(hms_thresh) > 0:
@@ -832,7 +922,7 @@ def main(cfg: DictConfig):
                             spacing=cfg.spacing,
                             downsample=cfg.downsample,
                             downscale=cfg.downscale,
-                            cmap=light_jet,
+                            cmap=custom_cmap,
                             save_to_disk=True,
                         )
                         stitched_hms_thresh[f"Head {head_num}"] = stitched_hm
@@ -849,7 +939,7 @@ def main(cfg: DictConfig):
                             spacing=cfg.spacing,
                             downsample=cfg.downsample,
                             downscale=cfg.downscale,
-                            cmap=light_jet,
+                            cmap=custom_cmap,
                             save_to_disk=True,
                             highlight=(cfg.highlight != None),
                             opacity=cfg.opacity,
@@ -866,11 +956,12 @@ def main(cfg: DictConfig):
                         output_dir_slide,
                         fname=f"patch",
                         display_patching=True,
-                        cmap=light_jet,
+                        cmap=custom_cmap,
                         region_dir=region_dir,
                         region_size=cfg.region_size,
                         downsample=cfg.downsample,
                         font_fp=cfg.font_fp,
+                        run_id=run_id,
                     )
                     if len(stitched_hms_thresh) > 0:
                         display_stitched_heatmaps(
@@ -879,11 +970,12 @@ def main(cfg: DictConfig):
                             output_dir_slide,
                             fname=f"patch_thresh",
                             display_patching=True,
-                            cmap=light_jet,
+                            cmap=custom_cmap,
                             region_dir=region_dir,
                             region_size=cfg.region_size,
                             downsample=cfg.downsample,
                             font_fp=cfg.font_fp,
+                            run_id=run_id,
                         )
                     if len(stitched_hms_highlight) > 0:
                         display_stitched_heatmaps(
@@ -892,11 +984,12 @@ def main(cfg: DictConfig):
                             output_dir_slide,
                             fname=f"patch_highlight",
                             display_patching=True,
-                            cmap=light_jet,
+                            cmap=custom_cmap,
                             region_dir=region_dir,
                             region_size=cfg.region_size,
                             downsample=cfg.downsample,
                             font_fp=cfg.font_fp,
+                            run_id=run_id,
                         )
 
                 #########################
@@ -910,13 +1003,21 @@ def main(cfg: DictConfig):
                     region_model,
                     output_dir_slide,
                     downscale=cfg.downscale,
-                    cmap=light_jet,
+                    cmap=custom_cmap,
                     save_to_disk=False,
                     threshold=cfg.threshold,
                     highlight=cfg.highlight,
                     granular=cfg.smoothing.region,
                     offset=cfg.smoothing.offset.region,
                     gaussian_smoothing=cfg.gaussian_smoothing,
+                    slide_path=slide_path,
+                    segmentation_mask_path=seg_mask_path,
+                    spacing=cfg.spacing,
+                    downsample=1,
+                    background_pixel_value=cfg.background_pixel_value,
+                    tissue_pixel_value=cfg.tissue_pixel_value,
+                    patch_attn_mask=mask_p,
+                    mini_patch_attn_mask=mask_mp,
                     patch_device=device,
                     region_device=device,
                     main_process=is_main_process(),
@@ -933,8 +1034,11 @@ def main(cfg: DictConfig):
                         spacing=cfg.spacing,
                         downsample=cfg.downsample,
                         downscale=cfg.downscale,
-                        cmap=light_jet,
+                        cmap=custom_cmap,
                         save_to_disk=True,
+                        restrict_to_tissue=cfg.restrict_to_tissue,
+                        segmentation_mask_path=cfg.segmentation_mask_fp,
+                        tissue_pixel_value=cfg.tissue_pixel_value,
                     )
                     stitched_hms[f"Head {head_num}"] = stitched_hm
 
@@ -950,7 +1054,7 @@ def main(cfg: DictConfig):
                             spacing=cfg.spacing,
                             downsample=cfg.downsample,
                             downscale=cfg.downscale,
-                            cmap=light_jet,
+                            cmap=custom_cmap,
                             save_to_disk=True,
                         )
                         stitched_hms_thresh[f"Head {head_num}"] = stitched_hm
@@ -967,7 +1071,7 @@ def main(cfg: DictConfig):
                             spacing=cfg.spacing,
                             downsample=cfg.downsample,
                             downscale=cfg.downscale,
-                            cmap=light_jet,
+                            cmap=custom_cmap,
                             save_to_disk=True,
                             highlight=(cfg.highlight != None),
                             opacity=cfg.opacity,
@@ -983,11 +1087,12 @@ def main(cfg: DictConfig):
                         output_dir_slide,
                         fname=f"region",
                         display_patching=True,
-                        cmap=light_jet,
+                        cmap=custom_cmap,
                         region_dir=region_dir,
                         region_size=cfg.region_size,
                         downsample=cfg.downsample,
                         font_fp=cfg.font_fp,
+                        run_id=run_id,
                     )
                     if len(stitched_hms_thresh) > 0:
                         display_stitched_heatmaps(
@@ -996,11 +1101,12 @@ def main(cfg: DictConfig):
                             output_dir_slide,
                             fname=f"region_thresh",
                             display_patching=True,
-                            cmap=light_jet,
+                            cmap=custom_cmap,
                             region_dir=region_dir,
                             region_size=cfg.region_size,
                             downsample=cfg.downsample,
                             font_fp=cfg.font_fp,
+                            run_id=run_id,
                         )
                     if len(stitched_hms_highlight) > 0:
                         display_stitched_heatmaps(
@@ -1009,11 +1115,12 @@ def main(cfg: DictConfig):
                             output_dir_slide,
                             fname=f"region_highlight",
                             display_patching=True,
-                            cmap=light_jet,
+                            cmap=custom_cmap,
                             region_dir=region_dir,
                             region_size=cfg.region_size,
                             downsample=cfg.downsample,
                             font_fp=cfg.font_fp,
+                            run_id=run_id,
                         )
 
                 if cfg.slide_weights:
@@ -1032,7 +1139,7 @@ def main(cfg: DictConfig):
                         downscale=cfg.downscale,
                         threshold=cfg.threshold,
                         highlight=cfg.highlight,
-                        cmap=light_jet,
+                        cmap=custom_cmap,
                         region_fmt="jpg",
                         granular=cfg.smoothing.slide,
                         offset=cfg.smoothing.offset.slide,
@@ -1040,6 +1147,8 @@ def main(cfg: DictConfig):
                         spacing=cfg.spacing,
                         gaussian_smoothing=cfg.gaussian_smoothing,
                         gaussian_offset=cfg.gaussian_offset,
+                        patch_attn_mask=mask_p,
+                        mini_patch_attn_mask=mask_mp,
                         patch_device=device,
                         region_device=device,
                         slide_device=device,
@@ -1055,8 +1164,11 @@ def main(cfg: DictConfig):
                         spacing=cfg.spacing,
                         downsample=cfg.downsample,
                         downscale=cfg.downscale,
-                        cmap=light_jet,
+                        cmap=custom_cmap,
                         save_to_disk=True,
+                        restrict_to_tissue=False,
+                        segmentation_mask_path=seg_mask_path,
+                        tissue_pixel_value=cfg.tissue_pixel_value,
                     )
                     stitched_hms[f"slide-level"] = stitched_hm
 
@@ -1070,7 +1182,7 @@ def main(cfg: DictConfig):
                             spacing=cfg.spacing,
                             downsample=cfg.downsample,
                             downscale=cfg.downscale,
-                            cmap=light_jet,
+                            cmap=custom_cmap,
                             save_to_disk=True,
                         )
                         stitched_hms[f"thresholded"] = stitched_hm
@@ -1085,7 +1197,7 @@ def main(cfg: DictConfig):
                             spacing=cfg.spacing,
                             downsample=cfg.downsample,
                             downscale=cfg.downscale,
-                            cmap=light_jet,
+                            cmap=custom_cmap,
                             save_to_disk=True,
                             highlight=(cfg.highlight != None),
                             opacity=cfg.opacity,
@@ -1102,11 +1214,12 @@ def main(cfg: DictConfig):
                             fname=f"wsi",
                             display_patching=True,
                             draw_grid=False,
-                            cmap=light_jet,
+                            cmap=custom_cmap,
                             region_dir=region_dir,
                             region_size=cfg.region_size,
                             downsample=cfg.downsample,
                             font_fp=cfg.font_fp,
+                            run_id=run_id,
                         )
 
                     ####################
@@ -1126,12 +1239,18 @@ def main(cfg: DictConfig):
                         mini_patch_size=16,
                         downscale=cfg.downscale,
                         threshold=cfg.threshold,
-                        cmap=light_jet,
+                        cmap=custom_cmap,
                         region_fmt="jpg",
                         save_to_disk=False,
                         smoothing=cfg.smoothing,
                         slide_path=slide_path,
+                        segmentation_mask_path=seg_mask_path,
                         spacing=cfg.spacing,
+                        downsample=1,
+                        background_pixel_value=cfg.background_pixel_value,
+                        tissue_pixel_value=cfg.tissue_pixel_value,
+                        patch_attn_mask=mask_p,
+                        mini_patch_attn_mask=mask_mp,
                         patch_device=device,
                         region_device=device,
                         slide_device=device,
@@ -1151,8 +1270,11 @@ def main(cfg: DictConfig):
                                 spacing=cfg.spacing,
                                 downsample=cfg.downsample,
                                 downscale=cfg.downscale,
-                                cmap=light_jet,
+                                cmap=custom_cmap,
                                 save_to_disk=True,
+                                restrict_to_tissue=cfg.restrict_to_tissue,
+                                segmentation_mask_path=seg_mask_path,
+                                tissue_pixel_value=cfg.tissue_pixel_value,
                             )
                             stitched_hms[rhead_num].append(stitched_hm)
 
@@ -1171,7 +1293,7 @@ def main(cfg: DictConfig):
                                     spacing=cfg.spacing,
                                     downsample=cfg.downsample,
                                     downscale=cfg.downscale,
-                                    cmap=light_jet,
+                                    cmap=custom_cmap,
                                     save_to_disk=True,
                                 )
                                 stitched_hms_thresh[rhead_num].append(stitched_hm)
@@ -1188,11 +1310,12 @@ def main(cfg: DictConfig):
                                 output_dir_slide,
                                 fname=f"rhead_{rhead_num}",
                                 display_patching=True,
-                                cmap=light_jet,
+                                cmap=custom_cmap,
                                 region_dir=region_dir,
                                 region_size=cfg.region_size,
                                 downsample=cfg.downsample,
                                 font_fp=cfg.font_fp,
+                                run_id=run_id,
                             )
 
                 if cfg.wandb.enable and not distributed:
