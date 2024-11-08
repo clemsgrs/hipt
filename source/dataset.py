@@ -197,31 +197,12 @@ class DatasetFactory:
                     options.label_mapping,
                 )
         elif task == "survival":
-            # if options.tiles_df is not None:
-            if False:
-                if agg_method == "concat":
-                    self.dataset = ExtractedFeaturesCoordsSurvivalDataset(
-                        options.patient_df,
-                        options.slide_df,
-                        options.tiles_df,
-                        options.features_dir,
-                        options.label_name,
-                    )
-                elif agg_method == "self_att":
-                    self.dataset = ExtractedFeaturesPatientLevelCoordsSurvivalDataset(
-                        options.patient_df,
-                        options.slide_df,
-                        options.tiles_df,
-                        options.features_dir,
-                        options.label_name,
-                    )
-            else:
-                self.dataset = ExtractedFeaturesSurvivalDataset(
-                    options.df,
-                    options.features_dir,
-                    options.label_name,
-                    options.nfeats_max,
-                )
+            self.dataset = ExtractedFeaturesSurvivalDataset(
+                options.df,
+                options.features_dir,
+                options.label_name,
+                options.nfeats_max,
+            )
         else:
             raise ValueError(f"task ({task}) not supported")
 
@@ -389,9 +370,8 @@ class ExtractedFeaturesSurvivalDataset(torch.utils.data.Dataset):
     def __getitem__(self, idx: int):
         row = self.df.loc[idx]
         case_id = row.case_id
-        label = row.discrete_label
-        event_time = row[self.label_name]
-        censored = row.censored
+        time = row[self.label_name]
+        event = 1 - row.censored
 
         fp = Path(self.features_dir, f"{case_id}.pt")
         feature = torch.load(fp, map_location='cpu')
@@ -402,7 +382,7 @@ class ExtractedFeaturesSurvivalDataset(torch.utils.data.Dataset):
             sampled_indices = torch.randperm(len(feature))[:self.nfeats_max].sort().values
             feature = feature[sampled_indices]
 
-        return idx, feature, label, event_time, censored
+        return idx, feature, time, event
 
     def __len__(self):
         return len(self.df)

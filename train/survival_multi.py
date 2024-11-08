@@ -36,6 +36,7 @@ from source.utils import (
     version_base="1.2.0", config_path="../config/training/survival", config_name="default_multi"
 )
 def main(cfg: DictConfig):
+    os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:128"
     run_id = datetime.datetime.now().strftime("%Y-%m-%d_%H_%M")
     # set up wandb
     if cfg.wandb.enable:
@@ -58,14 +59,6 @@ def main(cfg: DictConfig):
     num_workers = min(mp.cpu_count(), cfg.speed.num_workers)
     if "SLURM_JOB_CPUS_PER_NODE" in os.environ:
         num_workers = min(num_workers, int(os.environ['SLURM_JOB_CPUS_PER_NODE']))
-
-    tiles_df = None
-    if (
-        cfg.model.slide_pos_embed.type == "2d"
-        and cfg.model.slide_pos_embed.use
-        and cfg.model.agg_method
-    ):
-        tiles_df = pd.read_csv(cfg.data.tiles_csv)
 
     fold_root_dir = Path(cfg.data.fold_dir)
     nfold = len([_ for _ in fold_root_dir.glob(f"fold_*")])
@@ -125,10 +118,8 @@ def main(cfg: DictConfig):
         if do_test:
             test_dataset = DatasetFactory("survival", test_dataset_options).get_dataset()
 
-        num_classes = train_dataset.num_classes
-
         model = ModelFactory(
-            cfg.level, num_classes, "survival", cfg.loss, cfg.label_encoding, cfg.model
+            cfg.level, 1, "survival", cfg.loss, cfg.label_encoding, cfg.model
         ).get_model()
         model.relocate()
         print(model)
@@ -180,7 +171,6 @@ def main(cfg: DictConfig):
                     train_dataset,
                     optimizer,
                     criterion,
-                    agg_method=cfg.model.agg_method,
                     batch_size=cfg.training.batch_size,
                     weighted_sampling=cfg.training.weighted_sampling,
                     gradient_accumulation=cfg.training.gradient_accumulation,
@@ -206,7 +196,6 @@ def main(cfg: DictConfig):
                         model,
                         tune_dataset,
                         criterion,
-                        agg_method=cfg.model.agg_method,
                         batch_size=cfg.tuning.batch_size,
                         num_workers=num_workers,
                     )
@@ -270,7 +259,6 @@ def main(cfg: DictConfig):
         best_tune_results = test_survival(
             model,
             tune_dataset,
-            agg_method=cfg.model.agg_method,
             batch_size=1,
             num_workers=num_workers,
         )
@@ -281,7 +269,7 @@ def main(cfg: DictConfig):
                 tune_metrics.append(v)
                 v = round(v, 5)
             if cfg.wandb.enable and r in log_to_wandb["tune"]:
-                wandb.log({f"tune/fold_{i}/{r}": v})
+                wandb.log({f"tune/fold_{i}/{r}-{cfg.testing.retrieve_checkpoint}": v})
             elif "cm" not in r:
                 print(f"tune {r}: {v}")
 
@@ -289,7 +277,6 @@ def main(cfg: DictConfig):
             test_results = test_survival(
                 model,
                 test_dataset,
-                agg_method=cfg.model.agg_method,
                 batch_size=1,
                 num_workers=num_workers,
             )

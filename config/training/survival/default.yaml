@@ -10,7 +10,6 @@ nepochs: 50
 label_name: 'survival_months'
 label_mapping:
 label_encoding:
-nbins: 4
 
 task: 'survival'
 loss:

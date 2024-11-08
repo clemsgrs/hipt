@@ -354,21 +354,6 @@ class LocalGlobalHIPT(nn.Module):
             nn.Linear(embed_dim_region, embed_dim_slide), nn.ReLU(), nn.Dropout(dropout)
         )
 
-        if self.slide_pos_embed.use:
-            pos_encoding_options = OmegaConf.create(
-                {
-                    "agg_method": "concat",
-                    "dim": embed_dim_region,
-                    "dropout": dropout,
-                    "max_seq_len": slide_pos_embed.max_seq_len,
-                    "max_nslide": slide_pos_embed.max_nslide,
-                    "tile_size": slide_pos_embed.tile_size,
-                }
-            )
-            self.pos_encoder = PositionalEncoderFactory(
-                slide_pos_embed.type, slide_pos_embed.learned, pos_encoding_options
-            ).get_pos_encoder()
-
         self.global_transformer = nn.TransformerEncoder(
             nn.TransformerEncoderLayer(
                 d_model=embed_dim_slide,
@@ -388,41 +373,30 @@ class LocalGlobalHIPT(nn.Module):
 
         self.classifier = nn.Linear(embed_dim_slide, num_classes)
 
-    def forward(self, x, pct: Optional[torch.Tensor] = None, pct_thresh: float = 0.0):
-        mask_patch = None
-        if pct is not None:
-            pct_patch = torch.sum(pct, axis=-1) / pct[0].numel()
-            mask_patch = (pct_patch > pct_thresh).int()  # (M, npatch**2) e.g. (M, 64)
-            # add the [CLS] token to the mask
-            cls_token = mask_patch.new_ones((mask_patch.size(0), 1))
-            # eventually add register tokens to the mask
-            # they're added after the [CLS] token in the input sequence
-            if self.num_register_tokens_region:
-                register_tokens = mask_patch.new_ones(
-                    (mask_patch.size(0), self.num_register_tokens_region)
-                )
-                mask_patch = torch.cat((cls_token, register_tokens, mask_patch), dim=1) # [M, num_patches+1+self.num_register_tokens_region]
-            else:
-                mask_patch = torch.cat((cls_token, mask_patch), dim=1)  # [M, num_patches+1]
-        # x = [M, 256, 384]
-        x = self.vit_region(
-            x.unfold(1, self.npatch, self.npatch).transpose(1, 2),
-            mask=mask_patch,
-        )  # [M, 192]
-        x = self.global_phi(x)  # [M, 192]
+    def forward(self, x, mask):
 
-        if self.slide_pos_embed.use:
-            x = self.pos_encoder(x)
+        # x is of shape [batch_size, max_M, num_patches, feature_dim]
+        # mask is of shape [batch_size, max_M]
 
-        # in nn.TransformerEncoderLayer, batch_first defaults to False
-        # hence, input is expected to be of shape (seq_length, batch, emb_size)
-        x = self.global_transformer(x.unsqueeze(1)).squeeze(1)
-        att, x = self.global_attn_pool(x)
-        att = torch.transpose(att, 1, 0)
-        att = F.softmax(att, dim=1)
-        x_att = torch.mm(att, x)
+        bs, max_M, num_patches, feature_dim = x.size()
+
+        # flatten the region dimension
+        x = x.view(bs * max_M, num_patches, feature_dim)  # [bs * max_M, num_patches, feature_dim]
+
+        x = self.vit_region(x.unfold(1, self.npatch, self.npatch).transpose(1, 2),)  # [bs * max_M, 192]
+        x = x.view(bs, max_M, -1)  # [bs, max_M, 192]
+        x = self.global_phi(x)  # [bs, max_M, 192]
+
+        x = x.transpose(0, 1)  # nn.TransformerEncoderLayer expects (seq_length, bs, emb_size)
+        x = self.global_transformer(x, src_key_padding_mask=mask)  # [max_M, bs, 192]
+        x = x.transpose(0, 1)  # back to [bs, max_M, 192]
+
+        att, x = self.global_attn_pool(x) # [bs, max_M, 1], [bs, max_M, 192]
+        att = F.softmax(att, dim=1) # [bs, max_M, 1]
+        att = att.transpose(2, 1) # [bs, 1, max_M]
+        x_att = torch.bmm(att, x).squeeze(1)  # [bs, 192]
+
         x_wsi = self.global_rho(x_att)
-
         logits = self.classifier(x_wsi)
 
         return logits
