@@ -36,7 +36,7 @@ from source.utils import (
     version_base="1.2.0", config_path="../config/training/survival", config_name="default_multi"
 )
 def main(cfg: DictConfig):
-    os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:128"
+    os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:32"
     run_id = datetime.datetime.now().strftime("%Y-%m-%d_%H_%M")
     # set up wandb
     if cfg.wandb.enable:

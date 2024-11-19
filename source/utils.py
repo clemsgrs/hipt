@@ -1806,7 +1806,7 @@ def train_survival(
             loss_value = loss.item()
             epoch_loss += loss_value
 
-            log_hz_values = log_hz.squeeze(1).tolist()
+            log_hz_values = log_hz.squeeze(1).detach().cpu().tolist()
             log_hazards.extend(log_hz_values)
 
             times.extend(list(time))
@@ -1820,9 +1820,11 @@ def train_survival(
             if gradient_accumulation is None:
                 optimizer.step()
                 optimizer.zero_grad()
+                torch.cuda.empty_cache()
             elif (i + 1) % gradient_accumulation == 0:
                 optimizer.step()
                 optimizer.zero_grad()
+                torch.cuda.empty_cache()
 
             idxs.extend(list(idx))
             torch.cuda.empty_cache()
@@ -1835,6 +1837,10 @@ def train_survival(
     events = [events[i] for i in coresponding_indices]
 
     dataset.df.loc[idxs, "risk"] = log_hazards
+
+    times = torch.tensor(times, dtype=torch.float32)
+    events = torch.tensor(events, dtype=torch.bool)
+    log_hazards = torch.tensor(log_hazards, dtype=torch.float32)
 
     cindex = ConcordanceIndex()
     c_index = cindex(log_hazards, events, times)
@@ -1895,7 +1901,7 @@ def tune_survival(
                 loss_value = loss.item()
                 epoch_loss += loss_value
 
-                log_hz_values = log_hz.squeeze(1).tolist()
+                log_hz_values = log_hz.squeeze(1).detach().cpu().tolist()
                 log_hazards.extend(log_hz_values)
 
                 times.extend(list(time))
@@ -1911,12 +1917,16 @@ def tune_survival(
     events = [events[i] for i in coresponding_indices]
 
     dataset.df.loc[idxs, "risk"] = log_hazards
+    results["risks"] = log_hazards
+
+    times = torch.tensor(times, dtype=torch.float32)
+    events = torch.tensor(events, dtype=torch.bool)
+    log_hazards = torch.tensor(log_hazards, dtype=torch.float32)
 
     cindex = ConcordanceIndex()
     c_index = cindex(log_hazards, events, times)
 
     results["c-index"] = c_index
-    results["risks"] = log_hazards
 
     tune_loss = epoch_loss / len(loader)
     results["loss"] = tune_loss
@@ -1965,7 +1975,7 @@ def test_survival(
 
                 log_hz = model(x, mask)  # [bs, 1]
 
-                log_hz_values = log_hz.squeeze(1).tolist()
+                log_hz_values = log_hz.squeeze(1).detach().cpu().tolist()
                 log_hazards.extend(log_hz_values)
 
                 times.extend(list(time))
@@ -1981,6 +1991,10 @@ def test_survival(
     events = [events[i] for i in coresponding_indices]
 
     dataset.df.loc[idxs, "risk"] = log_hazards
+
+    times = torch.tensor(times, dtype=torch.float32)
+    events = torch.tensor(events, dtype=torch.bool)
+    log_hazards = torch.tensor(log_hazards, dtype=torch.float32)
 
     cindex = ConcordanceIndex()
     c_index = cindex(log_hazards, events, times)
