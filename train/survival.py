@@ -91,6 +91,7 @@ def main(cfg: DictConfig):
         slide_dfs[p] = slide_df[slide_df.partition == p]
 
     train_dataset_options = SurvivalDatasetOptions(
+        phase="train",
         patient_df=patient_dfs["train"],
         slide_df=slide_dfs["train"],
         tiles_df=tiles_df,
@@ -98,6 +99,7 @@ def main(cfg: DictConfig):
         label_name=cfg.label_name,
     )
     tune_dataset_options = SurvivalDatasetOptions(
+        phase="tune",
         patient_df=patient_dfs["tune"],
         slide_df=slide_dfs["tune"],
         tiles_df=tiles_df,
@@ -105,6 +107,7 @@ def main(cfg: DictConfig):
         label_name=cfg.label_name,
     )
     test_dataset_options = SurvivalDatasetOptions(
+        phase="test",
         patient_df=patient_dfs["test"],
         slide_df=slide_dfs["test"],
         tiles_df=tiles_df,

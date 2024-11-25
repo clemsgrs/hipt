@@ -141,6 +141,7 @@ class ClassificationDatasetOptions:
 
 @dataclass
 class SurvivalDatasetOptions:
+    phase: str
     df: pd.DataFrame
     features_dir: Path
     label_name: str
@@ -201,6 +202,7 @@ class DatasetFactory:
             if False:
                 if agg_method == "concat":
                     self.dataset = ExtractedFeaturesCoordsSurvivalDataset(
+                        options.phase,
                         options.patient_df,
                         options.slide_df,
                         options.tiles_df,
@@ -209,6 +211,7 @@ class DatasetFactory:
                     )
                 elif agg_method == "self_att":
                     self.dataset = ExtractedFeaturesPatientLevelCoordsSurvivalDataset(
+                        options.phase,
                         options.patient_df,
                         options.slide_df,
                         options.tiles_df,
@@ -217,6 +220,7 @@ class DatasetFactory:
                     )
             else:
                 self.dataset = ExtractedFeaturesSurvivalDataset(
+                    options.phase,
                     options.df,
                     options.features_dir,
                     options.label_name,
@@ -359,11 +363,13 @@ class BlindedExtractedFeaturesDataset(torch.utils.data.Dataset):
 class ExtractedFeaturesSurvivalDataset(torch.utils.data.Dataset):
     def __init__(
         self,
+        phase: str,
         df: pd.DataFrame,
         features_dir: Path,
         label_name: str = "label",
         nfeats_max: Optional[int] = None,
     ):
+        self.phase = phase
         self.features_dir = features_dir
         self.label_name = label_name
         self.nfeats_max = nfeats_max
@@ -372,7 +378,8 @@ class ExtractedFeaturesSurvivalDataset(torch.utils.data.Dataset):
         self.use_coords = False
 
         self.df = self.filter_df(df)
-        self.num_classes = self.df.discrete_label.nunique()
+        if phase != "test":
+            self.num_classes = self.df.discrete_label.nunique()
 
     def filter_df(self, df):
         missing_ids = []
@@ -389,7 +396,6 @@ class ExtractedFeaturesSurvivalDataset(torch.utils.data.Dataset):
     def __getitem__(self, idx: int):
         row = self.df.loc[idx]
         case_id = row.case_id
-        label = row.discrete_label
         event_time = row[self.label_name]
         censored = row.censored
 
@@ -402,7 +408,11 @@ class ExtractedFeaturesSurvivalDataset(torch.utils.data.Dataset):
             sampled_indices = torch.randperm(len(feature))[:self.nfeats_max].sort().values
             feature = feature[sampled_indices]
 
-        return idx, feature, label, event_time, censored
+        if self.phase == "test":
+            return idx, feature, -1, event_time, censored
+        else:
+            label = row.discrete_label
+            return idx, feature, label, event_time, censored
 
     def __len__(self):
         return len(self.df)
@@ -411,12 +421,13 @@ class ExtractedFeaturesSurvivalDataset(torch.utils.data.Dataset):
 class ExtractedFeaturesPatientLevelSurvivalDataset(ExtractedFeaturesSurvivalDataset):
     def __init__(
         self,
+        phase: str,
         patient_df: pd.DataFrame,
         slide_df: pd.DataFrame,
         features_dir: Path,
         label_name: str = "label",
     ):
-        super().__init__(patient_df, slide_df, features_dir, label_name)
+        super().__init__(phase, patient_df, slide_df, features_dir, label_name)
 
     def __getitem__(self, idx: int):
         row = self.df.loc[idx]
@@ -427,7 +438,6 @@ class ExtractedFeaturesPatientLevelSurvivalDataset(ExtractedFeaturesSurvivalData
 
         assert len(slide_ids) == len(set(slide_ids))
 
-        label = row.disc_label
         event_time = row[self.label_name]
         c = row.censorship
 
@@ -437,18 +447,24 @@ class ExtractedFeaturesPatientLevelSurvivalDataset(ExtractedFeaturesSurvivalData
             f = torch.load(fp, map_location='cpu')
             features.append(f)
 
-        return idx, features, label, event_time, c
+        if self.phase == "test":
+            return idx, features, -1, event_time, c
+        else:
+            label = row.disc_label
+            return idx, features, label, event_time, c
 
 
 class ExtractedFeaturesCoordsSurvivalDataset(torch.utils.data.Dataset):
     def __init__(
         self,
+        phase: str,
         patient_df: pd.DataFrame,
         slide_df: pd.DataFrame,
         tiles_df: pd.DataFrame,
         features_dir: Path,
         label_name: str = "label",
     ):
+        self.phase = phase
         self.features_dir = features_dir
         self.label_name = label_name
         self.use_coords = True
@@ -500,7 +516,6 @@ class ExtractedFeaturesCoordsSurvivalDataset(torch.utils.data.Dataset):
             self.slide_df.case_id == case_id
         ].slide_id.values.tolist()
 
-        label = row.disc_label
         event_time = row[self.label_name]
         c = row.censorship
 
@@ -528,7 +543,11 @@ class ExtractedFeaturesCoordsSurvivalDataset(torch.utils.data.Dataset):
 
         features = torch.cat(features, dim=0)
 
-        return idx, features, coordinates, label, event_time, c
+        if self.phase == "test":
+            return idx, features, coordinates, -1, event_time, c
+        else:
+            label = row.disc_label
+            return idx, features, coordinates, label, event_time, c
 
     def __len__(self):
         return len(self.df)
@@ -539,13 +558,14 @@ class ExtractedFeaturesPatientLevelCoordsSurvivalDataset(
 ):
     def __init__(
         self,
+        phase: str,
         patient_df: pd.DataFrame,
         slide_df: pd.DataFrame,
         tiles_df: pd.DataFrame,
         features_dir: Path,
         label_name: str = "label",
     ):
-        super().__init__(patient_df, slide_df, tiles_df, features_dir, label_name)
+        super().__init__(phase, patient_df, slide_df, tiles_df, features_dir, label_name)
 
     def __getitem__(self, idx: int):
         row = self.df.loc[idx]
@@ -556,7 +576,6 @@ class ExtractedFeaturesPatientLevelCoordsSurvivalDataset(
 
         assert len(slide_ids) == len(set(slide_ids))
 
-        label = row.disc_label
         event_time = row[self.label_name]
         c = row.censorship
 
@@ -575,7 +594,11 @@ class ExtractedFeaturesPatientLevelCoordsSurvivalDataset(
             features.append(feats)
             coordinates.append(coords)
 
-        return idx, features, coordinates, label, event_time, c
+        if self.phase == "test":
+            return idx, features, coordinates, -1, event_time, c
+        else:
+            label = row.disc_label
+            return idx, features, coordinates, label, event_time, c
 
 
 class ExtractedFeaturesSlideLevelSurvivalDataset(torch.utils.data.Dataset):

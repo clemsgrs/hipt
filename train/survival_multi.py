@@ -101,12 +101,14 @@ def main(cfg: DictConfig):
             )
 
         train_dataset_options = SurvivalDatasetOptions(
+            phase="train",
             df=dfs["train"],
             features_dir=features_dir,
             label_name=cfg.label_name,
             nfeats_max=cfg.model.nfeats_max,
         )
         tune_dataset_options = SurvivalDatasetOptions(
+            phase="tune",
             df=dfs["tune"],
             features_dir=features_dir,
             label_name=cfg.label_name,
@@ -114,6 +116,7 @@ def main(cfg: DictConfig):
         )
         if do_test:
             test_dataset_options = SurvivalDatasetOptions(
+                phase="test",
                 df=dfs["test"],
                 features_dir=features_dir,
                 label_name=cfg.label_name,
@@ -324,4 +327,5 @@ def main(cfg: DictConfig):
 
 
 if __name__ == "__main__":
+    os.environ["WANDB__SERVICE_WAIT"] = "300"
     main()

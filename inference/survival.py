@@ -60,6 +60,7 @@ def main(cfg: DictConfig):
         test_df = pd.read_csv(csv_path)
 
         test_dataset_options = SurvivalDatasetOptions(
+            phase="test",
             df=test_df,
             features_dir=features_dir,
             label_name=cfg.label_name,
