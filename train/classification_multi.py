@@ -7,7 +7,6 @@ import torch
 import hydra
 import datetime
 import matplotlib
-import statistics
 import numpy as np
 import pandas as pd
 import multiprocessing as mp
@@ -554,7 +553,7 @@ def main(cfg: DictConfig):
         for metric_name, metric_values in metrics.items()
     }
     std_tune_metrics = {
-        metric_name: round(statistics.stdev(metric_values), 5)
+        metric_name: round(np.std(metric_values), 5)
         for metric_name, metric_values in metrics.items()
     }
     for name in metrics.keys():
@@ -577,7 +576,7 @@ def main(cfg: DictConfig):
         for metric_name, metric_values in metrics.items()
     }
     std_test_metrics = {
-        metric_name: round(statistics.stdev(metric_values), 5)
+        metric_name: round(np.std(metric_values), 5)
         for metric_name, metric_values in metrics.items()
     }
     for name in metrics.keys():

@@ -5,7 +5,6 @@ import wandb
 import torch
 import hydra
 import datetime
-import statistics
 import numpy as np
 import pandas as pd
 import multiprocessing as mp
@@ -284,9 +283,9 @@ def main(cfg: DictConfig):
                 tune_metrics.append(v)
                 v = round(v, 5)
             if cfg.wandb.enable and r in log_to_wandb["tune"]:
-                wandb.log({f"tune/fold_{i}/{r}": v})
+                wandb.log({f"tune/fold_{i}/{r}_best": v})
             elif "cm" not in r:
-                print(f"tune {r}: {v}")
+                print(f"best tune {r}: {v}")
 
         if do_test:
             test_results = test_survival(
@@ -308,7 +307,7 @@ def main(cfg: DictConfig):
                     print(f"test {r}: {v}")
 
     mean_tune_metric = round(np.mean(tune_metrics), 5)
-    std_tune_metric = round(statistics.stdev(tune_metrics), 5)
+    std_tune_metric = round(np.std(tune_metrics), 5)
     if cfg.wandb.enable and "c-index" in log_to_wandb["tune"]:
         wandb.log({f"tune/c-index_mean": mean_tune_metric})
         wandb.log({f"tune/c-index_std": std_tune_metric})
@@ -316,7 +315,7 @@ def main(cfg: DictConfig):
     if do_test:
 
         mean_test_metric = round(np.mean(test_metrics), 5)
-        std_test_metric = round(statistics.stdev(test_metrics), 5)
+        std_test_metric = round(np.std(test_metrics), 5)
         if cfg.wandb.enable and "c-index" in log_to_wandb["test"]:
             wandb.log({f"test/c-index_mean": mean_test_metric})
             wandb.log({f"test/c-index_std": std_test_metric})

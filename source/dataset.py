@@ -1049,10 +1049,10 @@ class ImageFolderWithNameDataset(datasets.ImageFolder):
 
 class PatchDataset(torch.utils.data.Dataset):
     def __init__(self, wsi_fp, coordinates, backend):
-        _, _, patch_size_resized, patch_level, factor = coordinates[0]
-        self.coordinates =coordinates[:, :2]
-        self.wsi = wsd.WholeSlideImage(wsi_fp, backend=backend)
-        self.patch_spacing = self.wsi.spacings[patch_level]
+        self.wsi_fp = wsi_fp
+        self.backend = backend
+        _, _, patch_size_resized, self.patch_level, factor = coordinates[0]
+        self.coordinates = coordinates[:, :2]
         self.resize = (factor != 1)
         self.width = patch_size_resized
         self.height = patch_size_resized
@@ -1063,8 +1063,10 @@ class PatchDataset(torch.utils.data.Dataset):
         return len(self.coordinates)
 
     def __getitem__(self, idx):
+        wsi = wsd.WholeSlideImage(self.wsi_fp, backend=self.backend)
         x, y = self.coordinates[idx]
-        patch = self.wsi.get_patch(x, y, self.width, self.height, spacing=self.patch_spacing, center=False)
+        patch_spacing = wsi.spacings[self.patch_level]
+        patch = wsi.get_patch(x, y, self.width, self.height, spacing=patch_spacing, center=False)
         pil_patch = Image.fromarray(patch).convert("RGB")
         if self.resize:
             pil_patch = pil_patch.resize((self.target_width, self.target_height))

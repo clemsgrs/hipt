@@ -96,6 +96,7 @@ def main(cfg: DictConfig):
     assert cfg.csv is not None, "'csv' must be provided"
 
     df = pd.read_csv(cfg.csv)
+    df.slide_id = df.slide_id.astype(str)
     patch_dir = Path(cfg.patch_dir, f"patches/{cfg.region_size}/npy")
     slide_paths = df.slide_path.unique().tolist()
     slide_ids = [Path(s).stem for s in slide_paths if Path(patch_dir, f"{Path(s).stem}.npy").is_file()]
