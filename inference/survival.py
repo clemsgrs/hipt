@@ -71,6 +71,7 @@ def main(cfg: DictConfig):
         test_dataset = DatasetFactory("survival", test_dataset_options).get_dataset()
 
         model = ModelFactory(
+            cfg.architecture,
             cfg.level,
             num_classes=cfg.nbins,
             task="survival",

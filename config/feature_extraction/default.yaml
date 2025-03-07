@@ -11,6 +11,7 @@ resume_id:
 
 slide_list:
 
+architecture: 'hvit'
 region_size: 4096
 patch_size: 256
 mini_patch_size: 16

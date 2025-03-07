@@ -89,6 +89,7 @@ def main(cfg: DictConfig):
     start_time = time.time()
     for i, (model_name, checkpoint_path) in enumerate(checkpoints.items()):
         model = ModelFactory(
+            cfg.architecture,
             cfg.level,
             cfg.num_classes,
             cfg.task,

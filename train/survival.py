@@ -127,6 +127,7 @@ def main(cfg: DictConfig):
 
     print("Configuring model")
     model = ModelFactory(
+        cfg.architecture,
         cfg.level,
         num_classes=cfg.nbins,
         task="survival",

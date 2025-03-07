@@ -130,7 +130,13 @@ def main(cfg: DictConfig):
         num_classes = train_dataset.num_classes
 
         model = ModelFactory(
-            cfg.level, num_classes, "survival", cfg.loss, cfg.label_encoding, cfg.model
+            cfg.architecture,
+            cfg.level,
+            num_classes,
+            "survival",
+            cfg.loss,
+            cfg.label_encoding,
+            cfg.model,
         ).get_model()
         model.relocate()
         print(model)
@@ -187,6 +193,7 @@ def main(cfg: DictConfig):
                     weighted_sampling=cfg.training.weighted_sampling,
                     gradient_accumulation=cfg.training.gradient_accumulation,
                     num_workers=num_workers,
+                    use_fp16=cfg.speed.fp16,
                 )
 
                 if cfg.wandb.enable:
@@ -211,6 +218,7 @@ def main(cfg: DictConfig):
                         agg_method=cfg.model.agg_method,
                         batch_size=cfg.tuning.batch_size,
                         num_workers=num_workers,
+                        use_fp16=cfg.speed.fp16,
                     )
 
                     if cfg.wandb.enable:
@@ -275,6 +283,7 @@ def main(cfg: DictConfig):
             agg_method=cfg.model.agg_method,
             batch_size=1,
             num_workers=num_workers,
+            use_fp16=cfg.speed.fp16,
         )
         tune_dataset.df.to_csv(Path(result_dir, f"tune-{cfg.testing.retrieve_checkpoint}.csv"), index=False)
 
@@ -294,6 +303,7 @@ def main(cfg: DictConfig):
                 agg_method=cfg.model.agg_method,
                 batch_size=1,
                 num_workers=num_workers,
+                use_fp16=cfg.speed.fp16,
             )
             test_dataset.df.to_csv(Path(result_dir, f"test-{cfg.testing.retrieve_checkpoint}.csv"), index=False)
 

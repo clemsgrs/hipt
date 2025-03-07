@@ -93,7 +93,7 @@ def main(cfg: DictConfig):
         assert attention_masks_dir.is_dir(), f"{attention_masks_dir} doesn't exist!"
 
     fold_root_dir = Path(cfg.data.fold_dir)
-    nfold = len([_ for _ in fold_root_dir.glob("fold_*")])
+    nfold = len([_ for _ in fold_root_dir.glob("fold*")])
     print(f"Training on {nfold} folds")
 
     tune_metrics = defaultdict(dict)
@@ -101,14 +101,20 @@ def main(cfg: DictConfig):
 
     start_time = time.time()
     for i in range(nfold):
-        fold_dir = Path(fold_root_dir, f"fold_{i}")
-        checkpoint_dir = Path(checkpoint_root_dir, f"fold_{i}")
+        fold_dir = Path(fold_root_dir, f"fold-{i}")
+        if not fold_dir.is_dir():
+            Path(fold_root_dir, f"fold_{i}")
+            assert fold_dir.is_dir()
+        checkpoint_dir = Path(checkpoint_root_dir, f"fold-{i}")
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
-        result_dir = Path(result_root_dir, f"fold_{i}")
+        result_dir = Path(result_root_dir, f"fold-{i}")
         result_dir.mkdir(parents=True, exist_ok=True)
 
         if cfg.data.fold_specific_features:
-            features_dir = Path(features_dir, f"fold_{i}")
+            features_dir = Path(features_dir, f"fold-{i}")
+            if not features_dir.is_dir():
+                features_dir = Path(fold_root_dir, f"fold_{i}")
+                assert features_dir.is_dir()
 
         print(f"Loading data for fold {i+1}")
         train_df_path = Path(fold_dir, "train.csv")
@@ -193,6 +199,7 @@ def main(cfg: DictConfig):
         ).get_loss()
 
         model = ModelFactory(
+            cfg.architecture,
             cfg.level,
             cfg.num_classes,
             cfg.task,

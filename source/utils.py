@@ -16,6 +16,7 @@ import matplotlib.pyplot as plt
 
 from pathlib import Path
 from functools import partial
+from contextlib import nullcontext
 from collections import Counter
 from collections.abc import Callable
 from typing import Optional, List, Union
@@ -1797,6 +1798,7 @@ def train_survival(
     weighted_sampling: Optional[bool] = False,
     gradient_accumulation: Optional[int] = None,
     num_workers: int = 0,
+    use_fp16: bool = False,
 ):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -1833,70 +1835,75 @@ def train_survival(
 
     results = {}
 
-    with tqdm.tqdm(
-        loader,
-        desc=(f"Epoch {epoch} - Train"),
-        unit=" patient",
-        ncols=80,
-        unit_scale=batch_size,
-        leave=False,
-    ) as t:
-        for i, batch in enumerate(t):
-            if dataset.use_coords:
-                idx, x, coords, label, event_time, censored = batch
-                if agg_method == "concat":
-                    x, coords = x.to(device, non_blocking=True), coords.to(
-                        device, non_blocking=True
-                    )
-                elif agg_method == "self_att":
-                    x = [f.to(device, non_blocking=True) for f in x[0]]
-                    coords = [c.to(device, non_blocking=True) for c in coords[0]]
-            else:
-                idx, x, label, event_time, censored = batch
-                if agg_method == "self_att":
-                    x = [
-                        xx[j].to(device, non_blocking=True)
-                        for xx in x
-                        for j in range(len(xx))
-                    ]
+    autocast_context = nullcontext()
+    if use_fp16:
+        autocast_context = torch.autocast(device_type="cuda", dtype=torch.float16)
+
+    with autocast_context:
+        with tqdm.tqdm(
+            loader,
+            desc=(f"Epoch {epoch} - Train"),
+            unit=" patient",
+            ncols=80,
+            unit_scale=batch_size,
+            leave=False,
+        ) as t:
+            for i, batch in enumerate(t):
+                if dataset.use_coords:
+                    idx, x, coords, label, event_time, censored = batch
+                    if agg_method == "concat":
+                        x, coords = x.to(device, non_blocking=True), coords.to(
+                            device, non_blocking=True
+                        )
+                    elif agg_method == "self_att":
+                        x = [f.to(device, non_blocking=True) for f in x[0]]
+                        coords = [c.to(device, non_blocking=True) for c in coords[0]]
                 else:
-                    x = x.to(device, non_blocking=True)
-            label, censored = label.to(device, non_blocking=True), censored.to(
-                device, non_blocking=True
-            )
+                    idx, x, label, event_time, censored = batch
+                    if agg_method == "self_att":
+                        x = [
+                            xx[j].to(device, non_blocking=True)
+                            for xx in x
+                            for j in range(len(xx))
+                        ]
+                    else:
+                        x = x.to(device, non_blocking=True)
+                label, censored = label.to(device, non_blocking=True), censored.to(
+                    device, non_blocking=True
+                )
 
-            if dataset.use_coords:
-                logits = model(x, coords)  # [1, nbins]
-            else:
-                logits = model(x)  # [1, nbins]
+                if dataset.use_coords:
+                    logits = model(x, coords)  # [1, nbins]
+                else:
+                    logits = model(x)  # [1, nbins]
 
-            hazards = torch.sigmoid(logits)  # [1, nbins]
-            surv = torch.cumprod(1 - hazards, dim=1)  # [1, nbins]
+                hazards = torch.sigmoid(logits)  # [1, nbins]
+                surv = torch.cumprod(1 - hazards, dim=1)  # [1, nbins]
 
-            loss = criterion(hazards, surv, label, censored)
+                loss = criterion(hazards, surv, label, censored)
 
-            loss_value = loss.item()
-            epoch_loss += loss_value
+                loss_value = loss.item()
+                epoch_loss += loss_value
 
-            risk = -torch.sum(surv, dim=1).detach()  # [1]
-            risk_scores.append(risk.item())
-            censoring.append(censored.item())
-            event_times.append(event_time.item())
+                risk = -torch.sum(surv, dim=1).detach()  # [1]
+                risk_scores.append(risk.item())
+                censoring.append(censored.item())
+                event_times.append(event_time.item())
 
-            if gradient_accumulation:
-                loss = loss / gradient_accumulation
+                if gradient_accumulation:
+                    loss = loss / gradient_accumulation
 
-            loss.backward()
+                loss.backward()
 
-            if not gradient_accumulation:
-                optimizer.step()
-                optimizer.zero_grad()
-            elif (i + 1) % gradient_accumulation == 0:
-                optimizer.step()
-                optimizer.zero_grad()
+                if not gradient_accumulation:
+                    optimizer.step()
+                    optimizer.zero_grad()
+                elif (i + 1) % gradient_accumulation == 0:
+                    optimizer.step()
+                    optimizer.zero_grad()
 
-            labels.extend(label.clone().tolist())
-            idxs.extend(list(idx))
+                labels.extend(label.clone().tolist())
+                idxs.extend(list(idx))
 
     dataset.df.loc[idxs, "risk"] = risk_scores
 
@@ -1923,6 +1930,7 @@ def tune_survival(
     agg_method: Optional[str] = "concat",
     batch_size: Optional[int] = 1,
     num_workers: int = 0,
+    use_fp16: bool = False,
 ):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -1952,57 +1960,62 @@ def tune_survival(
 
     results = {}
 
-    with tqdm.tqdm(
-        loader,
-        desc=(f"Epoch {epoch} - Tune"),
-        unit=" patient",
-        ncols=80,
-        unit_scale=batch_size,
-        leave=False,
-    ) as t:
-        with torch.no_grad():
-            for i, batch in enumerate(t):
-                if dataset.use_coords:
-                    idx, x, coords, label, event_time, censored = batch
-                    if agg_method == "concat":
-                        x, coords = x.to(device, non_blocking=True), coords.to(
-                            device, non_blocking=True
-                        )
-                    elif agg_method == "self_att":
-                        x = [f.to(device, non_blocking=True) for f in x[0]]
-                        coords = [c.to(device, non_blocking=True) for c in coords[0]]
-                else:
-                    idx, x, label, event_time, censored = batch
-                    if agg_method == "self_att":
-                        x = [
-                            xx[j].to(device, non_blocking=True)
-                            for xx in x
-                            for j in range(len(xx))
-                        ]
+    autocast_context = nullcontext()
+    if use_fp16:
+        autocast_context = torch.autocast(device_type="cuda", dtype=torch.float16)
+
+    with autocast_context:
+        with tqdm.tqdm(
+            loader,
+            desc=(f"Epoch {epoch} - Tune"),
+            unit=" patient",
+            ncols=80,
+            unit_scale=batch_size,
+            leave=False,
+        ) as t:
+            with torch.no_grad():
+                for i, batch in enumerate(t):
+                    if dataset.use_coords:
+                        idx, x, coords, label, event_time, censored = batch
+                        if agg_method == "concat":
+                            x, coords = x.to(device, non_blocking=True), coords.to(
+                                device, non_blocking=True
+                            )
+                        elif agg_method == "self_att":
+                            x = [f.to(device, non_blocking=True) for f in x[0]]
+                            coords = [c.to(device, non_blocking=True) for c in coords[0]]
                     else:
-                        x = x.to(device, non_blocking=True)
-                label, censored = label.to(device, non_blocking=True), censored.to(
-                    device, non_blocking=True
-                )
+                        idx, x, label, event_time, censored = batch
+                        if agg_method == "self_att":
+                            x = [
+                                xx[j].to(device, non_blocking=True)
+                                for xx in x
+                                for j in range(len(xx))
+                            ]
+                        else:
+                            x = x.to(device, non_blocking=True)
+                    label, censored = label.to(device, non_blocking=True), censored.to(
+                        device, non_blocking=True
+                    )
 
-                if dataset.use_coords:
-                    logits = model(x, coords)
-                else:
-                    logits = model(x)
+                    if dataset.use_coords:
+                        logits = model(x, coords)
+                    else:
+                        logits = model(x)
 
-                hazards = torch.sigmoid(logits)
-                surv = torch.cumprod(1 - hazards, dim=1)
+                    hazards = torch.sigmoid(logits)
+                    surv = torch.cumprod(1 - hazards, dim=1)
 
-                loss = criterion(hazards, surv, label, censored, alpha=0)
-                epoch_loss += loss.item()
+                    loss = criterion(hazards, surv, label, censored, alpha=0)
+                    epoch_loss += loss.item()
 
-                risk = -torch.sum(surv, dim=1).detach()
-                risk_scores.append(risk.item())
-                censoring.append(censored.item())
-                event_times.append(event_time.item())
+                    risk = -torch.sum(surv, dim=1).detach()
+                    risk_scores.append(risk.item())
+                    censoring.append(censored.item())
+                    event_times.append(event_time.item())
 
-                labels.extend(label.clone().tolist())
-                idxs.extend(list(idx))
+                    labels.extend(label.clone().tolist())
+                    idxs.extend(list(idx))
 
     dataset.df.loc[idxs, "risk"] = risk_scores
 
@@ -2028,6 +2041,7 @@ def test_survival(
     agg_method: Optional[str] = "concat",
     batch_size: Optional[int] = 1,
     num_workers: int = 0,
+    use_fp16: bool = False,
 ):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -2056,51 +2070,56 @@ def test_survival(
 
     results = {}
 
-    with tqdm.tqdm(
-        loader,
-        desc=(f"Test"),
-        unit=" patient",
-        ncols=80,
-        unit_scale=batch_size,
-        leave=True,
-    ) as t:
-        with torch.no_grad():
-            for i, batch in enumerate(t):
-                if dataset.use_coords:
-                    idx, x, coords, _, event_time, censored = batch
-                    if agg_method == "concat":
-                        x, coords = x.to(device, non_blocking=True), coords.to(
-                            device, non_blocking=True
-                        )
-                    elif agg_method == "self_att":
-                        x = [f.to(device, non_blocking=True) for f in x[0]]
-                        coords = [c.to(device, non_blocking=True) for c in coords[0]]
-                else:
-                    idx, x, _, event_time, censored = batch
-                    if agg_method == "self_att":
-                        x = [
-                            xx[j].to(device, non_blocking=True)
-                            for xx in x
-                            for j in range(len(xx))
-                        ]
+    autocast_context = nullcontext()
+    if use_fp16:
+        autocast_context = torch.autocast(device_type="cuda", dtype=torch.float16)
+
+    with autocast_context:
+        with tqdm.tqdm(
+            loader,
+            desc=(f"Test"),
+            unit=" patient",
+            ncols=80,
+            unit_scale=batch_size,
+            leave=True,
+        ) as t:
+            with torch.no_grad():
+                for i, batch in enumerate(t):
+                    if dataset.use_coords:
+                        idx, x, coords, _, event_time, censored = batch
+                        if agg_method == "concat":
+                            x, coords = x.to(device, non_blocking=True), coords.to(
+                                device, non_blocking=True
+                            )
+                        elif agg_method == "self_att":
+                            x = [f.to(device, non_blocking=True) for f in x[0]]
+                            coords = [c.to(device, non_blocking=True) for c in coords[0]]
                     else:
-                        x = x.to(device, non_blocking=True)
-                censored = censored.to(device, non_blocking=True)
+                        idx, x, _, event_time, censored = batch
+                        if agg_method == "self_att":
+                            x = [
+                                xx[j].to(device, non_blocking=True)
+                                for xx in x
+                                for j in range(len(xx))
+                            ]
+                        else:
+                            x = x.to(device, non_blocking=True)
+                    censored = censored.to(device, non_blocking=True)
 
-                if dataset.use_coords:
-                    logits = model(x, coords)
-                else:
-                    logits = model(x)
+                    if dataset.use_coords:
+                        logits = model(x, coords)
+                    else:
+                        logits = model(x)
 
-                hazards = torch.sigmoid(logits)
-                surv = torch.cumprod(1 - hazards, dim=1)
+                    hazards = torch.sigmoid(logits)
+                    surv = torch.cumprod(1 - hazards, dim=1)
 
-                risk = -torch.sum(surv, dim=1).detach()
-                risk_scores.append(risk.item())
-                censoring.append(censored.item())
-                event_times.append(event_time.item())
+                    risk = -torch.sum(surv, dim=1).detach()
+                    risk_scores.append(risk.item())
+                    censoring.append(censored.item())
+                    event_times.append(event_time.item())
 
-                idxs.extend(list(idx))
+                    idxs.extend(list(idx))
 
     dataset.df.loc[idxs, "risk"] = risk_scores
 

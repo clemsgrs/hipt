@@ -14,6 +14,7 @@ tissue_pixel_value:
 slide_csv: # path to .csv file which contains a 'slide_path' column
 num_workers: 8
 
+architecture: 'hvit'
 level:
 
 region_dir: # path to folder containing HS2P output (extracted regions)

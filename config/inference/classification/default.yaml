@@ -7,6 +7,7 @@ output_dir: 'output/debug'
 experiment_name: 'inference'
 level: 'global'
 
+architecture: 'hvit'
 task: 'classification'
 loss: 'ce'
 

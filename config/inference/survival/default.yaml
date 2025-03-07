@@ -5,6 +5,7 @@ output_dir: 'output/debug'
 experiment_name: 'inference'
 level: 'global'
 
+architecture: 'hvit'
 task: 'survival'
 
 label_name: 'label'

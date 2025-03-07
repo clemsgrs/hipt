@@ -17,6 +17,7 @@ from source.utils import update_state_dict, get_device
 class ModelFactory:
     def __init__(
         self,
+        model_name: str,
         level: str,
         num_classes: int = 2,
         task: str = "classification",
@@ -25,81 +26,105 @@ class ModelFactory:
         model_options: Optional[DictConfig] = None,
     ):
         if task in ["classification", "survival"]:
-            if level == "global":
-                if model_options.agg_method == "self_att":
-                    if (
-                        model_options.slide_pos_embed.type == "2d"
-                        and model_options.slide_pos_embed.use
-                    ):
-                        self.model = GlobalPatientLevelCoordsHIPT(
-                            num_classes=num_classes,
-                            dropout=model_options.dropout,
-                            slide_pos_embed=model_options.slide_pos_embed,
-                        )
-                    else:
-                        self.model = GlobalPatientLevelHIPT(
-                            num_classes=num_classes,
-                            dropout=model_options.dropout,
-                            slide_pos_embed=model_options.slide_pos_embed,
-                        )
-                elif (
-                    model_options.agg_method == "concat" or not model_options.agg_method
-                ):
-                    if (
-                        model_options.slide_pos_embed.type == "2d"
-                        and model_options.slide_pos_embed.use
-                    ):
-                        self.model = GlobalCoordsHIPT(
-                            num_classes=num_classes,
-                            dropout=model_options.dropout,
-                            slide_pos_embed=model_options.slide_pos_embed,
-                        )
-                    elif label_encoding == "ordinal":
-                        if loss == "coral":
-                            self.model = GlobalCoralHIPT(
+            if model_name == "mlp":
+                assert level == "slide" or level == "case"
+                self.model = SurvivalMLP(
+                    model_options.embed_dim_slide,
+                    num_classes=num_classes,
+                )
+            elif model_name == "hvit":
+                if level == "global":
+                    if model_options.agg_method == "self_att":
+                        if (
+                            model_options.slide_pos_embed.type == "2d"
+                            and model_options.slide_pos_embed.use
+                        ):
+                            self.model = GlobalPatientLevelCoordsHIPT(
                                 num_classes=num_classes,
                                 dropout=model_options.dropout,
                                 slide_pos_embed=model_options.slide_pos_embed,
                             )
                         else:
-                            self.model = GlobalOrdinalHIPT(
+                            self.model = GlobalPatientLevelHIPT(
                                 num_classes=num_classes,
                                 dropout=model_options.dropout,
                                 slide_pos_embed=model_options.slide_pos_embed,
                             )
+                    elif (
+                        model_options.agg_method == "concat" or not model_options.agg_method
+                    ):
+                        if (
+                            model_options.slide_pos_embed.type == "2d"
+                            and model_options.slide_pos_embed.use
+                        ):
+                            self.model = GlobalCoordsHIPT(
+                                num_classes=num_classes,
+                                dropout=model_options.dropout,
+                                slide_pos_embed=model_options.slide_pos_embed,
+                            )
+                        elif label_encoding == "ordinal":
+                            if loss == "coral":
+                                self.model = GlobalCoralHIPT(
+                                    num_classes=num_classes,
+                                    dropout=model_options.dropout,
+                                    slide_pos_embed=model_options.slide_pos_embed,
+                                )
+                            else:
+                                self.model = GlobalOrdinalHIPT(
+                                    num_classes=num_classes,
+                                    dropout=model_options.dropout,
+                                    slide_pos_embed=model_options.slide_pos_embed,
+                                )
+                        else:
+                            self.model = GlobalHIPT(
+                                num_classes=num_classes,
+                                embed_dim_region=model_options.embed_dim_region,
+                                d_model=model_options.embed_dim_slide,
+                                dropout=model_options.dropout,
+                                slide_pos_embed=model_options.slide_pos_embed,
+                            )
                     else:
-                        self.model = GlobalHIPT(
+                        raise ValueError(
+                            f"cfg.model.agg_method ({model_options.agg_method}) not supported"
+                        )
+                elif level == "local":
+                    if label_encoding == "ordinal":
+                        if loss == "coral":
+                            self.model = LocalGlobalCoralHIPT(
+                                num_classes=num_classes,
+                                region_size=model_options.region_size,
+                                patch_size=model_options.patch_size,
+                                pretrain_vit_region=model_options.pretrain_vit_region,
+                                freeze_vit_region=model_options.freeze_vit_region,
+                                freeze_vit_region_pos_embed=model_options.freeze_vit_region_pos_embed,
+                                dropout=model_options.dropout,
+                                slide_pos_embed=model_options.slide_pos_embed,
+                                mask_attn_region=model_options.mask_attn_region,
+                                img_size_pretrained=model_options.img_size_pretrained,
+                                num_register_tokens_region=model_options.num_register_tokens_region,
+                            )
+                        else:
+                            self.model = LocalGlobalOrdinalHIPT(
+                                num_classes=num_classes,
+                                region_size=model_options.region_size,
+                                patch_size=model_options.patch_size,
+                                pretrain_vit_region=model_options.pretrain_vit_region,
+                                freeze_vit_region=model_options.freeze_vit_region,
+                                freeze_vit_region_pos_embed=model_options.freeze_vit_region_pos_embed,
+                                dropout=model_options.dropout,
+                                slide_pos_embed=model_options.slide_pos_embed,
+                                mask_attn_region=model_options.mask_attn_region,
+                                img_size_pretrained=model_options.img_size_pretrained,
+                                num_register_tokens_region=model_options.num_register_tokens_region,
+                            )
+                    else:
+                        self.model = LocalGlobalHIPT(
                             num_classes=num_classes,
+                            region_size=model_options.region_size,
+                            patch_size=model_options.patch_size,
+                            embed_dim_patch=model_options.embed_dim_patch,
                             embed_dim_region=model_options.embed_dim_region,
-                            d_model=model_options.embed_dim_slide,
-                            dropout=model_options.dropout,
-                            slide_pos_embed=model_options.slide_pos_embed,
-                        )
-                else:
-                    raise ValueError(
-                        f"cfg.model.agg_method ({model_options.agg_method}) not supported"
-                    )
-            elif level == "local":
-                if label_encoding == "ordinal":
-                    if loss == "coral":
-                        self.model = LocalGlobalCoralHIPT(
-                            num_classes=num_classes,
-                            region_size=model_options.region_size,
-                            patch_size=model_options.patch_size,
-                            pretrain_vit_region=model_options.pretrain_vit_region,
-                            freeze_vit_region=model_options.freeze_vit_region,
-                            freeze_vit_region_pos_embed=model_options.freeze_vit_region_pos_embed,
-                            dropout=model_options.dropout,
-                            slide_pos_embed=model_options.slide_pos_embed,
-                            mask_attn_region=model_options.mask_attn_region,
-                            img_size_pretrained=model_options.img_size_pretrained,
-                            num_register_tokens_region=model_options.num_register_tokens_region,
-                        )
-                    else:
-                        self.model = LocalGlobalOrdinalHIPT(
-                            num_classes=num_classes,
-                            region_size=model_options.region_size,
-                            patch_size=model_options.patch_size,
+                            embed_dim_slide=model_options.embed_dim_slide,
                             pretrain_vit_region=model_options.pretrain_vit_region,
                             freeze_vit_region=model_options.freeze_vit_region,
                             freeze_vit_region_pos_embed=model_options.freeze_vit_region_pos_embed,
@@ -110,39 +135,22 @@ class ModelFactory:
                             num_register_tokens_region=model_options.num_register_tokens_region,
                         )
                 else:
-                    self.model = LocalGlobalHIPT(
+                    self.model = HIPT(
                         num_classes=num_classes,
                         region_size=model_options.region_size,
                         patch_size=model_options.patch_size,
-                        embed_dim_patch=model_options.embed_dim_patch,
-                        embed_dim_region=model_options.embed_dim_region,
-                        embed_dim_slide=model_options.embed_dim_slide,
+                        mini_patch_size=model_options.mini_patch_size,
+                        pretrain_vit_patch=model_options.pretrain_vit_patch,
+                        freeze_vit_patch=model_options.freeze_vit_patch,
+                        freeze_vit_patch_pos_embed=model_options.freeze_vit_patch_pos_embed,
                         pretrain_vit_region=model_options.pretrain_vit_region,
                         freeze_vit_region=model_options.freeze_vit_region,
                         freeze_vit_region_pos_embed=model_options.freeze_vit_region_pos_embed,
                         dropout=model_options.dropout,
                         slide_pos_embed=model_options.slide_pos_embed,
-                        mask_attn_region=model_options.mask_attn_region,
+                        masked_attn=model_options.masked_attn,
                         img_size_pretrained=model_options.img_size_pretrained,
-                        num_register_tokens_region=model_options.num_register_tokens_region,
                     )
-            else:
-                self.model = HIPT(
-                    num_classes=num_classes,
-                    region_size=model_options.region_size,
-                    patch_size=model_options.patch_size,
-                    mini_patch_size=model_options.mini_patch_size,
-                    pretrain_vit_patch=model_options.pretrain_vit_patch,
-                    freeze_vit_patch=model_options.freeze_vit_patch,
-                    freeze_vit_patch_pos_embed=model_options.freeze_vit_patch_pos_embed,
-                    pretrain_vit_region=model_options.pretrain_vit_region,
-                    freeze_vit_region=model_options.freeze_vit_region,
-                    freeze_vit_region_pos_embed=model_options.freeze_vit_region_pos_embed,
-                    dropout=model_options.dropout,
-                    slide_pos_embed=model_options.slide_pos_embed,
-                    masked_attn=model_options.masked_attn,
-                    img_size_pretrained=model_options.img_size_pretrained,
-                )
         elif task == "regression":
             if level == "global":
                 if model_options.agg_method == "self_att":
@@ -1599,3 +1607,23 @@ class LocalFeatureExtractorFM(nn.Module):
         )  # [num_patches, 1024]
 
         return patch_feature
+
+
+class SurvivalMLP(nn.Module):
+    def __init__(self, input_dim, num_classes):
+        """
+        input_dim: dimension of input features (e.g., 768).
+        output_dim: number of discrete time bins.
+        """
+        super(SurvivalMLP, self).__init__()
+        self.classifier = nn.Sequential(
+            nn.Linear(input_dim, num_classes),
+        )
+
+    def relocate(self, gpu_id: int = -1):
+        device = get_device(gpu_id)
+        self.classifier = self.classifier.to(device)
+
+    def forward(self, x):
+        logits = self.classifier(x)
+        return logits

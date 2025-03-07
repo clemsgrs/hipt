@@ -28,6 +28,7 @@ label_name: 'label'
 label_mapping:
 label_encoding:
 
+architecture: 'hvit'
 task: 'classification'
 loss: 'ce'
 loss_options:

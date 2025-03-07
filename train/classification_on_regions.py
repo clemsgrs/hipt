@@ -67,7 +67,13 @@ def main(cfg: DictConfig):
     ).get_loss()
 
     model = ModelFactory(
-        cfg.level, cfg.num_classes, cfg.task, cfg.loss, cfg.label_encoding, cfg.model
+        cfg.architecture,
+        cfg.level,
+        cfg.num_classes,
+        cfg.task,
+        cfg.loss,
+        cfg.label_encoding,
+        cfg.model,
     ).get_model()
     model.relocate()
     print(model)
