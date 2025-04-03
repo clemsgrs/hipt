@@ -1,6 +1,8 @@
 output_dir: 'output/debug'
 experiment_name: 'attention_heatmaps'
 
+seed: 0
+
 patch_fp: # path to (256, 256) input patch
 # patch_fp: 'data/image_256.png'  # path to (256, 256) input patch
 region_fp:  # path to input region

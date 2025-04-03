@@ -4,7 +4,6 @@ import torch
 import hydra
 import random
 import datetime
-import subprocess
 import pandas as pd
 import multiprocessing as mp
 import matplotlib.pyplot as plt
@@ -13,11 +12,52 @@ from PIL import Image
 from pathlib import Path
 from functools import partial
 from omegaconf import DictConfig
-from typing import Optional, Union, Dict
+from typing import Optional, Union, Dict, Sequence
 from dataclasses import dataclass, field
 from sklearn.neighbors import NearestNeighbors
 
 from source.wsi import WholeSlideImage
+
+import torch
+import torchvision.transforms.functional as F
+
+from torchvision import transforms
+
+
+# Use timm's names
+IMAGENET_DEFAULT_MEAN = (0.485, 0.456, 0.406)
+IMAGENET_DEFAULT_STD = (0.229, 0.224, 0.225)
+
+
+def make_normalize_transform(
+    mean: Sequence[float] = IMAGENET_DEFAULT_MEAN,
+    std: Sequence[float] = IMAGENET_DEFAULT_STD,
+) -> transforms.Normalize:
+    return transforms.Normalize(mean=mean, std=std)
+
+
+class MaybeToTensor(transforms.ToTensor):
+    """
+    Convert a PIL Image or ndarray to tensor if it's not already one.
+    """
+
+    def __init__(self):
+        super().__init__()
+
+    def __call__(self, pic):
+        """
+        Args:
+            pic (PIL Image or numpy.ndarray): Image to be converted to tensor.
+
+        Returns:
+            Tensor: Converted image.
+        """
+        if isinstance(pic, torch.Tensor):
+            return pic
+        return F.to_tensor(pic)
+
+    def __repr__(self):
+        return f"{self.__class__.__name__}()"
 
 
 def add_random_noise(
