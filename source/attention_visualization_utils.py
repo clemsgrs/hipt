@@ -88,7 +88,7 @@ def get_patch_model(
 
 
 def get_region_model(
-    pretrained_weights: str,
+    state_dict,
     input_embed_dim: int,
     arch: str = "vit4k_xs",
     region_size: int = 4096,
@@ -98,7 +98,6 @@ def get_region_model(
     device: Optional[torch.device] = None,
     verbose: bool = True,
 ):
-    checkpoint_key = "teacher"
     if device is None:
         device = (
             torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
@@ -116,24 +115,13 @@ def get_region_model(
     region_model.eval()
     region_model.to(device)
 
-    if Path(pretrained_weights).is_file():
-        if verbose:
-            print("Loading pretrained weights for region-level Transformer...")
-        state_dict = torch.load(pretrained_weights, map_location="cpu")
-        if checkpoint_key is not None and checkpoint_key in state_dict:
-            if verbose:
-                print(f"Take key {checkpoint_key} in provided checkpoint dict")
-            state_dict = state_dict[checkpoint_key]
-        # remove `module.` prefix
-        state_dict = {k.replace("module.", ""): v for k, v in state_dict.items()}
-        # remove `backbone.` prefix induced by multicrop wrapper
-        state_dict = {k.replace("backbone.", ""): v for k, v in state_dict.items()}
-        state_dict = {k.replace("vit_region.", ""): v for k, v in state_dict.items()}        
-        state_dict, msg = update_state_dict(region_model.state_dict(), state_dict)
-        region_model.load_state_dict(state_dict, strict=True)
-        if verbose:
-            print(f"Pretrained weights found at {pretrained_weights}")
-            print(msg)
+    if verbose:
+        print("Loading weights for region-level Transformer...")
+    state_dict = {k.replace("vit_region.", ""): v for k, v in state_dict.items()}
+    state_dict, msg = update_state_dict(region_model.state_dict(), state_dict)
+    region_model.load_state_dict(state_dict, strict=True)
+    if verbose:
+        print(msg)
 
     return region_model
 
@@ -2483,7 +2471,6 @@ def get_slide_heatmaps_region_level(
     threshold: Optional[float] = None,
     highlight: Optional[float] = None,
     opacity: float = 0.3,
-    save_to_disk: bool = False,
     granular: bool = False,
     offset: int = 128,
     gaussian_smoothing: bool = False,
@@ -2518,7 +2505,6 @@ def get_slide_heatmaps_region_level(
     - highlight (float): filter out regions with attention scores lower than this value (set to None to disbale heatmap highlighting)
     - opacity (float): if highlight, set opacity for non-highlighted regions on stitched heatmap
     - region_fmt (str): file format used for extracted regions
-    - save_to_disk (bool): whether to save individual region heatmaps to disk
     - granular (bool): create additional offset regions to get more granular heatmaps
     - offset (int): if granular is True, uses this value to offset regions
     - restrict_to_tissue (bool): whether to restrict heatmaps to tissue content
@@ -2528,9 +2514,6 @@ def get_slide_heatmaps_region_level(
     """
     slide_id = slide_path.stem.replace(" ", "_")
     wsi_object = WholeSlideImage(slide_path, segmentation_mask_path, downsample=downsample)
-
-    patch_output_dir = Path(output_dir, "patch")
-    patch_output_dir.mkdir(exist_ok=True, parents=True)
 
     coordinates_file = coordinates_dir / f"{slide_id}.npy"
     coordinates_arr = np.load(coordinates_file)
@@ -2542,15 +2525,8 @@ def get_slide_heatmaps_region_level(
     resize_factor = coordinates_arr[0][4]
     region_size = int(region_size_resized / resize_factor)
 
-    region_output_dir = Path(output_dir, "region")
+    region_output_dir = Path(output_dir, "region", f"{region_size}")
     region_output_dir.mkdir(exist_ok=True, parents=True)
-
-    region_heatmaps, region_heatmaps_thresh, coords = (
-        defaultdict(list),
-        defaultdict(list),
-        defaultdict(list),
-    )
-    region_heatmaps_highlight = defaultdict(list)
 
     nhead_region = region_model.num_heads
     offset_ = offset
@@ -2735,7 +2711,7 @@ def get_slide_heatmaps_region_level(
                 offset_4 = (offset * 3) // downscale
 
             s = region_size // downscale
-            # given region is an RGB image, so the default filter for resizing is Resampling.BICUBIC
+            # given region is an RGB image, the default filter for resizing is Resampling.BICUBIC
             # which is fine as we're resizing the image here, not attention scores
             save_region = np.array(region.resize((s, s)))
 
@@ -2747,12 +2723,6 @@ def get_slide_heatmaps_region_level(
                 disable=not main_process,
             ) as t2:
                 for j in t2:
-                    region_hm_output_dir = Path(
-                        region_output_dir, f"{region_size}", f"head_{j}"
-                    )
-                    region_hm_output_dir.mkdir(exist_ok=True, parents=True)
-
-                    coords[j].append((x, y))
 
                     region_att_scores = normalize_region_scores(
                         region_att[j], size=(s,) * 2
@@ -2955,54 +2925,56 @@ def get_slide_heatmaps_region_level(
                         0,
                         save_region.copy(),
                     )
-                    region_heatmaps[j].append(region_hm)
 
-                    if save_to_disk:
-                        if restrict_to_tissue:
-                            seg_level, seg_spacing = wsi_object.seg_level, wsi_object.seg_spacing
-                            height, width = wsi_object.wsi.get_shape_from_spacing(seg_spacing)
-                            # need to scale coordinates from level 0 to seg_level
-                            spacing_level = wsi_object.get_best_level_for_spacing(spacing)
-                            downsample_factor = tuple(dv/ds for dv,ds in zip(wsi_object.level_downsamples[seg_level], wsi_object.level_downsamples[0]))
-                            x_downsampled = int(round(x * 1 / downsample_factor[0], 0))
-                            y_downsampled = int(round(y * 1 / downsample_factor[1], 0))
-                            # need to scale region from spacing level to seg_level
-                            downsample_factor = tuple(dv/ds for dv,ds in zip(wsi_object.level_downsamples[seg_level], wsi_object.level_downsamples[spacing_level]))
-                            w_downsampled = int(round(s * downscale * 1 / downsample_factor[0], 0))
-                            h_downsampled = int(round(s * downscale * 1 / downsample_factor[1], 0))
-                            tissue_mask = wsi_object.binary_mask[
-                                y_downsampled : min(y_downsampled + h_downsampled, width),
-                                x_downsampled : min(x_downsampled + w_downsampled, height),
-                            ]
-                            # take care of non tissue content
-                            tissue_mask_neg = (tissue_mask == 0).astype(int)
-                            tissue_mask_neg_scaled = (tissue_mask_neg * 255).astype(np.uint8)
-                            tissue_mask_neg_pil = Image.fromarray(tissue_mask_neg_scaled)
-                            tissue_mask_neg_pil_resized = tissue_mask_neg_pil.resize((s, s), resample=Image.NEAREST)
-                            tissue_mask_neg_resized = np.asarray(tissue_mask_neg_pil_resized)
-                            tissue_mask_neg_resized = (tissue_mask_neg_resized > 0).astype('uint8')
-                            tissue_mask_neg_resized = tissue_mask_neg_resized[..., np.newaxis]
-                            canvas = wsi_object.wsi.get_patch(x=x, y=y, width=s, height=s, spacing=spacing, center=False)
-                            canvas_masked = canvas * tissue_mask_neg_resized
-                            # take care of tissue content
-                            tissue_mask_pos = (tissue_mask > 0).astype(int)
-                            tissue_mask_pos_scaled = (tissue_mask_pos * 255).astype(np.uint8)
-                            tissue_mask_pos_pil = Image.fromarray(tissue_mask_pos_scaled)
-                            tissue_mask_pos_pil_resized = tissue_mask_pos_pil.resize((s, s), resample=Image.NEAREST)
-                            tissue_mask_pos_resized = np.asarray(tissue_mask_pos_pil_resized)
-                            tissue_mask_pos_resized = (tissue_mask_pos_resized > 0).astype('uint8')
-                            tissue_mask_pos_resized = tissue_mask_pos_resized[..., np.newaxis]
-                            region_hm_restricted = region_hm * tissue_mask_pos_resized
-                            # combine tissue and non-tissue content
-                            region_hm_combined = region_hm_restricted + canvas_masked
-                            img = Image.fromarray(region_hm_combined)
-                        else:
-                            img = Image.fromarray(region_hm)
-                        img.save(Path(region_hm_output_dir, f"{x}_{y}.png"))
+                    region_hm_output_dir = Path(
+                        region_output_dir, f"head_{j}"
+                    )
+                    region_hm_output_dir.mkdir(exist_ok=True, parents=True)
+                    if restrict_to_tissue:
+                        seg_level, seg_spacing = wsi_object.seg_level, wsi_object.seg_spacing
+                        height, width = wsi_object.wsi.get_shape_from_spacing(seg_spacing)
+                        # need to scale coordinates from level 0 to seg_level
+                        spacing_level = wsi_object.get_best_level_for_spacing(spacing)
+                        downsample_factor = tuple(dv/ds for dv,ds in zip(wsi_object.level_downsamples[seg_level], wsi_object.level_downsamples[0]))
+                        x_downsampled = int(round(x * 1 / downsample_factor[0], 0))
+                        y_downsampled = int(round(y * 1 / downsample_factor[1], 0))
+                        # need to scale region from spacing level to seg_level
+                        downsample_factor = tuple(dv/ds for dv,ds in zip(wsi_object.level_downsamples[seg_level], wsi_object.level_downsamples[spacing_level]))
+                        w_downsampled = int(round(s * downscale * 1 / downsample_factor[0], 0))
+                        h_downsampled = int(round(s * downscale * 1 / downsample_factor[1], 0))
+                        tissue_mask = wsi_object.binary_mask[
+                            y_downsampled : min(y_downsampled + h_downsampled, width),
+                            x_downsampled : min(x_downsampled + w_downsampled, height),
+                        ]
+                        # take care of non tissue content
+                        tissue_mask_neg = (tissue_mask == 0).astype(int)
+                        tissue_mask_neg_scaled = (tissue_mask_neg * 255).astype(np.uint8)
+                        tissue_mask_neg_pil = Image.fromarray(tissue_mask_neg_scaled)
+                        tissue_mask_neg_pil_resized = tissue_mask_neg_pil.resize((s, s), resample=Image.NEAREST)
+                        tissue_mask_neg_resized = np.asarray(tissue_mask_neg_pil_resized)
+                        tissue_mask_neg_resized = (tissue_mask_neg_resized > 0).astype('uint8')
+                        tissue_mask_neg_resized = tissue_mask_neg_resized[..., np.newaxis]
+                        canvas = wsi_object.wsi.get_patch(x=x, y=y, width=s, height=s, spacing=spacing, center=False)
+                        canvas_masked = canvas * tissue_mask_neg_resized
+                        # take care of tissue content
+                        tissue_mask_pos = (tissue_mask > 0).astype(int)
+                        tissue_mask_pos_scaled = (tissue_mask_pos * 255).astype(np.uint8)
+                        tissue_mask_pos_pil = Image.fromarray(tissue_mask_pos_scaled)
+                        tissue_mask_pos_pil_resized = tissue_mask_pos_pil.resize((s, s), resample=Image.NEAREST)
+                        tissue_mask_pos_resized = np.asarray(tissue_mask_pos_pil_resized)
+                        tissue_mask_pos_resized = (tissue_mask_pos_resized > 0).astype('uint8')
+                        tissue_mask_pos_resized = tissue_mask_pos_resized[..., np.newaxis]
+                        region_hm_restricted = region_hm * tissue_mask_pos_resized
+                        # combine tissue and non-tissue content
+                        region_hm_combined = region_hm_restricted + canvas_masked
+                        img = Image.fromarray(region_hm_combined)
+                    else:
+                        img = Image.fromarray(region_hm)
+                    img.save(Path(region_hm_output_dir, f"{x}_{y}.png"))
 
                     if threshold != None:
                         thresh_region_hm_output_dir = Path(
-                            region_output_dir, f"{region_size}", f"head_{j}_thresh"
+                            region_output_dir, "thresholded", f"head_{j}"
                         )
                         thresh_region_hm_output_dir.mkdir(exist_ok=True, parents=True)
 
@@ -3023,14 +2995,12 @@ def get_slide_heatmaps_region_level(
                         img_inverse = save_region.copy()
                         img_inverse[att_mask == 0.95] = 0
                         region_hm = region_hm + img_inverse
-                        region_heatmaps_thresh[j].append(region_hm)
-                        if save_to_disk:
-                            img = Image.fromarray(region_hm)
-                            img.save(Path(thresh_region_hm_output_dir, f"{x}_{y}.png"))
+                        img = Image.fromarray(region_hm)
+                        img.save(Path(thresh_region_hm_output_dir, f"{x}_{y}.png"))
 
                     if highlight != None:
                         highlight_region_hm_output_dir = Path(
-                            region_output_dir, f"{region_size}", f"head_{j}_highlight"
+                            region_output_dir, "highlighted", f"head_{j}"
                         )
                         highlight_region_hm_output_dir.mkdir(exist_ok=True, parents=True)
                         save_region = np.array(region.resize((s, s)))
@@ -3042,13 +3012,10 @@ def get_slide_heatmaps_region_level(
                         m_black = (highlighted_hm[:, :, 0:3] == [0,0,0]).all(2)
                         transparent_region = np.dstack((save_region, np.zeros((s,s), dtype=np.uint8)+int(255*opacity)))
                         highlighted_hm[m_black] = transparent_region[m_black]
-                        region_heatmaps_highlight[j].append(highlighted_hm)
-                        if save_to_disk:
-                            img = Image.fromarray(highlighted_hm, mode='RGBA')
-                            img.save(Path(highlight_region_hm_output_dir, f"{x}_{y}.png"))
+                        img = Image.fromarray(highlighted_hm, mode='RGBA')
+                        img.save(Path(highlight_region_hm_output_dir, f"{x}_{y}.png"))
 
-    return region_heatmaps, region_heatmaps_thresh, region_heatmaps_highlight, coords
-
+    return region_output_dir, nhead_region
 
 def get_slide_heatmaps_slide_level(
     slide_path: Path,
@@ -4064,32 +4031,27 @@ def get_slide_blended_heatmaps(
 
 def stitch_slide_heatmaps(
     slide_path: Path,
-    heatmaps: List[np.array],
-    coords: List[Tuple[(int, int)]],
+    heatmap_dir: Path,
     output_dir: Path,
-    fname: str,
+    num_head: int,
     spacing: float,
+    name: str = None,
     downsample: int = 32,
     downscale: int = 1,
-    save_to_disk: bool = False,
     highlight: bool = False,
     opacity: float = 0.3,
     cmap: matplotlib.colors.LinearSegmentedColormap = plt.get_cmap("coolwarm"),
     restrict_to_tissue: bool = False,
-    seg_params: Optional[Dict] = None,
-    segmentation_mask_path: Optional[str] = False,
-    tissue_pixel_value: int = 1,
 ):
     """
     Returns region-level heatmaps stitched together at the slide-level.
 
     Args:
-    - slide_path (Path): path to the WSI file
-    - heatmaps (List[np.array]): list of region-level heatmaps
-    - coords (List[Tuple[int,int]]): corresponding list of region's (x,y) coordinates in the slide
+    - slide_path (Path): path to the whole slide image
+    - heatmap_dir (Path): path to the directory containing heatmaps as .png files
     - output_dir (Path): output directory for saving heatmaps
-    - fname (str): file naming template
     - spacing (float): pixel spacing (in mpp) at which regions were extracted for that slide
+    - name (str): file naming template
     - downsample (int): uses this value to find the closest downsample level in the WSI for slide-level heatmap visualization
     - downscale (int): how much to downscale the output heatmap by (e.g. downscale=4 will resize 256x256 heatmaps to 64x64)
     - save_to_disk (bool): whether to save the stitched heatmap to disk
@@ -4098,13 +4060,7 @@ def stitch_slide_heatmaps(
     - restrict_to_tissue (bool): whether to restrict highlighted regions to tissue content only
     - seg_params (Optional[Dict]): hyperparameters for tissue segmentation
     """
-    slide_output_dir = Path(output_dir, "slide")
-    slide_output_dir.mkdir(exist_ok=True, parents=True)
-
-    wsi_object = WholeSlideImage(slide_path, segmentation_mask_path=segmentation_mask_path)
-
-    if restrict_to_tissue:
-        seg_level, seg_spacing = wsi_object.seg_level, wsi_object.seg_spacing
+    wsi_object = WholeSlideImage(slide_path)
 
     vis_level = wsi_object.get_best_level_for_downsample_custom(downsample)
     vis_spacing = wsi_object.get_level_spacing(vis_level)
@@ -4118,101 +4074,121 @@ def stitch_slide_heatmaps(
         canvas = np.dstack((canvas, np.zeros((width,height),dtype=np.uint8)+int(255*opacity)))
         canvas_ = np.copy(canvas)
 
-    for hm, (x, y) in zip(heatmaps, coords):
-        w, h, _ = hm.shape
-        # need to scale coordinates from level 0 to vis_level
-        spacing_level = wsi_object.get_best_level_for_spacing(spacing)
-        downsample_factor = tuple(dv/ds for dv,ds in zip(wsi_object.level_downsamples[vis_level], wsi_object.level_downsamples[0]))
-        x_downsampled = int(round(x * 1 / downsample_factor[0], 0))
-        y_downsampled = int(round(y * 1 / downsample_factor[1], 0))
-        # need to scale heatmap from spacing level to vis level
-        downsample_factor = tuple(dv/ds for dv,ds in zip(wsi_object.level_downsamples[vis_level], wsi_object.level_downsamples[spacing_level]))
-        w_downsampled = int(round(w * downscale * 1 / downsample_factor[0], 0))
-        h_downsampled = int(round(h * downscale * 1 / downsample_factor[1], 0))
-        # TODO: becarefull when resizing : we're dealing with a palette hence values should remain in palette range
-        # hm is a RGB array so the default filter for resizing is Image.BICUBIC
-        # which is NOT fine as we're dealing with a color palette
-        # instead, we should use Image.NEAREST (i guess?)
-        if highlight:
-            hm_downsampled = np.array(
-                Image.fromarray(hm, mode="RGBA").resize((w_downsampled, h_downsampled), resample=Image.NEAREST)
-            )
-        else:
-            hm_downsampled = np.array(
-                Image.fromarray(hm).resize((w_downsampled, h_downsampled), resample=Image.NEAREST)
-            )
+    with tqdm.tqdm(
+        range(num_head),
+        desc="Stitching heatmaps",
+        unit=" head",
+        leave=False,
+    ) as t1:
+        for i in t1:
+            head_dir = Path(heatmap_dir, f"head_{i}")
+            hms = [fp for fp in head_dir.glob("*.png")]
+            fname = f"region_head_{i}",
+            with tqdm.tqdm(
+                hms,
+                desc=f"Loading heatmap for head [{i+1}/{num_head}]",
+                unit=" heatmap",
+                leave=False,
+            ) as t2:
+                for fp in t2:
+                    x, y = int(fp.stem.split("_")[0]), int(fp.stem.split("_")[1])
+                    hm = np.array(Image.open(fp))
+                    w, h, _ = hm.shape
+                    # need to scale coordinates from level 0 to vis_level
+                    spacing_level = wsi_object.get_best_level_for_spacing(spacing)
+                    downsample_factor = tuple(dv/ds for dv,ds in zip(wsi_object.level_downsamples[vis_level], wsi_object.level_downsamples[0]))
+                    x_downsampled = int(round(x * 1 / downsample_factor[0], 0))
+                    y_downsampled = int(round(y * 1 / downsample_factor[1], 0))
+                    # need to scale heatmap from spacing level to vis level
+                    downsample_factor = tuple(dv/ds for dv,ds in zip(wsi_object.level_downsamples[vis_level], wsi_object.level_downsamples[spacing_level]))
+                    w_downsampled = int(round(w * downscale * 1 / downsample_factor[0], 0))
+                    h_downsampled = int(round(h * downscale * 1 / downsample_factor[1], 0))
+                    # TODO: becarefull when resizing : we're dealing with a palette hence values should remain in palette range
+                    # hm is a RGB array so the default filter for resizing is Image.BICUBIC
+                    # which is NOT fine as we're dealing with a color palette
+                    # instead, we should use Image.NEAREST (i guess?)
+                    if highlight:
+                        hm_downsampled = np.array(
+                            Image.fromarray(hm, mode="RGBA").resize((w_downsampled, h_downsampled), resample=Image.NEAREST)
+                        )
+                    else:
+                        hm_downsampled = np.array(
+                            Image.fromarray(hm).resize((w_downsampled, h_downsampled), resample=Image.NEAREST)
+                        )
 
-        canvas[
-            y_downsampled : min(y_downsampled + h_downsampled, width),
-            x_downsampled : min(x_downsampled + w_downsampled, height),
-        ] = hm_downsampled[
-            : min(h_downsampled, width - y_downsampled),
-            : min(w_downsampled, height - x_downsampled),
-        ]
+                    canvas[
+                        y_downsampled : min(y_downsampled + h_downsampled, width),
+                        x_downsampled : min(x_downsampled + w_downsampled, height),
+                    ] = hm_downsampled[
+                        : min(h_downsampled, width - y_downsampled),
+                        : min(w_downsampled, height - x_downsampled),
+                    ]
 
-        if restrict_to_tissue:
-            tissue_mask = wsi_object.binary_mask[
-                y_downsampled : min(y_downsampled + h_downsampled, width),
-                x_downsampled : min(x_downsampled + w_downsampled, height),
-            ]
-            tissue_mask = (tissue_mask > 0).astype(int)
-            tissue_mask = tissue_mask[..., np.newaxis]
-            canvas[
-                y_downsampled : min(y_downsampled + h_downsampled, width),
-                x_downsampled : min(x_downsampled + w_downsampled, height),
-            ] = canvas[
-                y_downsampled : min(y_downsampled + h_downsampled, width),
-                x_downsampled : min(x_downsampled + w_downsampled, height),
-            ] * tissue_mask
-            m_black = (canvas[:, :, 0:3] == [0,0,0]).all(2)
-            canvas[m_black] = canvas_[m_black]
-            stitched_hm = Image.fromarray(canvas)
+                    if restrict_to_tissue:
+                        tissue_mask = wsi_object.binary_mask[
+                            y_downsampled : min(y_downsampled + h_downsampled, width),
+                            x_downsampled : min(x_downsampled + w_downsampled, height),
+                        ]
+                        tissue_mask = (tissue_mask > 0).astype(int)
+                        tissue_mask = tissue_mask[..., np.newaxis]
+                        canvas[
+                            y_downsampled : min(y_downsampled + h_downsampled, width),
+                            x_downsampled : min(x_downsampled + w_downsampled, height),
+                        ] = canvas[
+                            y_downsampled : min(y_downsampled + h_downsampled, width),
+                            x_downsampled : min(x_downsampled + w_downsampled, height),
+                        ] * tissue_mask
+                        m_black = (canvas[:, :, 0:3] == [0,0,0]).all(2)
+                        canvas[m_black] = canvas_[m_black]
+                        stitched_hm = Image.fromarray(canvas)
 
-    if highlight:
-        m_black = (canvas[:, :, 0:3] == [0,0,0]).all(2)
-        canvas[m_black] = canvas_[m_black]
-        stitched_hm = Image.fromarray(canvas, mode='RGBA')
-    else:
-        stitched_hm = Image.fromarray(canvas)
+                    if highlight:
+                        m_black = (canvas[:, :, 0:3] == [0,0,0]).all(2)
+                        canvas[m_black] = canvas_[m_black]
+                        stitched_hm = Image.fromarray(canvas, mode='RGBA')
+                    else:
+                        stitched_hm = Image.fromarray(canvas)
 
-    if save_to_disk:
-        # add colorbar
-        sm = plt.cm.ScalarMappable(cmap=cmap)
-        fig, ax = plt.subplots(dpi=150)
-        plt.colorbar(sm, ax=ax)
-        ax.remove()
-        plt.yticks(fontsize='large')
-        plt.savefig('color_bar.png', bbox_inches='tight', dpi=150)
-        plt.close()
-        cbar = Image.open('color_bar.png')
-        os.remove('color_bar.png')
-        w_cbar, h_cbar = cbar.size
-        mode = stitched_hm.mode
-        w, h = stitched_hm.size
-        pad = 20
-        canvas = Image.new(
-            size=(w + 2 * pad + w_cbar, h), mode=mode, color=(255,) * len(mode)
-        )
-        x, y = w + pad, (h + 2 * pad - h_cbar) // 2
-        canvas.paste(stitched_hm, (0, 0))
-        canvas.paste(cbar, (x, y))
-        stitched_hm_path = Path(slide_output_dir, f"{fname}.png")
-        canvas.save(stitched_hm_path, dpi=(300, 300))
+                    slide_output_dir = Path(output_dir, "slide")
+                    slide_output_dir.mkdir(exist_ok=True, parents=True)
+                    # add colorbar
+                    sm = plt.cm.ScalarMappable(cmap=cmap)
+                    fig, ax = plt.subplots(dpi=150)
+                    plt.colorbar(sm, ax=ax)
+                    ax.remove()
+                    plt.yticks(fontsize='large')
+                    plt.savefig('color_bar.png', bbox_inches='tight', dpi=150)
+                    plt.close()
+                    cbar = Image.open('color_bar.png')
+                    os.remove('color_bar.png')
+                    w_cbar, h_cbar = cbar.size
+                    mode = stitched_hm.mode
+                    w, h = stitched_hm.size
+                    pad = 20
+                    canvas = Image.new(
+                        size=(w + 2 * pad + w_cbar, h), mode=mode, color=(255,) * len(mode)
+                    )
+                    x, y = w + pad, (h + 2 * pad - h_cbar) // 2
+                    canvas.paste(stitched_hm, (0, 0))
+                    canvas.paste(cbar, (x, y))
+                    if name:
+                        fname = f"{fname}_{name}"
+                    stitched_hm_path = Path(slide_output_dir, f"{fname}.png")
+                    canvas.save(stitched_hm_path, dpi=(300, 300))
 
-    return stitched_hm
+    return slide_output_dir
 
 
 def display_stitched_heatmaps(
     slide_path: Path,
-    heatmaps: Dict[str, Image.Image],
+    heatmap_dir: Path,
     output_dir: Path,
-    fname: str,
+    name: str,
     display_patching: bool = False,
     draw_grid: bool = True,
     cmap: matplotlib.colors.LinearSegmentedColormap = plt.get_cmap("coolwarm"),
     coordinates_dir: Optional[Path] = None,
     downsample: int = 32,
-    key: str = "coords",
     font_fp: Path = Path("arial.ttf"),
     run_id: Optional[str] = None,
 ):
@@ -4220,10 +4196,10 @@ def display_stitched_heatmaps(
     Display stitched heatmaps from multiple heads together, optionally alongside a visualization of patch extraction results.
 
     Args:
-    - slide_path (Path): path to the WSI file
-    - heatmaps (Dict[str, Image.Image]): dictionnary of stitched heatmaps, with the key being used at heatmap subfigure title
+    - slide_path (Path): path to the whole slide image
+    - heatmap_dir (Path): path to the directory containing heatmaps as .png files
     - output_dir (Path): output directory for saving heatmaps
-    - fname (str): file naming template
+    - name (str): file naming template
     - display_patching (bool): whether to display patch extraction results alongside stitched heatmaps
     - coordinates_dir (Optional[Path]): if display_patching is True, point to the root folder where extracted coordinates were saved
     - region_size (Optional[int]): if display_patching is True, indicates the size of the extracted regions
@@ -4233,6 +4209,10 @@ def display_stitched_heatmaps(
     """
     slide_id = slide_path.stem
 
+    heatmap_paths = list(heatmap_dir.glob(f"*.png"))
+    heatmaps = {
+        fp.stem: Image.open(fp) for i, fp in enumerate(heatmap_paths)
+    }
     w, h = next(iter(heatmaps.values())).size
 
     if display_patching:
@@ -4312,7 +4292,7 @@ def display_stitched_heatmaps(
     x, y = w * nhm + pad * (nhm + 1), (h + 2 * pad - h_cbar) // 2
     canvas.paste(cbar, (x, y))
 
-    stitched_hm_path = Path(output_dir, f"{fname}.png")
+    stitched_hm_path = Path(output_dir, f"{name}.png")
     canvas.save(stitched_hm_path, dpi=(300, 300))
 
 

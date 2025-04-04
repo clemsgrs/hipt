@@ -10,8 +10,8 @@ region_fp:  # path to input region
 
 slide_fp: # path to input slide
 segmentation_mask_fp:
-background_pixel_value:
-tissue_pixel_value:
+background_pixel_value: 0
+tissue_pixel_value: 1
 
 slide_csv: # path to .csv file which contains a 'slide_path' column
 num_workers: 8
