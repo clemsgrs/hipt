@@ -8,20 +8,19 @@ import pandas as pd
 import multiprocessing as mp
 import matplotlib.pyplot as plt
 
+import torchvision.transforms.functional as F
+
 from PIL import Image
 from pathlib import Path
+from einops import rearrange
 from functools import partial
 from omegaconf import DictConfig
+from torchvision import transforms
 from typing import Optional, Union, Dict, Sequence
 from dataclasses import dataclass, field
 from sklearn.neighbors import NearestNeighbors
 
 from source.wsi import WholeSlideImage
-
-import torch
-import torchvision.transforms.functional as F
-
-from torchvision import transforms
 
 
 # Use timm's names
@@ -58,6 +57,22 @@ class MaybeToTensor(transforms.ToTensor):
 
     def __repr__(self):
         return f"{self.__class__.__name__}()"
+
+
+class RegionUnfolding:
+    def __init__(self, tile_size):
+        self.tile_size = tile_size
+
+    def __call__(self, x):
+        # x = [3, region_size, region_size]
+        # unfold into tilees and rearrange
+        x = x.unfold(1, self.tile_size, self.tile_size).unfold(
+            2, self.tile_size, self.tile_size
+        )  # [3, ntile, region_size, tile_size] -> [3, ntile, ntile, tile_size, tile_size]
+        x = rearrange(
+            x, "c p1 p2 w h -> (p1 p2) c w h"
+        )  # [num_tilees, 3, tile_size, tile_size]
+        return x
 
 
 def add_random_noise(

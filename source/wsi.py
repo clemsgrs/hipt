@@ -129,26 +129,22 @@ class WholeSlideImage(object):
         return self.spacings[level]
 
     def get_best_level_for_spacing(
-        self, target_spacing: float, ignore_warning: bool = False
+        self, target_spacing: float, smaller_or_equal: bool = True
     ):
         spacing = self.get_level_spacing(0)
         target_downsample = target_spacing / spacing
-        level, tol, above_tol = self.get_best_level_for_downsample_custom(target_downsample)
-        level_spacing = self.get_level_spacing(level)
-        resize_factor = int(round(target_spacing / level_spacing, 0))
-        if above_tol and not ignore_warning:
-            print(
-                f"WARNING! The natural spacing ({resize_factor*self.spacings[level]:.4f}) closest to the target spacing ({target_spacing:.4f}) was more than {tol*100:.1f}% appart ({self.name})."
-            )
-        return level, resize_factor
+        level = self.get_best_level_for_downsample_custom(target_downsample)
+        if smaller_or_equal:
+            while level > 0 and self.get_level_spacing(level) > target_spacing:
+                level -= 1
+            assert (
+                self.get_level_spacing(level) <= target_spacing
+            ), f"Could not find a level with spacing smaller than or equal to {target_spacing}"
+        return level
 
-    def get_best_level_for_downsample_custom(
-        self, downsample, tol: float = 0.1,
-    ):
+    def get_best_level_for_downsample_custom(self, downsample):
         level = int(np.argmin([abs(x - downsample) for x, _ in self.level_downsamples]))
-        delta = abs(self.level_downsamples[level][0] / downsample - 1)
-        above_tol = delta > tol
-        return level, tol, above_tol
+        return level
 
     def load_segmentation(
         self,
@@ -164,7 +160,7 @@ class WholeSlideImage(object):
             len(common_spacings) >= 1
         ), f"The provided segmentation mask (spacings={self.mask.spacings}) has no common spacing with the slide (spacings={self.spacings}). A minimum of 1 common spacing is required."
 
-        seg_level, _, _ = self.get_best_level_for_downsample_custom(downsample)
+        seg_level = self.get_best_level_for_downsample_custom(downsample)
         seg_spacing = self.get_level_spacing(seg_level)
 
         # check if this spacing is present in common spacings
@@ -174,9 +170,7 @@ class WholeSlideImage(object):
             closest = np.argmin([abs(seg_spacing - s) for s, _ in common_spacings])
             closest_common_spacing = common_spacings[closest][0]
             seg_spacing = closest_common_spacing
-            seg_level, _ = self.get_best_level_for_spacing(
-                seg_spacing, ignore_warning=True
-            )
+            seg_level = self.get_best_level_for_spacing(seg_spacing)
 
         m = self.mask.get_slide(spacing=seg_spacing)
         m = m[..., 0]
@@ -201,7 +195,7 @@ class WholeSlideImage(object):
         Segment the tissue via HSV -> Median thresholding -> Binary threshold
         """
 
-        seg_level, _, _ = self.get_best_level_for_downsample_custom(downsample)
+        seg_level = self.get_best_level_for_downsample_custom(downsample)
         seg_spacing = self.get_level_spacing(seg_level)
 
         img = self.wsi.get_slide(spacing=seg_spacing)
@@ -302,9 +296,7 @@ class WholeSlideImage(object):
 
             return foreground_contours, hole_contours
 
-        spacing_level, resize_factor = self.get_best_level_for_spacing(
-            target_spacing, ignore_warning=True
-        )
+        spacing_level = self.get_best_level_for_spacing(target_spacing)
         current_scale = self.level_downsamples[spacing_level]
         target_scale = self.level_downsamples[self.seg_level]
         scale = tuple(a / b for a, b in zip(target_scale, current_scale))
@@ -420,9 +412,7 @@ class WholeSlideImage(object):
         num_workers: int = 1,
     ):
 
-        patch_level, resize_factor = self.get_best_level_for_spacing(
-            spacing, ignore_warning=True
-        )
+        patch_level = self.get_best_level_for_spacing(spacing)
 
         patch_spacing = self.get_level_spacing(patch_level)
         resize_factor = int(round(spacing / patch_spacing, 0))
