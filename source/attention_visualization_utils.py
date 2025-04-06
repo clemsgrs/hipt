@@ -842,14 +842,21 @@ def get_slide_attention_scores(
 
     slide_id = slide_path.stem.replace(" ", "_")
     coordinates_file = coordinates_dir / f"{slide_id}.npy"
-    assert coordinates_file.exists(), f"Coordinates {coordinates_file} does not exist."
     coordinates_arr = np.load(coordinates_file)
-    nregion = len(coordinates_arr)
-    coordinates = list(zip(coordinates_arr[:,0], coordinates_arr[:,1]))
-    region_size_resized = coordinates_arr[0][2]
-    region_level = coordinates_arr[0][3]
+    nregions = len(coordinates_arr)
+
+    try:
+        coordinates = list(zip(coordinates_arr[:,0], coordinates_arr[:,1]))
+        region_size_resized = coordinates_arr[0][2]
+        region_level = coordinates_arr[0][3]
+        resize_factor = coordinates_arr[0][4]
+    except Exception as e:
+        coordinates = list(zip(coordinates_arr["x"], coordinates_arr["y"]))
+        region_size_resized = coordinates_arr["tile_size_resized"][0]
+        region_level = coordinates_arr["tile_level"][0]
+        resize_factor = coordinates_arr["resize_factor"][0]
+
     region_spacing = wsi.spacings[region_level]
-    resize_factor = coordinates_arr[0][4]
     region_size = int(region_size_resized / resize_factor)
 
     if granular:
@@ -863,8 +870,8 @@ def get_slide_attention_scores(
         offset = offset // downscale
         s = region_size // downscale
 
-        slide_overlay = np.zeros((nregion,s,s))
-        combined_slide_attention = np.zeros((nregion,s,s))
+        slide_overlay = np.zeros((nregions,s,s))
+        combined_slide_attention = np.zeros((nregions,s,s))
 
         coords = []
         skip_count = 0
@@ -2222,11 +2229,19 @@ def get_slide_heatmaps_patch_level(
     coordinates_file = coordinates_dir / f"{slide_id}.npy"
     coordinates_arr = np.load(coordinates_file)
     nregions = len(coordinates_arr)
-    coordinates = list(zip(coordinates_arr[:,0], coordinates_arr[:,1]))
-    region_size_resized = coordinates_arr[0][2]
-    region_level = coordinates_arr[0][3]
+
+    try:
+        coordinates = list(zip(coordinates_arr[:,0], coordinates_arr[:,1]))
+        region_size_resized = coordinates_arr[0][2]
+        region_level = coordinates_arr[0][3]
+        resize_factor = coordinates_arr[0][4]
+    except Exception as e:
+        coordinates = list(zip(coordinates_arr["x"], coordinates_arr["y"]))
+        region_size_resized = coordinates_arr["tile_size_resized"][0]
+        region_level = coordinates_arr["tile_level"][0]
+        resize_factor = coordinates_arr["resize_factor"][0]
+
     region_spacing = wsi.spacings[region_level]
-    resize_factor = coordinates_arr[0][4]
     region_size = int(region_size_resized / resize_factor)
 
     nhead_patch = patch_model.num_heads
@@ -2490,11 +2505,19 @@ def get_slide_heatmaps_region_level(
     coordinates_file = coordinates_dir / f"{slide_id}.npy"
     coordinates_arr = np.load(coordinates_file)
     nregions = len(coordinates_arr)
-    coordinates = list(zip(coordinates_arr[:,0], coordinates_arr[:,1]))
-    region_size_resized = coordinates_arr[0][2]
-    region_level = coordinates_arr[0][3]
+
+    try:
+        coordinates = list(zip(coordinates_arr[:,0], coordinates_arr[:,1]))
+        region_size_resized = coordinates_arr[0][2]
+        region_level = coordinates_arr[0][3]
+        resize_factor = coordinates_arr[0][4]
+    except Exception as e:
+        coordinates = list(zip(coordinates_arr["x"], coordinates_arr["y"]))
+        region_size_resized = coordinates_arr["tile_size_resized"][0]
+        region_level = coordinates_arr["tile_level"][0]
+        resize_factor = coordinates_arr["resize_factor"][0]
+
     region_spacing = wsi_object.spacings[region_level]
-    resize_factor = coordinates_arr[0][4]
     region_size = int(region_size_resized / resize_factor)
 
     region_output_dir = Path(output_dir, "region", f"{region_size}")
@@ -2652,6 +2675,7 @@ def get_slide_heatmaps_region_level(
                     region2,
                     patch_model,
                     region_model,
+                    transforms=transforms,
                     patch_size=patch_size,
                     mini_patch_size=mini_patch_size,
                     downscale=downscale,
@@ -2665,6 +2689,7 @@ def get_slide_heatmaps_region_level(
                     region3,
                     patch_model,
                     region_model,
+                    transforms=transforms,
                     patch_size=patch_size,
                     mini_patch_size=mini_patch_size,
                     downscale=downscale,
@@ -2678,6 +2703,7 @@ def get_slide_heatmaps_region_level(
                     region4,
                     patch_model,
                     region_model,
+                    transforms=transforms,
                     patch_size=patch_size,
                     mini_patch_size=mini_patch_size,
                     downscale=downscale,
@@ -2839,6 +2865,7 @@ def get_slide_heatmaps_region_level(
                     region2,
                     patch_model,
                     region_model,
+                    transforms=transforms,
                     patch_size=patch_size,
                     mini_patch_size=mini_patch_size,
                     downscale=downscale,
@@ -2852,6 +2879,7 @@ def get_slide_heatmaps_region_level(
                     region3,
                     patch_model,
                     region_model,
+                    transforms=transforms,
                     patch_size=patch_size,
                     mini_patch_size=mini_patch_size,
                     downscale=downscale,
@@ -2865,6 +2893,7 @@ def get_slide_heatmaps_region_level(
                     region4,
                     patch_model,
                     region_model,
+                    transforms=transforms,
                     patch_size=patch_size,
                     mini_patch_size=mini_patch_size,
                     downscale=downscale,
@@ -3263,11 +3292,20 @@ def get_slide_heatmaps_slide_level(
 
     coordinates_file = coordinates_dir / f"{slide_id}.npy"
     coordinates_arr = np.load(coordinates_file)
-    coordinates = list(zip(coordinates_arr[:,0], coordinates_arr[:,1]))
-    region_size_resized = coordinates_arr[0][2]
-    region_level = coordinates_arr[0][3]
+    nregions = len(coordinates_arr)
+
+    try:
+        coordinates = list(zip(coordinates_arr[:,0], coordinates_arr[:,1]))
+        region_size_resized = coordinates_arr[0][2]
+        region_level = coordinates_arr[0][3]
+        resize_factor = coordinates_arr[0][4]
+    except Exception as e:
+        coordinates = list(zip(coordinates_arr["x"], coordinates_arr["y"]))
+        region_size_resized = coordinates_arr["tile_size_resized"][0]
+        region_level = coordinates_arr["tile_level"][0]
+        resize_factor = coordinates_arr["resize_factor"][0]
+
     region_spacing = wsi.spacings[region_level]
-    resize_factor = coordinates_arr[0][4]
     region_size = int(region_size_resized / resize_factor)
 
     slide_output_dir = Path(output_dir, "slide", f"{region_size}")
@@ -3463,11 +3501,19 @@ def get_slide_blended_heatmaps(
     coordinates_file = coordinates_dir / f"{slide_id}.npy"
     coordinates_arr = np.load(coordinates_file)
     nregions = len(coordinates_arr)
-    coordinates = list(zip(coordinates_arr[:,0], coordinates_arr[:,1]))
-    region_size_resized = coordinates_arr[0][2]
-    region_level = coordinates_arr[0][3]
+
+    try:
+        coordinates = list(zip(coordinates_arr[:,0], coordinates_arr[:,1]))
+        region_size_resized = coordinates_arr[0][2]
+        region_level = coordinates_arr[0][3]
+        resize_factor = coordinates_arr[0][4]
+    except Exception as e:
+        coordinates = list(zip(coordinates_arr["x"], coordinates_arr["y"]))
+        region_size_resized = coordinates_arr["tile_size_resized"][0]
+        region_level = coordinates_arr["tile_level"][0]
+        resize_factor = coordinates_arr["resize_factor"][0]
+
     region_spacing = wsi.spacings[region_level]
-    resize_factor = coordinates_arr[0][4]
     region_size = int(region_size_resized / resize_factor)
 
     blended_output_dir = Path(output_dir, "blended", f"{region_size}_{patch_size}")
@@ -4134,7 +4180,6 @@ def stitch_slide_heatmaps(
     suffix: str = None,
     downsample: int = 32,
     downscale: int = 1,
-    highlight: bool = False,
     opacity: float = 0.3,
     cmap: matplotlib.colors.LinearSegmentedColormap = plt.get_cmap("coolwarm"),
     segmentation_mask_path: Path = None,
@@ -4152,8 +4197,7 @@ def stitch_slide_heatmaps(
     - downsample (int): uses this value to find the closest downsample level in the WSI for slide-level heatmap visualization
     - downscale (int): how much to downscale the output heatmap by (e.g. downscale=4 will resize 256x256 heatmaps to 64x64)
     - save_to_disk (bool): whether to save the stitched heatmap to disk
-    - highlight (bool): whether input heatmaps results from highlighting
-    - opacity (float): if highlight, set opacity for non-highlighted regions on stitched heatmap
+    - opacity (float): set opacity for non-tissue content on stitched heatmap
     - restrict_to_tissue (bool): whether to restrict highlighted regions to tissue content only
     - seg_params (Optional[Dict]): hyperparameters for tissue segmentation
     """
@@ -4163,12 +4207,11 @@ def stitch_slide_heatmaps(
     vis_spacing = wsi_object.get_level_spacing(vis_level)
     wsi_canvas = wsi_object.wsi.get_slide(spacing=vis_spacing)
     # x and y axes get inverted when using get_slide methid
-    width, height = wsi_canvas.shape[0], wsi_canvas.shape[1]
+    width, height, _ = wsi_canvas.shape
+
+    # add an alpha channel, slightly transparent (255*alpha)
+    wsi_canvas = np.dstack((wsi_canvas, np.zeros((width,height),dtype=np.uint8)+int(255*opacity)))
     wsi_canvas_ = np.copy(wsi_canvas)
-    if highlight:
-        # add an alpha channel, slightly transparent (255*alpha)
-        wsi_canvas = np.dstack((wsi_canvas, np.zeros((width,height),dtype=np.uint8)+int(255*opacity)))
-        wsi_canvas_ = np.copy(wsi_canvas)
     
     slide_output_dir = Path(output_dir, "slide")
     slide_output_dir.mkdir(exist_ok=True, parents=True)
@@ -4194,12 +4237,12 @@ def stitch_slide_heatmaps(
                 hd = head_dirs[i]
                 head_name = hd.stem
                 hms = [fp for fp in hd.glob("*.png")]
-                fname = f"{name}_{head_name}"
+                fname = f"{name}-{head_name}"
             canvas = None
             with tqdm.tqdm(
                 hms,
                 desc=f"Stitching attention head [{i+1}/{num_heads}]",
-                unit=f"{name}",
+                unit="heatmap",
                 leave=False,
             ) as t2:
                 for fp in t2:
@@ -4215,18 +4258,15 @@ def stitch_slide_heatmaps(
                     downsample_factor = tuple(dv/ds for dv,ds in zip(wsi_object.level_downsamples[vis_level], wsi_object.level_downsamples[spacing_level]))
                     w_downsampled = int(round(w * downscale / downsample_factor[0], 0))
                     h_downsampled = int(round(h * downscale / downsample_factor[1], 0))
-                    # TODO: becarefull when resizing : we're dealing with a palette hence values should remain in palette range
+                    if hm.shape[-1] == 3:  # if heatmap has 3 channels (RGB), add an alpha channel
+                        hm = np.dstack((hm, np.full(hm.shape[:2], 255, dtype=np.uint8)))
+                    # we're dealing with a palette hence values should remain in palette range
                     # hm is a RGB array so the default filter for resizing is Image.BICUBIC
-                    # which is NOT fine as we're dealing with a color palette
-                    # instead, we should use Image.NEAREST (i guess?)
-                    if highlight:
-                        hm_downsampled = np.array(
-                            Image.fromarray(hm, mode="RGBA").resize((w_downsampled, h_downsampled), resample=Image.NEAREST)
-                        )
-                    else:
-                        hm_downsampled = np.array(
-                            Image.fromarray(hm).resize((w_downsampled, h_downsampled), resample=Image.NEAREST)
-                        )
+                    # which would not be appropriate, as we want to keep the palette values
+                    # instead, we should use Image.NEAREST
+                    hm_downsampled = np.array(
+                        Image.fromarray(hm, mode="RGBA").resize((w_downsampled, h_downsampled), resample=Image.NEAREST)
+                    )
 
                     wsi_canvas[
                         y_downsampled : min(y_downsampled + h_downsampled, width),
@@ -4250,17 +4290,22 @@ def stitch_slide_heatmaps(
                             y_downsampled : min(y_downsampled + h_downsampled, width),
                             x_downsampled : min(x_downsampled + w_downsampled, height),
                         ] * tissue_mask
+                        # make background slightly transparent
+                        background_mask = (1 - tissue_mask).astype(np.uint8)
+                        wsi_canvas[
+                            y_downsampled : min(y_downsampled + h_downsampled, width),
+                            x_downsampled : min(x_downsampled + w_downsampled, height),
+                            3,
+                        ] *= (1 - background_mask[..., 0])
+                        wsi_canvas[
+                            y_downsampled : min(y_downsampled + h_downsampled, width),
+                            x_downsampled : min(x_downsampled + w_downsampled, height),
+                            3,
+                        ][background_mask[..., 0] == 1] = int(255 * opacity)
                         m_black = (wsi_canvas[:, :, 0:3] == [0,0,0]).all(2)
                         wsi_canvas[m_black] = wsi_canvas_[m_black]
-            
-            stitched_hm = Image.fromarray(wsi_canvas)
 
-            if highlight:
-                m_black = (wsi_canvas[:, :, 0:3] == [0,0,0]).all(2)
-                wsi_canvas[m_black] = wsi_canvas_[m_black]
-                stitched_hm = Image.fromarray(wsi_canvas, mode='RGBA')
-            else:
-                stitched_hm = Image.fromarray(wsi_canvas)
+            stitched_hm = Image.fromarray(wsi_canvas, mode='RGBA')
 
             # add colorbar
             sm = plt.cm.ScalarMappable(cmap=cmap)
@@ -4285,7 +4330,7 @@ def stitch_slide_heatmaps(
             canvas.paste(cbar, (x, y))
 
             if suffix:
-                fname = f"{fname}_{suffix}"
+                fname = f"{fname}-{suffix}"
             stitched_hm_path = Path(slide_output_dir, f"{fname}.png")
             canvas.save(stitched_hm_path, dpi=(300, 300))
 
@@ -4330,12 +4375,20 @@ def display_stitched_heatmaps(
 
     if display_patching:
 
-        coordinates_file = Path(coordinates_dir, f"{slide_id}.npy")
+        coordinates_file = coordinates_dir / f"{slide_id}.npy"
         coordinates_arr = np.load(coordinates_file)
-        coordinates = list(zip(coordinates_arr[:,0], coordinates_arr[:,1]))
-        region_size_resized = coordinates_arr[0][2]
-        region_level = coordinates_arr[0][3]
-        resize_factor = coordinates_arr[0][4]
+
+        try:
+            coordinates = list(zip(coordinates_arr[:,0], coordinates_arr[:,1]))
+            region_size_resized = coordinates_arr[0][2]
+            region_level = coordinates_arr[0][3]
+            resize_factor = coordinates_arr[0][4]
+        except Exception as e:
+            coordinates = list(zip(coordinates_arr["x"], coordinates_arr["y"]))
+            region_size_resized = coordinates_arr["tile_size_resized"][0]
+            region_level = coordinates_arr["tile_level"][0]
+            resize_factor = coordinates_arr["resize_factor"][0]
+
         region_size = int(region_size_resized / resize_factor)
 
         wsi_object = WholeSlideImage(slide_path)

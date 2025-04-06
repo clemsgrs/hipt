@@ -88,7 +88,8 @@ def main(cfg: DictConfig):
     # create transforms
     transforms = create_transforms(encoder, cfg.level)
     if distributed.is_main_process():
-        print(f"Encoder transforms: {transforms}")
+        print("Encoder transforms:")
+        print(transforms)
         print("=+="*10)
 
     if distributed.is_main_process():
@@ -784,10 +785,8 @@ def main(cfg: DictConfig):
 
         with tqdm.tqdm(
             loader,
-            desc="Attention Heatmap Generation",
-            unit=" slide",
-            ncols=80,
-            position=0,
+            desc="Attention heatmap generation",
+            unit="slide",
             leave=True,
             disable=not distributed.is_main_process(),
         ) as t1:
@@ -859,6 +858,8 @@ def main(cfg: DictConfig):
                 #     downscale=cfg.downscale,
                 #     cmap=custom_cmap,
                 #     restrict_to_tissue=cfg.restrict_to_tissue,
+                #     segmentation_mask_path=seg_mask_path,
+                #     opacity=cfg.opacity,
                 # )
 
                 # heatmap_dir_thresh = heatmap_dir / "thresholded"
@@ -874,6 +875,8 @@ def main(cfg: DictConfig):
                 #         downscale=cfg.downscale,
                 #         cmap=custom_cmap,
                 #         restrict_to_tissue=cfg.restrict_to_tissue,
+                #         segmentation_mask_path=seg_mask_path,
+                #         opacity=cfg.opacity,
                 #     )
 
                 # heatmap_dir_highlight = heatmap_dir / "highlighted"
@@ -891,6 +894,7 @@ def main(cfg: DictConfig):
                 #         highlight=(cfg.highlight != None),
                 #         opacity=cfg.opacity,
                 #         restrict_to_tissue=cfg.restrict_to_tissue,
+                #         segmentation_mask_path=seg_mask_path,
                 #     )
 
                 # if cfg.display:
@@ -978,6 +982,7 @@ def main(cfg: DictConfig):
                     cmap=custom_cmap,
                     segmentation_mask_path=seg_mask_path,
                     restrict_to_tissue=cfg.restrict_to_tissue,
+                    opacity=cfg.opacity,
                 )
 
                 heatmap_dir_thresh = heatmap_dir / "thresholded"
@@ -994,6 +999,7 @@ def main(cfg: DictConfig):
                         cmap=custom_cmap,
                         segmentation_mask_path=seg_mask_path,
                         restrict_to_tissue=cfg.restrict_to_tissue,
+                        opacity=cfg.opacity,
                     )
 
                 heatmap_dir_highlight = heatmap_dir / "highlighted"
@@ -1098,6 +1104,7 @@ def main(cfg: DictConfig):
                     cmap=custom_cmap,
                     segmentation_mask_path=seg_mask_path,
                     restrict_to_tissue=cfg.restrict_to_tissue,
+                    opacity=cfg.opacity,
                 )
 
                 heatmap_dir_thresh = heatmap_dir / "thresholded"
@@ -1114,6 +1121,7 @@ def main(cfg: DictConfig):
                         cmap=custom_cmap,
                         segmentation_mask_path=seg_mask_path,
                         restrict_to_tissue=cfg.restrict_to_tissue,
+                        opacity=cfg.opacity,
                     )
 
                 heatmap_dir_highlight = heatmap_dir / "highlighted"
@@ -1197,6 +1205,7 @@ def main(cfg: DictConfig):
                     cmap=custom_cmap,
                     segmentation_mask_path=seg_mask_path,
                     restrict_to_tissue=cfg.restrict_to_tissue,
+                    opacity=cfg.opacity,
                 )
 
                 heatmap_dir_thresh = heatmap_dir / "thresholded"
@@ -1213,6 +1222,7 @@ def main(cfg: DictConfig):
                         cmap=custom_cmap,
                         segmentation_mask_path=seg_mask_path,
                         restrict_to_tissue=cfg.restrict_to_tissue,
+                        opacity=cfg.opacity,
                     )
 
                 heatmap_dir_highlight = heatmap_dir / "highlighted"
