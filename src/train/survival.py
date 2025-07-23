@@ -93,6 +93,7 @@ def main(args):
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+    print("Initializing model")
     model = ModelFactory(
         name=cfg.model.name,
         num_classes=cfg.num_classes,
@@ -101,6 +102,7 @@ def main(args):
     model.to(device)
     print(model)
 
+    print("Configuring optimizer & scheduler")
     model_params = filter(lambda p: p.requires_grad, model.parameters())
     optimizer = OptimizerFactory(
         cfg.optim.name, model_params, lr=cfg.optim.lr, weight_decay=cfg.optim.wd
@@ -119,6 +121,7 @@ def main(args):
     stop = False
     start_time = time.time()
 
+    print()
     with tqdm.tqdm(
         range(cfg.training.nepochs),
         desc=("Training"),
@@ -140,6 +143,7 @@ def main(args):
                 train_dataset,
                 optimizer,
                 criterion,
+                metric_names=cfg.metrics,
                 batch_size=cfg.training.batch_size,
                 gradient_accumulation=cfg.training.gradient_accumulation,
                 num_workers=num_workers,
@@ -159,6 +163,7 @@ def main(args):
                     model,
                     tune_dataset,
                     criterion,
+                    metric_names=cfg.metrics,
                     batch_size=cfg.tuning.batch_size,
                     num_workers=num_workers,
                     device=device,
@@ -209,6 +214,7 @@ def main(args):
     best_tune_results = inference(
         model,
         tune_dataset,
+        metric_names=cfg.metrics,
         batch_size=1,
         num_workers=num_workers,
         device=device,
@@ -230,6 +236,7 @@ def main(args):
         test_results = inference(
             model,
             test_dataset,
+            metric_names=cfg.metrics,
             batch_size=1,
             num_workers=num_workers,
             device=device,

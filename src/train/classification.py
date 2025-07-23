@@ -93,6 +93,7 @@ def main(args):
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+    print("Initializing model")
     model = ModelFactory(
         name=cfg.model.name,
         num_classes=cfg.num_classes,
@@ -101,6 +102,7 @@ def main(args):
     model.to(device)
     print(model)
 
+    print("Configuring optimizer & scheduler")
     model_params = filter(lambda p: p.requires_grad, model.parameters())
     optimizer = OptimizerFactory(
         cfg.optim.name, model_params, lr=cfg.optim.lr, weight_decay=cfg.optim.wd
@@ -119,6 +121,7 @@ def main(args):
     stop = False
     start_time = time.time()
 
+    print()
     with tqdm.tqdm(
         range(cfg.training.nepochs),
         desc=("Training"),

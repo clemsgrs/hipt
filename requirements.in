@@ -1,0 +1,16 @@
+numpy<2
+pandas
+pillow
+gdown
+einops
+matplotlib
+torch==1.13.1
+torchvision==0.14.1
+scikit-learn
+scikit-survival
+tqdm
+wholeslidedata<0.0.16
+opencv-python
+timm
+omegaconf
+wandb

@@ -21,19 +21,18 @@ model:
   name: "hipt" # model name ("hipt", "lp" or "mlp")
   level: "local" # hipt model level ("global" or "local")
   batch_size: 1
-  embed_dim: ${features_dim}
   hidden_dim: 256
   num_layers: 3 # number of layers for "mlp" model
   dropout: 0.0
   region_size: 4096
   patch_size: 256
-  embed_dim_patch: 384
+  embed_dim_patch: ${features_dim}
   embed_dim_region: 192
   embed_dim_slide: 192
-  pretrain_weights: 'checkpoints/vit_4096_xs_dino.pth'
+  pretrained_weights: 'checkpoints/vit_4096_xs_dino.pth'
   img_size_pretrained:
-  mask_attn_region: False
-  num_register_tokens_region: 0
+  mask_attn: False
+  num_register_tokens: 0
 
 training:
   nepochs: 100

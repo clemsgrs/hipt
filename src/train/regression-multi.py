@@ -58,6 +58,7 @@ def main(args):
     fold_root_dir = Path(cfg.data.fold_dir)
     nfold = len([_ for _ in fold_root_dir.glob("fold*")])
     print(f"Training on {nfold} folds")
+    print()
 
     tune_metrics = defaultdict(dict)
     test_metrics = defaultdict(dict)
@@ -66,7 +67,7 @@ def main(args):
     for i in range(nfold):
         fold_dir = Path(fold_root_dir, f"fold-{i}")
         if not fold_dir.is_dir():
-            Path(fold_root_dir, f"fold_{i}")
+            fold_dir = Path(fold_root_dir, f"fold_{i}")
             assert fold_dir.is_dir()
         checkpoint_dir = Path(checkpoint_root_dir, f"fold-{i}")
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
@@ -121,6 +122,7 @@ def main(args):
 
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+        print("Initializing model")
         model = ModelFactory(
             name=cfg.model.name,
             num_classes=1,
@@ -129,6 +131,7 @@ def main(args):
         model.to(device)
         print(model)
 
+        print("Configuring optimizer & scheduler")
         model_params = filter(lambda p: p.requires_grad, model.parameters())
         optimizer = OptimizerFactory(
             cfg.optim.name, model_params, lr=cfg.optim.lr, weight_decay=cfg.optim.wd
@@ -150,6 +153,7 @@ def main(args):
         if cfg.wandb.enable:
             wandb.define_metric(f"train/fold_{i}/epoch", summary="max")
 
+        print()
         with tqdm.tqdm(
             range(cfg.training.nepochs),
             desc=("Training"),

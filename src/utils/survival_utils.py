@@ -4,8 +4,8 @@ import torch.nn as nn
 
 from functools import partial
 from collections.abc import Callable
-from sksurv.metrics import concordance_index_censored
 
+from src.utils.metrics import get_metrics
 from src.utils.train_utils import collate_features_survival
 
 
@@ -15,6 +15,7 @@ def train(
     dataset: torch.utils.data.Dataset,
     optimizer: torch.optim.Optimizer,
     criterion: Callable,
+    metric_names: list[str],
     batch_size: int = 1,
     collate_fn: Callable = partial(collate_features_survival, label_type="int"),
     gradient_accumulation: int | None = None,
@@ -85,14 +86,15 @@ def train(
     assert len(idxs) == len(set(idxs)), "idxs must be unique"
     dataset.df.loc[idxs, "risk"] = risk_scores
 
-    c_index = concordance_index_censored(
-        [bool(1 - c) for c in censoring],
-        event_times,
+    event_indicator = [bool(1 - c) for c in censoring]
+    metrics = get_metrics(
+        metric_names,
         risk_scores,
-        tied_tol=1e-08,
-    )[0]
+        event_times,
+        event_indicator=event_indicator,
+    )
 
-    results["c-index"] = c_index
+    results.update(metrics)
 
     train_loss = epoch_loss / len(loader)
     results["loss"] = train_loss
@@ -105,6 +107,7 @@ def tune(
     model: nn.Module,
     dataset: torch.utils.data.Dataset,
     criterion: Callable,
+    metric_names: list[str],
     batch_size: int = 1,
     collate_fn: Callable = partial(collate_features_survival, label_type="int"),
     num_workers: int = 0,
@@ -161,14 +164,15 @@ def tune(
     assert len(idxs) == len(set(idxs)), "idxs must be unique"
     dataset.df.loc[idxs, "risk"] = risk_scores
 
-    c_index = concordance_index_censored(
-        [bool(1 - c) for c in censoring],
-        event_times,
+    event_indicator = [bool(1 - c) for c in censoring]
+    metrics = get_metrics(
+        metric_names,
         risk_scores,
-        tied_tol=1e-08,
-    )[0]
+        event_times,
+        event_indicator=event_indicator,
+    )
 
-    results["c-index"] = c_index
+    results.update(metrics)
 
     tune_loss = epoch_loss / len(loader)
     results["loss"] = tune_loss
@@ -179,6 +183,7 @@ def tune(
 def inference(
     model: nn.Module,
     dataset: torch.utils.data.Dataset,
+    metric_names: list[str],
     batch_size: int = 1,
     collate_fn: Callable = partial(collate_features_survival, label_type="int"),
     num_workers: int = 0,
@@ -212,7 +217,6 @@ def inference(
             for batch in t:
                 idx, x, _, event_time, censored = batch
                 x = x.to(device, non_blocking=True)
-                label = label.to(device, non_blocking=True)
                 censored = censored.to(device, non_blocking=True)
 
                 logits = model(x)
@@ -230,13 +234,14 @@ def inference(
     assert len(idxs) == len(set(idxs)), "idxs must be unique"
     dataset.df.loc[idxs, "risk"] = risk_scores
 
-    c_index = concordance_index_censored(
-        [bool(1 - c) for c in censoring],
-        event_times,
+    event_indicator = [bool(1 - c) for c in censoring]
+    metrics = get_metrics(
+        metric_names,
         risk_scores,
-        tied_tol=1e-08,
-    )[0]
+        event_times,
+        event_indicator=event_indicator,
+    )
 
-    results["c-index"] = c_index
+    results.update(metrics)
 
     return results

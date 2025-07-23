@@ -1,14 +1,14 @@
+import datetime
 import logging
 import os
-import datetime
-
 from pathlib import Path
+
 from omegaconf import OmegaConf
 
-from src.utils import initialize_wandb, fix_random_seeds, get_sha, setup_logging
 from src.configs import default_config
+from src.utils import fix_random_seeds, get_sha, initialize_wandb, setup_logging
 
-logger = logging.getLogger("ab-mil")
+logger = logging.getLogger("hipt")
 
 
 def write_config(cfg, output_dir, name="config.yaml"):
