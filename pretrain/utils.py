@@ -1,24 +1,25 @@
-import os
-import sys
-import math
-import tqdm
-import time
-import torch
-import torch.nn as nn
-import random
 import datetime
-import numpy as np
-import torch.distributed as dist
-
-from pathlib import Path
-from torchvision import transforms
+import math
+import os
+import random
+import sys
+import time
 from collections import defaultdict, deque
-from PIL import ImageFilter, ImageOps
-from typing import Optional
+from pathlib import Path
+from typing import Optional, Sequence
 
+import numpy as np
+import torch
+import torch.distributed as dist
+import torch.nn as nn
+import tqdm
+from eval_knn import extract_multiple_features, knn_classifier
+from PIL import ImageFilter, ImageOps
+from torchvision import transforms
+
+import source.distributed as distributed
 import source.vision_transformer as vits
 from source.utils import update_state_dict
-from eval_knn import extract_multiple_features, knn_classifier
 
 
 def hydra_argv_remapper(argv_map):
@@ -272,30 +273,6 @@ def make_classification_eval_transform(
     return transforms.Compose(transforms_list)
 
 
-def is_dist_avail_and_initialized():
-    if not dist.is_available():
-        return False
-    if not dist.is_initialized():
-        return False
-    return True
-
-
-def get_world_size():
-    if not is_dist_avail_and_initialized():
-        return 1
-    return dist.get_world_size()
-
-
-def get_rank():
-    if not is_dist_avail_and_initialized():
-        return 0
-    return dist.get_rank()
-
-
-def is_main_process():
-    return get_rank() == 0
-
-
 class SmoothedValue(object):
     """
     Track a series of values and provide access to smoothed values over a
@@ -319,7 +296,7 @@ class SmoothedValue(object):
         """
         Warning: does not synchronize the deque!
         """
-        if not is_dist_avail_and_initialized():
+        if not distributed.is_enabled():
             return
         if gpu_id == -1:
             main_device = "cuda"
@@ -639,7 +616,7 @@ def start_from_checkpoint(ckpt_path, model):
     checkpoint = torch.load(ckpt_path, map_location="cpu")
     state_dict = checkpoint["teacher"]
     state_dict, msg = update_state_dict(model.state_dict(), state_dict)
-    model.load_state_dict(state_dict, strict=False)
+    model.load_state_dict(state_dict, strict=True)
     print(msg)
 
 
@@ -664,7 +641,7 @@ def resume_from_checkpoint(ckpt_path, verbose: bool = True, **kwargs):
             try:
                 sd = checkpoint[key]
                 nn.modules.utils.consume_prefix_in_state_dict_if_present(sd, "module.")
-                msg = value.load_state_dict(sd, strict=False)
+                msg = value.load_state_dict(sd, strict=True)
                 if verbose:
                     print(
                         f"=> loaded '{key}' from checkpoint: '{ckpt_path}' with msg {msg}"
@@ -759,15 +736,6 @@ def init_distributed_mode(cfg):
     torch.cuda.device(cfg.gpu)
     dist.barrier()
     setup_for_distributed(cfg.rank == 0)
-
-
-def fix_random_seeds(seed=31):
-    """
-    Fix random seeds.
-    """
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
-    np.random.seed(seed)
 
 
 def train_one_epoch(
@@ -876,12 +844,9 @@ def load_weights(model, state_dict):
     nn.modules.utils.consume_prefix_in_state_dict_if_present(state_dict, "module.")
     # remove `backbone.` prefix induced by multicrop wrapper
     nn.modules.utils.consume_prefix_in_state_dict_if_present(state_dict, "backbone.")
-    # state_dict, msg = update_state_dict(model.state_dict(), state_dict)
-    msg = model.load_state_dict(state_dict, strict=False)
-    if len(msg.missing_keys) > 0:
-        tqdm.tqdm.write(str(msg))
-    else:
-        tqdm.tqdm.write("All keys matched successfully")
+    state_dict, msg = update_state_dict(model.state_dict(), state_dict)
+    model.load_state_dict(state_dict, strict=True)
+    tqdm.tqdm.write(msg)
 
 
 def tune_one_epoch(
@@ -935,7 +900,7 @@ def tune_one_epoch(
     )
 
     # save features and labels
-    if save_features and is_main_process():
+    if save_features and distributed.is_main_process():
         for name, feats in train_features.items():
             torch.save(feats.cpu(), Path(features_dir, f"{name}_train_feat.pth"))
         for name, feats in train_features.items():
@@ -944,7 +909,7 @@ def tune_one_epoch(
         torch.save(test_labels.cpu(), Path(features_dir, "test_labels.pth"))
 
     results = defaultdict(dict)
-    if is_main_process():
+    if distributed.is_main_process():
         assert len(torch.unique(train_labels)) == len(
             torch.unique(test_labels)
         ), "train & test dataset have different number of classes!"

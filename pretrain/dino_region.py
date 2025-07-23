@@ -16,6 +16,7 @@ from pathlib import Path
 from omegaconf import DictConfig
 
 import source.vision_transformer as vits
+import source.distributed as distributed
 
 from source.utils import initialize_wandb, compute_time, update_log_dict
 from source.dataset import HierarchicalPretrainingDataset
@@ -24,14 +25,11 @@ from utils import (
     RegionDataAugmentationDINO,
     MultiCropWrapper,
     train_one_epoch,
-    fix_random_seeds,
     has_batchnorms,
     get_params_groups,
     resume_from_checkpoint,
     cosine_scheduler,
-    get_world_size,
     start_from_checkpoint,
-    is_main_process,
 )
 
 
@@ -39,16 +37,12 @@ from utils import (
     version_base="1.2.0", config_path="../config/pretraining", config_name="region"
 )
 def main(cfg: DictConfig):
-    distributed = torch.cuda.device_count() > 1
-    if distributed:
-        torch.distributed.init_process_group(backend="nccl")
-        gpu_id = int(os.environ["LOCAL_RANK"])
-        if gpu_id == 0:
-            print(f"Distributed session successfully initialized")
-    else:
-        gpu_id = -1
+    
+    distributed.setup_distributed()
+    distributed.fix_random_seed(cfg.seed)
+    gpu_id = distributed.get_global_rank()
 
-    if is_main_process():
+    if distributed.is_main_process():
         print(f"torch.cuda.device_count(): {torch.cuda.device_count()}")
         run_id = datetime.datetime.now().strftime("%Y-%m-%d_%H_%M")
         # set up wandb
@@ -60,19 +54,18 @@ def main(cfg: DictConfig):
     else:
         run_id = ""
 
-    if distributed:
+    if distributed.is_enabled_and_multiple_gpus():
         obj = [run_id]
         torch.distributed.broadcast_object_list(
             obj, 0, device=torch.device(f"cuda:{gpu_id}")
         )
         run_id = obj[0]
 
-    fix_random_seeds(cfg.seed)
     cudnn.benchmark = True
 
     output_dir = Path(cfg.output_dir, cfg.experiment_name, run_id)
     snapshot_dir = Path(output_dir, "snapshots")
-    if not cfg.resume and is_main_process():
+    if not cfg.resume and distributed.is_main_process():
         if output_dir.exists():
             print(f"WARNING: {output_dir} already exists! Deleting its content...")
             shutil.rmtree(output_dir)
@@ -82,7 +75,7 @@ def main(cfg: DictConfig):
         snapshot_dir.mkdir(exist_ok=True, parents=True)
 
     # preparing data
-    if is_main_process():
+    if distributed.is_main_process():
         print(f"Loading data...")
 
     transform = RegionDataAugmentationDINO(
@@ -101,7 +94,7 @@ def main(cfg: DictConfig):
         idxs = random.sample(range(len(dataset)), k=nsample)
         dataset = torch.utils.data.Subset(dataset, idxs)
 
-    if distributed:
+    if distributed.is_enabled_and_multiple_gpus():
         sampler = torch.utils.data.DistributedSampler(dataset, shuffle=True)
     else:
         sampler = torch.utils.data.RandomSampler(dataset)
@@ -113,11 +106,11 @@ def main(cfg: DictConfig):
         pin_memory=True,
         drop_last=True,
     )
-    if is_main_process():
+    if distributed.is_main_process():
         print(f"Pretraining data loaded ({len(dataset)} regions)")
 
     # building student and teacher networks
-    if is_main_process():
+    if distributed.is_main_process():
         print(f"Building student and teacher networks...")
     student = vits.__dict__[cfg.model.arch](
         img_size=cfg.model.region_size,
@@ -149,13 +142,13 @@ def main(cfg: DictConfig):
     )
 
     # move networks to gpu
-    if distributed:
+    if distributed.is_enabled_and_multiple_gpus():
         student, teacher = student.to(gpu_id), teacher.to(gpu_id)
     else:
         student, teacher = student.cuda(), teacher.cuda()
 
     # synchronize batch norms (if any)
-    if has_batchnorms(student) and distributed:
+    if has_batchnorms(student) and distributed.is_enabled_and_multiple_gpus():
         # we need DDP wrapper to have synchro batch norms working...
         student = nn.SyncBatchNorm.convert_sync_batchnorm(student)
         teacher = nn.SyncBatchNorm.convert_sync_batchnorm(teacher)
@@ -167,7 +160,7 @@ def main(cfg: DictConfig):
         # teacher_without_ddp and teacher are the same thing
         teacher_without_ddp = teacher
 
-    if distributed:
+    if distributed.is_enabled_and_multiple_gpus():
         student = nn.parallel.DistributedDataParallel(
             student,
             device_ids=[gpu_id],
@@ -201,7 +194,7 @@ def main(cfg: DictConfig):
         cfg.model.warmup_teacher_temp_epochs,
         cfg.training.nepochs,
     )
-    if distributed:
+    if distributed.is_enabled_and_multiple_gpus():
         dino_loss = dino_loss.to(gpu_id)
     else:
         dino_loss = dino_loss.cuda()
@@ -218,7 +211,7 @@ def main(cfg: DictConfig):
         cfg.training.nepochs >= cfg.training.warmup_epochs
     ), f"nepochs ({cfg.training.nepochs}) must be greater than or equal to warmup_epochs ({cfg.training.warmup_epochs})"
     base_lr = (
-        cfg.optim.lr * (cfg.training.batch_size_per_gpu * get_world_size()) / 256.0
+        cfg.optim.lr * (cfg.training.batch_size_per_gpu * distributed.get_global_size()) / 256.0
     )
     lr_schedule = cosine_scheduler(
         base_lr,
@@ -240,14 +233,14 @@ def main(cfg: DictConfig):
         cfg.training.nepochs,
         len(data_loader),
     )
-    if is_main_process():
+    if distributed.is_main_process():
         print(f"Models built, kicking off training")
 
     epochs_run = 0
 
     # leverage torch native fault tolerance
     snapshot_path = Path(snapshot_dir, "latest.pt")
-    if distributed:
+    if distributed.is_enabled_and_multiple_gpus():
         if snapshot_path.exists():
             print("Loading snapshot")
             loc = f"cuda:{gpu_id}"
@@ -284,14 +277,14 @@ def main(cfg: DictConfig):
         total=cfg.training.nepochs,
         file=sys.stdout,
         position=0,
-        disable=not is_main_process(),
+        disable=not distributed.is_main_process(),
     ) as t:
         for epoch in t:
             epoch_start_time = time.time()
-            if cfg.wandb.enable and is_main_process():
+            if cfg.wandb.enable and distributed.is_main_process():
                 log_dict = {"epoch": epoch}
 
-            if distributed:
+            if distributed.is_enabled_and_multiple_gpus():
                 data_loader.sampler.set_epoch(epoch)
 
             # training one epoch of DINO
@@ -313,11 +306,11 @@ def main(cfg: DictConfig):
                 gpu_id,
             )
 
-            if cfg.wandb.enable and is_main_process():
+            if cfg.wandb.enable and distributed.is_main_process():
                 update_log_dict("train", train_stats, log_dict, step="epoch")
 
             # save snapshot and log to wandb
-            if is_main_process():
+            if distributed.is_main_process():
                 snapshot = {
                     "epoch": epoch,
                     "student": student.state_dict(),
@@ -343,13 +336,13 @@ def main(cfg: DictConfig):
                 **{f"train_{k}": v for k, v in train_stats.items()},
                 "epoch": epoch,
             }
-            if is_main_process():
+            if distributed.is_main_process():
                 with open(Path(output_dir, "log.txt"), "a") as f:
                     f.write(json.dumps(log_stats) + "\n")
 
             epoch_end_time = time.time()
             epoch_mins, epoch_secs = compute_time(epoch_start_time, epoch_end_time)
-            if is_main_process():
+            if distributed.is_main_process():
                 tqdm.tqdm.write(
                     f"End of epoch {epoch+1}/{cfg.training.nepochs} \t Time Taken:  {epoch_mins}m {epoch_secs}s"
                 )
@@ -358,7 +351,7 @@ def main(cfg: DictConfig):
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
     print("Pretraining time {}".format(total_time_str))
 
-    if distributed:
+    if distributed.is_enabled_and_multiple_gpus():
         torch.distributed.destroy_process_group()
 
 

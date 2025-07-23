@@ -12,12 +12,12 @@ import torch.distributed as dist
 from pathlib import Path
 from omegaconf import DictConfig
 
+import source.distributed as distributed
 from source.dataset import RegionCoordinatesDataset, PatchDataset
 from source.models import GlobalFeatureExtractor, LocalFeatureExtractor, LocalFeatureExtractorFM
 from source.utils import (
     initialize_wandb,
     collate_coordinates,
-    is_main_process,
     build_slide_level_feature,
 )
 
@@ -26,16 +26,11 @@ from source.utils import (
     version_base="1.2.0", config_path="config/feature_extraction", config_name="default"
 )
 def main(cfg: DictConfig):
-    distributed = torch.cuda.device_count() > 1
-    if distributed:
-        torch.distributed.init_process_group(backend="nccl")
-        gpu_id = int(os.environ["LOCAL_RANK"])
-        if gpu_id == 0:
-            print(f"Distributed session successfully initialized")
-    else:
-        gpu_id = -1
+    
+    distributed.setup_distributed()
+    distributed.fix_random_seed(cfg.seed)
 
-    if is_main_process():
+    if distributed.is_main_process():
         print(f"torch.cuda.device_count(): {torch.cuda.device_count()}")
         run_id = datetime.datetime.now().strftime("%Y-%m-%d_%H_%M")
         # set up wandb
@@ -47,10 +42,10 @@ def main(cfg: DictConfig):
     else:
         run_id = ""
 
-    if distributed:
+    if distributed.is_enabled_and_multiple_gpus():
         obj = [run_id]
         torch.distributed.broadcast_object_list(
-            obj, 0, device=torch.device(f"cuda:{gpu_id}")
+            obj, 0, device=torch.device(f"cuda:{distributed.get_global_rank()}")
         )
         run_id = obj[0]
 
@@ -61,7 +56,7 @@ def main(cfg: DictConfig):
     else:
         region_features_dir = Path("/tmp/region_features")
 
-    if is_main_process():
+    if distributed.is_main_process():
         output_dir.mkdir(exist_ok=True, parents=True)
         slide_features_dir.mkdir(exist_ok=True, parents=True)
         region_features_dir.mkdir(exist_ok=True, parents=True)
@@ -74,21 +69,21 @@ def main(cfg: DictConfig):
             pretrain_vit_patch=cfg.pretrain_vit_patch,
             pretrain_vit_region=cfg.pretrain_vit_region,
             img_size_pretrained=cfg.img_size_pretrained,
-            verbose=(gpu_id in [-1, 0]),
+            verbose=(distributed.get_global_rank() in [-1, 0]),
         )
     elif cfg.level == "local":
         if cfg.fm is not None:
             model = LocalFeatureExtractorFM(
                 cfg.fm,
                 pretrained_weights=cfg.pretrain_vit_patch,
-                verbose=(gpu_id in [-1, 0]),
+                verbose=(distributed.get_global_rank() in [-1, 0]),
             )
         else:
             model = LocalFeatureExtractor(
                 patch_size=cfg.patch_size,
                 mini_patch_size=cfg.mini_patch_size,
                 pretrain_vit_patch=cfg.pretrain_vit_patch,
-                verbose=(gpu_id in [-1, 0]),
+                verbose=(distributed.get_global_rank() in [-1, 0]),
             )
     else:
         raise ValueError(f"cfg.level ({cfg.level}) not supported")
@@ -101,26 +96,23 @@ def main(cfg: DictConfig):
     slide_paths = df.slide_path.unique().tolist()
     slide_ids = [Path(s).stem for s in slide_paths if Path(patch_dir, f"{Path(s).stem}.npy").is_file()]
 
-    if is_main_process():
+    if distributed.is_main_process():
         print(f"{len(slide_ids)} slides with extracted patches found")
 
     if cfg.slide_list:
         with open(Path(cfg.slide_list), "r") as f:
             slide_ids = sorted([Path(x.strip()).stem for x in f.readlines()])
-        if is_main_process():
+        if distributed.is_main_process():
             print(f"restricting to {len(slide_ids)} slides from slide list .txt file")
 
     num_workers = min(mp.cpu_count(), cfg.num_workers)
     if "SLURM_JOB_CPUS_PER_NODE" in os.environ:
         num_workers = min(num_workers, int(os.environ["SLURM_JOB_CPUS_PER_NODE"]))
 
-    if gpu_id == -1:
-        device = torch.device(f"cuda")
-    else:
-        device = torch.device(f"cuda:{gpu_id}")
+    device = torch.device(f"cuda:{distributed.get_global_rank()}")
     model = model.to(device, non_blocking=True)
 
-    if is_main_process():
+    if distributed.is_main_process():
         print()
 
     if Path(output_dir, "process_list.csv").is_file() and cfg.resume:
@@ -143,7 +135,7 @@ def main(cfg: DictConfig):
 
     sub_df = df[df.slide_id.isin(slide_ids_to_process)].reset_index(drop=True)
     dataset = RegionCoordinatesDataset(sub_df, patch_dir)
-    if distributed:
+    if distributed.is_enabled_and_multiple_gpus():
         sampler = torch.utils.data.DistributedSampler(dataset, shuffle=True)
     else:
         sampler = torch.utils.data.RandomSampler(dataset)
@@ -164,13 +156,13 @@ def main(cfg: DictConfig):
 
     with tqdm.tqdm(
         loader,
-        desc=f"Slide Encoding (GPU: {max(gpu_id, 0)+1}/{torch.cuda.device_count()})",
+        desc=f"Slide Encoding (GPU: {max(distributed.get_global_rank(), 0)+1}/{torch.cuda.device_count()})",
         unit=" slide",
         unit_scale=1,
         initial=already_processed//torch.cuda.device_count(),
         total=(total+already_processed)//torch.cuda.device_count(),
         leave=True,
-        position=max(gpu_id, 0)*2,
+        position=max(distributed.get_global_rank(), 0)*2,
     ) as t1:
         with torch.no_grad():
             for batch in t1:
@@ -184,11 +176,11 @@ def main(cfg: DictConfig):
                     region_feature_paths = []
                     with tqdm.tqdm(
                         region_dataloader,
-                        desc=f"GPU {max(gpu_id, 0)}: {slide_id}",
+                        desc=f"GPU {max(distributed.get_global_rank(), 0)}: {slide_id}",
                         unit=" region",
                         unit_scale=1,
                         leave=False,
-                        position=max(gpu_id, 0)*2+1,
+                        position=max(distributed.get_global_rank(), 0)*2+1,
                     ) as t2:
                         for  img, x, y in t2:
                             x, y = x.item(), y.item()
@@ -214,7 +206,7 @@ def main(cfg: DictConfig):
                     local_process_df.loc[0, "feature_path"] = str(save_path)
                     dfs.append(local_process_df)
 
-                    if cfg.wandb.enable and is_main_process():
+                    if cfg.wandb.enable and distributed.is_main_process():
                         agg_processed_count += local_processed_count.item()
                         wandb.log({"processed": agg_processed_count})
 
@@ -229,10 +221,10 @@ def main(cfg: DictConfig):
                     dfs.append(local_process_df)
 
     process_csv_path = Path(output_dir, f"process_list.csv")
-    if distributed:
+    if distributed.is_enabled_and_multiple_gpus():
         torch.distributed.barrier()
         process_df = pd.concat(dfs, ignore_index=True)
-        if is_main_process():
+        if distributed.is_main_process():
             process_df.to_csv(process_csv_path, index=False)
     else:
         process_df = pd.concat(dfs, ignore_index=True)

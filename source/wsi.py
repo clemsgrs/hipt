@@ -129,16 +129,21 @@ class WholeSlideImage(object):
         return self.spacings[level]
 
     def get_best_level_for_spacing(
-        self, target_spacing: float, smaller_or_equal: bool = True
+        self, target_spacing: float, tolerance: float = 0.1
     ):
         spacing = self.get_level_spacing(0)
         target_downsample = target_spacing / spacing
         level = self.get_best_level_for_downsample_custom(target_downsample)
-        if smaller_or_equal:
-            while level > 0 and self.get_level_spacing(level) > target_spacing:
+        level_spacing = self.get_level_spacing(level)
+        difference = abs(level_spacing - target_spacing) / level_spacing
+        if difference <= tolerance or level_spacing < target_spacing:
+            return level
+        else:
+            while level > 0 and level_spacing > target_spacing:
                 level -= 1
+                level_spacing = self.get_level_spacing(level)
             assert (
-                self.get_level_spacing(level) <= target_spacing
+                level_spacing <= target_spacing
             ), f"Could not find a level with spacing smaller than or equal to {target_spacing}"
         return level
 

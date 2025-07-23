@@ -292,6 +292,7 @@ class VisionTransformer(nn.Module):
     ):
         super().__init__()
         self.embed_dim = embed_dim
+        self.features_dim = embed_dim
         self.num_heads = num_heads
         self.num_register_tokens = num_register_tokens
 

@@ -7,6 +7,7 @@ import torch.distributed as dist
 from typing import Optional
 from omegaconf import DictConfig
 
+import source.distributed as distributed
 from source.utils import get_label_from_ordinal_label
 
 
@@ -298,7 +299,7 @@ class DINOLoss(nn.Module):
                 np.ones(nepochs - warmup_teacher_temp_epochs) * teacher_temp,
             )
         )
-        self.distributed = torch.cuda.device_count() > 1
+        self.distributed = distributed.is_enabled_and_multiple_gpus()
 
     def forward(self, student_output, teacher_output, epoch):
         """

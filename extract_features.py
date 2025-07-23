@@ -13,6 +13,7 @@ from pathlib import Path
 from omegaconf import DictConfig
 from torchvision import transforms
 
+import source.distributed as distributed
 from source.wsi import WholeSlideImage
 from source.dataset import SlideFilepathsDataset, RegionFilepathsDataset, PatchDataset
 from source.models import GlobalFeatureExtractor, LocalFeatureExtractor
@@ -21,7 +22,6 @@ from source.utils import (
     initialize_df,
     collate_filepaths,
     collate_region_filepaths,
-    is_main_process,
     sort_coords,
 )
 
@@ -30,16 +30,12 @@ from source.utils import (
     version_base="1.2.0", config_path="config/feature_extraction", config_name="default"
 )
 def main(cfg: DictConfig):
-    distributed = torch.cuda.device_count() > 1
-    if distributed:
-        torch.distributed.init_process_group(backend="nccl")
-        gpu_id = int(os.environ["LOCAL_RANK"])
-        if gpu_id == 0:
-            print(f"Distributed session successfully initialized")
-    else:
-        gpu_id = -1
+    
+    distributed.setup_distributed()
+    distributed.fix_random_seed(cfg.seed)
+    gpu_id = distributed.get_global_rank()
 
-    if is_main_process():
+    if distributed.is_main_process():
         print(f"torch.cuda.device_count(): {torch.cuda.device_count()}")
         run_id = datetime.datetime.now().strftime("%Y-%m-%d_%H_%M")
         # set up wandb
@@ -51,7 +47,7 @@ def main(cfg: DictConfig):
     else:
         run_id = ""
 
-    if distributed:
+    if distributed.is_enabled_and_multiple_gpus():
         obj = [run_id]
         torch.distributed.broadcast_object_list(
             obj, 0, device=torch.device(f"cuda:{gpu_id}")
@@ -61,7 +57,7 @@ def main(cfg: DictConfig):
     output_dir = Path(cfg.output_dir, cfg.experiment_name, run_id)
     slide_features_dir = Path(output_dir, "slide_features")
     region_features_dir = Path(output_dir, "region_features")
-    if not cfg.resume and is_main_process():
+    if not cfg.resume and distributed.is_main_process():
         if output_dir.exists():
             print(f"{output_dir} already exists! deleting it...")
             shutil.rmtree(output_dir)
@@ -105,13 +101,13 @@ def main(cfg: DictConfig):
         slide_paths = df.slide_path.unique().tolist()
         slide_ids = [Path(s).stem for s in slide_paths if Path(patch_dir, f"{Path(s).stem}.npy").is_file()]
 
-    if is_main_process():
+    if distributed.is_main_process():
         print(f"{len(slide_ids)} slides with extracted patches found")
 
     if cfg.slide_list:
         with open(Path(cfg.slide_list), "r") as f:
             slide_ids = sorted([Path(x.strip()).stem for x in f.readlines()])
-        if is_main_process():
+        if distributed.is_main_process():
             print(f"restricting to {len(slide_ids)} slides from slide list .txt file")
 
     num_workers = min(mp.cpu_count(), cfg.num_workers)
@@ -124,7 +120,7 @@ def main(cfg: DictConfig):
         device = torch.device(f"cuda:{gpu_id}")
     model = model.to(device, non_blocking=True)
 
-    if is_main_process():
+    if distributed.is_main_process():
         print()
 
     processed_slide_ids, processed_region_slide_ids = [], []
@@ -135,7 +131,7 @@ def main(cfg: DictConfig):
 
         df = initialize_df(slide_ids)
         dataset = RegionFilepathsDataset(df, region_dir, cfg.format)
-        if distributed:
+        if distributed.is_enabled_and_multiple_gpus():
             sampler = torch.utils.data.DistributedSampler(dataset, shuffle=True)
         else:
             sampler = torch.utils.data.RandomSampler(dataset)
@@ -203,14 +199,14 @@ def main(cfg: DictConfig):
                     torch.save(slide_feature, save_path)
                     slide_feature_paths.append(save_path.resolve())
 
-                    if cfg.wandb.enable and not distributed:
+                    if cfg.wandb.enable and not distributed.is_enabled_and_multiple_gpus():
                         wandb.log({"processed": i + 1})
 
     elif cfg.csv is not None:
 
         sub_df = df[df.slide_id.isin(slide_ids)].reset_index(drop=True)
         dataset = SlideFilepathsDataset(sub_df)
-        if distributed:
+        if distributed.is_enabled_and_multiple_gpus():
             sampler = torch.utils.data.DistributedSampler(dataset, shuffle=True)
         else:
             sampler = torch.utils.data.RandomSampler(dataset)
@@ -271,7 +267,7 @@ def main(cfg: DictConfig):
                     torch.save(slide_feature, save_path)
                     slide_feature_paths.append(save_path.resolve())
 
-                    if cfg.wandb.enable and not distributed:
+                    if cfg.wandb.enable and not distributed.is_enabled_and_multiple_gpus():
                         wandb.log({"processed": i + 1})
 
     slide_features_df = pd.DataFrame.from_dict(
@@ -283,7 +279,7 @@ def main(cfg: DictConfig):
         }
     )
 
-    if distributed:
+    if distributed.is_enabled_and_multiple_gpus():
         slide_features_csv_path = Path(output_dir, f"slide_features_{gpu_id}.csv")
     else:
         slide_features_csv_path = Path(output_dir, f"slide_features.csv")
@@ -300,15 +296,15 @@ def main(cfg: DictConfig):
                 "y": y_coords,
             }
         )
-        if distributed:
+        if distributed.is_enabled_and_multiple_gpus():
             region_features_csv_path = Path(output_dir, f"region_features_{gpu_id}.csv")
         else:
             region_features_csv_path = Path(output_dir, f"region_features.csv")
         region_features_df.to_csv(region_features_csv_path, index=False)
 
-    if distributed:
+    if distributed.is_enabled_and_multiple_gpus():
         torch.distributed.barrier()
-        if is_main_process():
+        if distributed.is_main_process():
             slide_dfs = []
             if cfg.save_region_features:
                 region_dfs = []
@@ -334,7 +330,7 @@ def main(cfg: DictConfig):
                     Path(output_dir, f"region_features.csv"), index=False
                 )
 
-    if cfg.wandb.enable and is_main_process() and distributed:
+    if cfg.wandb.enable and distributed.is_main_process() and distributed.is_enabled_and_multiple_gpus():
         wandb.log({"processed": len(slide_features_df)})
 
 

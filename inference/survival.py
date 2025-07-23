@@ -1,24 +1,21 @@
+import datetime
+import multiprocessing as mp
 import os
 import time
-import wandb
-import hydra
-import torch
-import datetime
-import pandas as pd
-import multiprocessing as mp
-
 from pathlib import Path
+
+import hydra
+import pandas as pd
+import torch
+import wandb
 from omegaconf import DictConfig
 
+from source.dataset import DatasetFactory, SurvivalDatasetOptions
 from source.models import ModelFactory
-from source.dataset import (
-    SurvivalDatasetOptions,
-    DatasetFactory,
-)
 from source.utils import (
+    compute_time,
     initialize_wandb,
     test_survival,
-    compute_time,
     update_state_dict,
 )
 
@@ -84,7 +81,7 @@ def main(cfg: DictConfig):
         print(f"Pretrained weights found at {cfg.model.checkpoint}")
         sd = torch.load(cfg.model.checkpoint)
         state_dict, msg = update_state_dict(model.state_dict(), sd)
-        model.load_state_dict(state_dict, strict=False)
+        model.load_state_dict(state_dict, strict=True)
         print(msg)
 
         print(f"Running inference on test dataset")

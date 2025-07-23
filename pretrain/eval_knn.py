@@ -1,21 +1,21 @@
 import os
 import sys
-import tqdm
+from pathlib import Path
+from typing import Optional
+
 import hydra
 import numpy as np
 import pandas as pd
-
 import torch
-import torch.nn as nn
-import torch.distributed as dist
 import torch.backends.cudnn as cudnn
-
-from pathlib import Path
-from typing import Optional
-from sklearn import metrics
+import torch.distributed as dist
+import torch.nn as nn
+import tqdm
 from omegaconf import DictConfig
+from sklearn import metrics
 from torchvision import transforms
 
+import source.distributed as distributed
 import source.vision_transformer as vits
 from source.dataset import ImagePretrainingDataset
 
@@ -26,16 +26,6 @@ def is_dist_avail_and_initialized():
     if not dist.is_initialized():
         return False
     return True
-
-
-def get_rank():
-    if not is_dist_avail_and_initialized():
-        return 0
-    return dist.get_rank()
-
-
-def is_main_process():
-    return get_rank() == 0
 
 
 class ReturnIndexDataset(ImagePretrainingDataset):
@@ -67,7 +57,7 @@ def prepare_data(
     dataset_test = ReturnIndexDataset(
         test_df, transform=transform, label_name=label_name
     )
-    if distributed:
+    if distributed.is_enabled_and_multiple_gpus():
         sampler = torch.utils.data.DistributedSampler(dataset_train, shuffle=False)
     else:
         sampler = torch.utils.data.SequentialSampler(dataset_train)
@@ -99,7 +89,7 @@ def load_pretrained_weights(model, pretrained_weights, checkpoint_key):
         state_dict = {k.replace("module.", ""): v for k, v in state_dict.items()}
         # remove `backbone.` prefix induced by multicrop wrapper
         state_dict = {k.replace("backbone.", ""): v for k, v in state_dict.items()}
-        msg = model.load_state_dict(state_dict, strict=False)
+        msg = model.load_state_dict(state_dict, strict=True)
         print(
             "Pretrained weights found at {} and loaded with msg: {}".format(
                 pretrained_weights, msg
@@ -174,12 +164,12 @@ def extract_feature_pipeline(
         model, data_loader_test, distributed, use_cuda
     )
 
-    if is_main_process():
+    if distributed.is_main_process():
         train_features = nn.functional.normalize(train_features, dim=1, p=2)
         test_features = nn.functional.normalize(test_features, dim=1, p=2)
 
     # save features and labels
-    if save_features and is_main_process():
+    if save_features and distributed.is_main_process():
         torch.save(train_features.cpu(), Path(features_dir, "train_feat.pt"))
         torch.save(test_features.cpu(), Path(features_dir, "test_feat.pt"))
         torch.save(train_labels.cpu(), Path(features_dir, "train_labels.pt"))
@@ -224,7 +214,7 @@ def extract_multiple_features(
 
             # init storage feature matrix
             if (
-                is_main_process()
+                distributed.is_main_process()
                 and student_features is None
                 and teacher_features is None
             ):
@@ -241,7 +231,7 @@ def extract_multiple_features(
                     f"Storing features into tensor of shape {student_features.shape}"
                 )
 
-            if distributed:
+            if distributed.is_enabled_and_multiple_gpus():
                 ngpu = dist.get_world_size()
                 y_all = torch.empty(
                     ngpu, index.size(0), dtype=index.dtype, device=index.device
@@ -280,7 +270,7 @@ def extract_multiple_features(
                 teacher_output_all_reduce.wait()
 
                 # update storage feature matrix
-                if is_main_process():
+                if distributed.is_main_process():
                     if use_cuda:
                         student_features.index_copy_(
                             0, index_all, torch.cat(student_output_l)
@@ -299,7 +289,7 @@ def extract_multiple_features(
                 student_features[list(index), :] = student_feats
                 teacher_features[list(index), :] = teacher_feats
 
-    if is_main_process():
+    if distributed.is_main_process():
         student_features = nn.functional.normalize(student_features, dim=1, p=2)
         teacher_features = nn.functional.normalize(teacher_features, dim=1, p=2)
 
@@ -333,7 +323,7 @@ def extract_features(model, loader, distributed, use_cuda=True, multiscale=False
                 feats = model(img).clone()
 
             # init storage feature matrix
-            if is_main_process() and features is None:
+            if distributed.is_main_process() and features is None:
                 features = torch.zeros(len(loader.dataset), feats.shape[-1])
                 if use_cuda:
                     features = features.cuda(non_blocking=True)
@@ -342,7 +332,7 @@ def extract_features(model, loader, distributed, use_cuda=True, multiscale=False
                 )
                 print()
 
-            if distributed:
+            if distributed.is_enabled_and_multiple_gpus():
                 ngpu = dist.get_world_size()
                 y_all = torch.empty(
                     ngpu, index.size(0), dtype=index.dtype, device=index.device
@@ -367,7 +357,7 @@ def extract_features(model, loader, distributed, use_cuda=True, multiscale=False
                 output_all_reduce.wait()
 
                 # update storage feature matrix
-                if is_main_process():
+                if distributed.is_main_process():
                     if use_cuda:
                         features.index_copy_(0, index_all, torch.cat(output_l))
                     else:
@@ -439,16 +429,9 @@ def knn_classifier(
     config_name="knn",
 )
 def main(cfg: DictConfig):
-    distributed = torch.cuda.device_count() > 1
-    if distributed:
-        torch.distributed.init_process_group(backend="nccl")
-        gpu_id = int(os.environ["LOCAL_RANK"])
-        if gpu_id == 0:
-            print(f"Distributed session successfully initialized")
-    else:
-        gpu_id = -1
-    if is_main_process():
-        print(f"torch.cuda.device_count(): {torch.cuda.device_count()}")
+
+    distributed.setup_distributed()
+    distributed.fix_random_seed(cfg.seed)
 
     cudnn.benchmark = True
 
@@ -482,7 +465,7 @@ def main(cfg: DictConfig):
             label_name=cfg.label_name,
         )
 
-    if is_main_process():
+    if distributed.is_main_process():
         assert len(torch.unique(train_labels)) == len(
             torch.unique(test_labels)
         ), "train & test dataset have different number of classes!"
@@ -506,7 +489,7 @@ def main(cfg: DictConfig):
             print(f"- auc: {auc}")
             print(f"- accuracy: {acc:.2f}%")
 
-    if distributed:
+    if distributed.is_enabled_and_multiple_gpus():
         torch.distributed.destroy_process_group()
 
 

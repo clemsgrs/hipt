@@ -1,17 +1,17 @@
+from pathlib import Path
+from typing import Optional
+
 import timm
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
-from pathlib import Path
-from typing import Optional
 from einops import rearrange
 from omegaconf import DictConfig, OmegaConf
 from torchvision.transforms import CenterCrop
 
-from source.vision_transformer import vit_small, vit4k_xs
 from source.model_utils import Attn_Net_Gated, PositionalEncoderFactory
-from source.utils import update_state_dict, get_device
+from source.utils import get_device, update_state_dict
+from source.vision_transformer import vit4k_xs, vit_small
 
 
 class ModelFactory:
@@ -26,11 +26,19 @@ class ModelFactory:
         model_options: Optional[DictConfig] = None,
     ):
         if task in ["classification", "survival"]:
-            if model_name == "mlp":
+            if model_name == "lp":
+                assert level == "slide" or level == "case"
+                self.model = SurvivalLP(
+                    model_options.embed_dim_slide,
+                    output_dim=num_classes,
+                )
+            elif model_name == "mlp":
                 assert level == "slide" or level == "case"
                 self.model = SurvivalMLP(
                     model_options.embed_dim_slide,
-                    num_classes=num_classes,
+                    hidden_dim=256,
+                    output_dim=num_classes,
+                    num_layers=3,
                 )
             elif model_name == "hvit":
                 if level == "global":
@@ -337,7 +345,7 @@ class LocalGlobalHIPT(nn.Module):
             state_dict, msg = update_state_dict(
                 self.vit_region.state_dict(), state_dict
             )
-            self.vit_region.load_state_dict(state_dict, strict=False)
+            self.vit_region.load_state_dict(state_dict, strict=True)
             print(f"Pretrained weights found at {pretrain_vit_region}")
             print(msg)
 
@@ -518,7 +526,7 @@ class HIPT(nn.Module):
             # remove `backbone.` prefix induced by multicrop wrapper
             state_dict = {k.replace("backbone.", ""): v for k, v in state_dict.items()}
             state_dict, msg = update_state_dict(self.vit_patch.state_dict(), state_dict)
-            self.vit_patch.load_state_dict(state_dict, strict=False)
+            self.vit_patch.load_state_dict(state_dict, strict=True)
             print(f"Pretrained weights found at {pretrain_vit_patch}")
             print(msg)
 
@@ -564,7 +572,7 @@ class HIPT(nn.Module):
             state_dict, msg = update_state_dict(
                 self.vit_region.state_dict(), state_dict
             )
-            self.vit_region.load_state_dict(state_dict, strict=False)
+            self.vit_region.load_state_dict(state_dict, strict=True)
             print(f"Pretrained weights found at {pretrain_vit_region}")
             print(msg)
 
@@ -781,7 +789,7 @@ class GlobalFeatureExtractor(nn.Module):
             # remove `backbone.` prefix induced by multicrop wrapper
             state_dict = {k.replace("backbone.", ""): v for k, v in state_dict.items()}
             state_dict, msg = update_state_dict(self.vit_patch.state_dict(), state_dict)
-            self.vit_patch.load_state_dict(state_dict, strict=False)
+            self.vit_patch.load_state_dict(state_dict, strict=True)
             if verbose:
                 print(f"Pretrained weights found at {pretrain_vit_patch}")
                 print(msg)
@@ -826,7 +834,7 @@ class GlobalFeatureExtractor(nn.Module):
             state_dict, msg = update_state_dict(
                 self.vit_region.state_dict(), state_dict
             )
-            self.vit_region.load_state_dict(state_dict, strict=False)
+            self.vit_region.load_state_dict(state_dict, strict=True)
             if verbose:
                 print(f"Pretrained weights found at {pretrain_vit_region}")
                 print(msg)
@@ -931,7 +939,7 @@ class LocalFeatureExtractor(nn.Module):
             # remove `backbone.` prefix induced by multicrop wrapper
             state_dict = {k.replace("backbone.", ""): v for k, v in state_dict.items()}
             state_dict, msg = update_state_dict(self.vit_patch.state_dict(), state_dict)
-            self.vit_patch.load_state_dict(state_dict, strict=False)
+            self.vit_patch.load_state_dict(state_dict, strict=True)
             if verbose:
                 print(f"Pretrained weights found at {pretrain_vit_patch}")
                 print(msg)
@@ -1013,7 +1021,7 @@ class PatchEmbedder(nn.Module):
             # remove `backbone.` prefix induced by multicrop wrapper
             state_dict = {k.replace("backbone.", ""): v for k, v in state_dict.items()}
             state_dict, msg = update_state_dict(self.vit_patch.state_dict(), state_dict)
-            self.vit_patch.load_state_dict(state_dict, strict=False)
+            self.vit_patch.load_state_dict(state_dict, strict=True)
             if verbose:
                 print(f"Pretrained weights found at {pretrain_vit_patch}")
                 print(msg)
@@ -1609,15 +1617,15 @@ class LocalFeatureExtractorFM(nn.Module):
         return patch_feature
 
 
-class SurvivalMLP(nn.Module):
-    def __init__(self, input_dim, num_classes):
+class SurvivalLP(nn.Module):
+    def __init__(self, input_dim: int, output_dim: int):
         """
-        input_dim: dimension of input features (e.g., 768).
-        output_dim: number of discrete time bins.
+        input_dim (int): Dimension of input features.
+        output_dim (int): Dimension of output features (e.g., number of classes).
         """
-        super(SurvivalMLP, self).__init__()
+        super(SurvivalLP, self).__init__()
         self.classifier = nn.Sequential(
-            nn.Linear(input_dim, num_classes),
+            nn.Linear(input_dim, output_dim),
         )
 
     def relocate(self, gpu_id: int = -1):
@@ -1625,5 +1633,35 @@ class SurvivalMLP(nn.Module):
         self.classifier = self.classifier.to(device)
 
     def forward(self, x):
-        logits = self.classifier(x)
-        return logits
+        return self.classifier(x)
+
+
+class SurvivalMLP(nn.Module):
+    """
+    A simple MLP classifier with a tunable number of hidden layers.
+    Args:
+        input_dim (int): Dimension of input features.
+        hidden_dim (int): Dimension of hidden layers.
+        output_dim (int): Dimension of output features (e.g., number of classes).
+        num_layers (int): Number of hidden layers in the MLP.
+    """
+
+    def __init__(
+        self, input_dim: int, hidden_dim: int, output_dim: int, num_layers: int
+    ):
+        super().__init__()
+        layers = []
+        layers.append(nn.Linear(input_dim, hidden_dim))
+        layers.append(nn.ReLU())
+        for _ in range(num_layers - 2):
+            layers.append(nn.Linear(hidden_dim, hidden_dim))
+            layers.append(nn.ReLU())
+        layers.append(nn.Linear(hidden_dim, output_dim))
+        self.mlp = nn.Sequential(*layers)
+
+    def relocate(self, gpu_id: int = -1):
+        device = get_device(gpu_id)
+        self.mlp = self.mlp.to(device)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.mlp(x)

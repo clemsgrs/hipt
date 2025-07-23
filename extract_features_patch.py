@@ -12,8 +12,8 @@ import multiprocessing as mp
 
 from pathlib import Path
 from omegaconf import DictConfig
-from torchvision import transforms
 
+import source.distributed as distributed
 from source.dataset import ImageFolderWithNameDataset
 from source.models import PatchEmbedder
 from source.utils import (
@@ -27,14 +27,9 @@ from pretrain.utils import make_classification_eval_transform
     version_base="1.2.0", config_path="config/feature_extraction", config_name="patch"
 )
 def main(cfg: DictConfig):
-    distributed = torch.cuda.device_count() > 1
-    if distributed:
-        torch.distributed.init_process_group(backend="nccl")
-        gpu_id = int(os.environ["LOCAL_RANK"])
-        if gpu_id == 0:
-            print(f"Distributed session successfully initialized")
-    else:
-        gpu_id = -1
+    
+    distributed.setup_distributed()
+    distributed.fix_random_seed(cfg.seed)
 
     if is_main_process():
         print(f"torch.cuda.device_count(): {torch.cuda.device_count()}")
@@ -48,10 +43,10 @@ def main(cfg: DictConfig):
     else:
         run_id = ""
 
-    if distributed:
+    if distributed.is_enabled_and_multiple_gpus():
         obj = [run_id]
         torch.distributed.broadcast_object_list(
-            obj, 0, device=torch.device(f"cuda:{gpu_id}")
+            obj, 0, device=torch.device(f"cuda:{distributed.get_global_rank()}")
         )
         run_id = obj[0]
 
@@ -72,7 +67,7 @@ def main(cfg: DictConfig):
         img_size=cfg.patch_size,
         mini_patch_size=cfg.mini_patch_size,
         pretrain_vit_patch=cfg.pretrain_vit_patch,
-        verbose=(gpu_id in [-1, 0]),
+        verbose=(distributed.get_global_rank() in [-1, 0]),
         img_size_pretrained=cfg.img_size_pretrained,
     )
 
@@ -97,7 +92,7 @@ def main(cfg: DictConfig):
 
     time.sleep(5)
 
-    if distributed:
+    if distributed.is_enabled_and_multiple_gpus():
         sampler = torch.utils.data.DistributedSampler(dataset, shuffle=True)
     else:
         sampler = torch.utils.data.RandomSampler(dataset)
@@ -115,10 +110,7 @@ def main(cfg: DictConfig):
         drop_last=False,
     )
 
-    if gpu_id == -1:
-        device = torch.device("cuda")
-    else:
-        device = torch.device(f"cuda:{gpu_id}")
+    device = torch.device(f"cuda:{distributed.get_global_rank()}")
     model = model.to(device, non_blocking=True)
 
     if is_main_process():
@@ -134,7 +126,7 @@ def main(cfg: DictConfig):
         unit_scale=cfg.batch_size,
         position=0,
         leave=True,
-        disable=not (gpu_id in [-1, 0]),
+        disable=not (distributed.get_global_rank() in [-1, 0]),
     ) as t1:
         with torch.no_grad():
             for i, batch in enumerate(t1):
@@ -149,7 +141,7 @@ def main(cfg: DictConfig):
                     torch.save(f, feature_path)
                     filenames.append(fname)
                     feature_paths.append(feature_path)
-                if cfg.wandb.enable and not distributed:
+                if cfg.wandb.enable and not distributed.is_enabled_and_multiple_gpus():
                     wandb.log({"processed": i + imgs.shape[0]})
 
     features_df = pd.DataFrame.from_dict(
@@ -159,18 +151,18 @@ def main(cfg: DictConfig):
         }
     )
 
-    if distributed:
-        features_csv_path = Path(output_dir, f"features_{gpu_id}.csv")
+    if distributed.is_enabled_and_multiple_gpus():
+        features_csv_path = Path(output_dir, f"features_{distributed.get_global_rank()}.csv")
     else:
         features_csv_path = Path(output_dir, f"features.csv")
     features_df.to_csv(features_csv_path, index=False)
 
-    if distributed:
+    if distributed.is_enabled_and_multiple_gpus():
         torch.distributed.barrier()
         if is_main_process():
             dfs = []
-            for gpu_id in range(torch.cuda.device_count()):
-                fp = Path(output_dir, f"features_{gpu_id}.csv")
+            for distributed.get_global_rank() in range(torch.cuda.device_count()):
+                fp = Path(output_dir, f"features_{distributed.get_global_rank()}.csv")
                 df = pd.read_csv(fp)
                 dfs.append(df)
                 os.remove(fp)
@@ -180,7 +172,7 @@ def main(cfg: DictConfig):
                 Path(output_dir, f"features.csv"), index=False
             )
 
-    if cfg.wandb.enable and is_main_process() and distributed:
+    if cfg.wandb.enable and is_main_process() and distributed.is_enabled_and_multiple_gpus():
         wandb.log({"processed": len(features_df)})
 
 

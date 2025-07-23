@@ -18,6 +18,7 @@ from omegaconf import DictConfig
 from torchvision import datasets
 
 import source.vision_transformer as vits
+import source.distributed as distributed
 
 from source.utils import initialize_wandb, compute_time, update_log_dict
 from source.components import DINOLoss
@@ -28,13 +29,10 @@ from utils import (
     EarlyStoppingDINO,
     train_one_epoch,
     tune_one_epoch,
-    fix_random_seeds,
     has_batchnorms,
     get_params_groups,
     resume_from_checkpoint,
     cosine_scheduler,
-    get_world_size,
-    is_main_process,
 )
 
 
@@ -42,16 +40,12 @@ from utils import (
     version_base="1.2.0", config_path="../config/pretraining", config_name="patch"
 )
 def main(cfg: DictConfig):
-    distributed = torch.cuda.device_count() > 1
-    if distributed:
-        torch.distributed.init_process_group(backend="nccl")
-        gpu_id = int(os.environ["LOCAL_RANK"])
-        if gpu_id == 0:
-            print(f"Distributed session successfully initialized")
-    else:
-        gpu_id = -1
 
-    if is_main_process():
+    distributed.setup_distributed()
+    distributed.fix_random_seed(cfg.seed)
+    gpu_id = distributed.get_global_rank()
+
+    if distributed.is_main_process():
         print(f"torch.cuda.device_count(): {torch.cuda.device_count()}")
         run_id = datetime.datetime.now().strftime("%Y-%m-%d_%H_%M")
         # set up wandb
@@ -63,20 +57,19 @@ def main(cfg: DictConfig):
     else:
         run_id = ""
 
-    if distributed:
+    if distributed.is_enabled_and_multiple_gpus():
         obj = [run_id]
         torch.distributed.broadcast_object_list(
             obj, 0, device=torch.device(f"cuda:{gpu_id}")
         )
         run_id = obj[0]
 
-    fix_random_seeds(cfg.seed)
     cudnn.benchmark = True
 
     output_dir = Path(cfg.output_dir, cfg.experiment_name, run_id)
     snapshot_dir = Path(output_dir, "snapshots")
     features_dir = Path(output_dir, "features")
-    if not cfg.resume and is_main_process():
+    if not cfg.resume and distributed.is_main_process():
         if output_dir.exists():
             print(f"WARNING: {output_dir} already exists! Deleting its content...")
             shutil.rmtree(output_dir)
@@ -88,11 +81,11 @@ def main(cfg: DictConfig):
             features_dir.mkdir(exist_ok=True, parents=True)
 
     # preparing data
-    if is_main_process():
+    if distributed.is_main_process():
         print(f"Loading data...")
 
     # ============ preparing tuning data ============
-    if is_main_process() and cfg.early_stopping.tune_every:
+    if distributed.is_main_process() and cfg.early_stopping.tune_every:
         # only do it from master rank as tuning is not being run distributed for now
         train_df = pd.read_csv(cfg.early_stopping.downstream.train_csv)
         test_df = pd.read_csv(cfg.early_stopping.downstream.test_csv)
@@ -119,7 +112,7 @@ def main(cfg: DictConfig):
     dataset = datasets.ImageFolder(cfg.data_dir, transform=transform)
     dataset_loading_end_time = time.time() - dataset_loading_start_time
     total_time_str = str(datetime.timedelta(seconds=int(dataset_loading_end_time)))
-    if is_main_process():
+    if distributed.is_main_process():
         print(f"Pretraining data loaded in {total_time_str} ({len(dataset)} patches)")
 
     if cfg.training.pct:
@@ -128,7 +121,7 @@ def main(cfg: DictConfig):
         idxs = random.sample(range(len(dataset)), k=nsample)
         dataset = torch.utils.data.Subset(dataset, idxs)
 
-    if distributed:
+    if distributed.is_enabled_and_multiple_gpus():
         sampler = torch.utils.data.DistributedSampler(dataset, shuffle=True)
     else:
         sampler = torch.utils.data.RandomSampler(dataset)
@@ -142,7 +135,7 @@ def main(cfg: DictConfig):
     )
 
     # building student and teacher networks
-    if is_main_process():
+    if distributed.is_main_process():
         print(f"Building student and teacher networks...")
     student = vits.__dict__[cfg.model.arch](
         patch_size=cfg.model.patch_size,
@@ -171,13 +164,13 @@ def main(cfg: DictConfig):
     )
 
     # move networks to gpu
-    if distributed:
+    if distributed.is_enabled_and_multiple_gpus():
         student, teacher = student.to(gpu_id), teacher.to(gpu_id)
     else:
         student, teacher = student.cuda(), teacher.cuda()
 
     # synchronize batch norms (if any)
-    if has_batchnorms(student) and distributed:
+    if has_batchnorms(student) and distributed.is_enabled_and_multiple_gpus():
         # we need DDP wrapper to have synchro batch norms working...
         student = nn.SyncBatchNorm.convert_sync_batchnorm(student)
         teacher = nn.SyncBatchNorm.convert_sync_batchnorm(teacher)
@@ -189,7 +182,7 @@ def main(cfg: DictConfig):
         # teacher_without_ddp and teacher are the same thing
         teacher_without_ddp = teacher
 
-    if distributed:
+    if distributed.is_enabled_and_multiple_gpus():
         student = nn.parallel.DistributedDataParallel(
             student, device_ids=[gpu_id], output_device=gpu_id
         )
@@ -213,7 +206,7 @@ def main(cfg: DictConfig):
         cfg.model.warmup_teacher_temp_epochs,
         cfg.training.nepochs,
     )
-    if distributed:
+    if distributed.is_enabled_and_multiple_gpus():
         dino_loss = dino_loss.to(gpu_id)
     else:
         dino_loss = dino_loss.cuda()
@@ -230,7 +223,7 @@ def main(cfg: DictConfig):
         cfg.training.nepochs >= cfg.training.warmup_epochs
     ), f"nepochs ({cfg.training.nepochs}) must be greater than or equal to warmup_epochs ({cfg.training.warmup_epochs})"
     base_lr = (
-        cfg.optim.lr * (cfg.training.batch_size_per_gpu * get_world_size()) / 256.0
+        cfg.optim.lr * (cfg.training.batch_size_per_gpu * distributed.get_global_size()) / 256.0
     )
     lr_schedule = cosine_scheduler(
         base_lr,
@@ -249,16 +242,16 @@ def main(cfg: DictConfig):
     momentum_schedule = cosine_scheduler(
         cfg.model.momentum_teacher, 1, cfg.training.nepochs, len(data_loader)
     )
-    if is_main_process():
+    if distributed.is_main_process():
         print(f"Models built, kicking off training")
 
     epochs_run = 0
 
     # leverage torch native fault tolerance
     snapshot_path = Path(snapshot_dir, "latest.pt")
-    if distributed:
+    if distributed.is_enabled_and_multiple_gpus():
         if snapshot_path.exists():
-            if is_main_process():
+            if distributed.is_main_process():
                 print("Loading snapshot")
             loc = f"cuda:{gpu_id}"
             snapshot = torch.load(snapshot_path, map_location=loc)
@@ -269,7 +262,7 @@ def main(cfg: DictConfig):
             dino_loss.load_state_dict(snapshot["dino_loss"])
             if fp16_scaler is not None:
                 fp16_scaler.load_state_dict(snapshot["fp16_scaler"])
-            if is_main_process():
+            if distributed.is_main_process():
                 print(f"Resuming training from snapshot at epoch {epochs_run}")
 
     elif cfg.resume:
@@ -283,7 +276,7 @@ def main(cfg: DictConfig):
             fp16_scaler=fp16_scaler,
             dino_loss=dino_loss,
         )
-        if is_main_process():
+        if distributed.is_main_process():
             print(f"Resuming training from checkpoint at epoch {epochs_run}")
 
     early_stopping = EarlyStoppingDINO(
@@ -309,14 +302,14 @@ def main(cfg: DictConfig):
         total=cfg.training.nepochs,
         file=sys.stdout,
         position=0,
-        disable=not is_main_process(),
+        disable=not distributed.is_main_process(),
     ) as t:
         for epoch in t:
             epoch_start_time = time.time()
-            if cfg.wandb.enable and is_main_process():
+            if cfg.wandb.enable and distributed.is_main_process():
                 log_dict = {"epoch": epoch}
 
-            if distributed:
+            if distributed.is_enabled_and_multiple_gpus():
                 data_loader.sampler.set_epoch(epoch)
 
             # training one epoch of DINO
@@ -335,13 +328,13 @@ def main(cfg: DictConfig):
                 fp16_scaler,
                 cfg.training.clip_grad,
                 cfg.training.freeze_last_layer,
-                gpu_id,
+                distributed.get_global_rank(),
             )
 
-            if cfg.wandb.enable and is_main_process():
+            if cfg.wandb.enable and distributed.is_main_process():
                 update_log_dict("train", train_stats, log_dict, step="epoch")
 
-            if is_main_process():
+            if distributed.is_main_process():
                 snapshot = {
                     "epoch": epoch,
                     "student": student.state_dict(),
@@ -357,7 +350,7 @@ def main(cfg: DictConfig):
             if (
                 cfg.early_stopping.tune_every
                 and epoch % cfg.early_stopping.tune_every == 0
-                and is_main_process()
+                and distributed.is_main_process()
             ):
                 tune_results = tune_one_epoch(
                     epoch + 1,
@@ -376,10 +369,10 @@ def main(cfg: DictConfig):
                     cfg.early_stopping.knn.use_cuda,
                 )
 
-                if cfg.wandb.enable and is_main_process():
+                if cfg.wandb.enable and distributed.is_main_process():
                     update_log_dict("tune", tune_results, log_dict, step="epoch")
 
-            if is_main_process():
+            if distributed.is_main_process():
                 early_stopping(epoch, tune_results, snapshot)
                 if early_stopping.early_stop and cfg.early_stopping.enable:
                     stop = True
@@ -391,7 +384,7 @@ def main(cfg: DictConfig):
                 break
 
             # save snapshot and log to wandb
-            if is_main_process():
+            if distributed.is_main_process():
                 save_path = Path(snapshot_dir, f"epoch_{epoch:03}.pt")
                 if (
                     cfg.early_stopping.save_every
@@ -407,34 +400,31 @@ def main(cfg: DictConfig):
                 **{f"train_{k}": v for k, v in train_stats.items()},
                 "epoch": epoch,
             }
-            if is_main_process():
+            if distributed.is_main_process():
                 with open(Path(output_dir, "log.txt"), "a") as f:
                     f.write(json.dumps(log_stats) + "\n")
 
             epoch_end_time = time.time()
             epoch_mins, epoch_secs = compute_time(epoch_start_time, epoch_end_time)
-            if is_main_process():
+            if distributed.is_main_process():
                 tqdm.tqdm.write(
                     f"End of epoch {epoch+1}/{cfg.training.nepochs} \t Time Taken:  {epoch_mins}m {epoch_secs}s"
                 )
 
             # ensure other gpus wait until gpu_0 is finished with tuning before starting next training iteration
-            if distributed:
+            if distributed.is_enabled_and_multiple_gpus():
                 torch.distributed.barrier()
 
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
     print("Pretraining time {}".format(total_time_str))
 
-    if distributed:
+    if distributed.is_enabled_and_multiple_gpus():
         torch.distributed.destroy_process_group()
 
 
 if __name__ == "__main__":
     # python3 -m torch.distributed.run --standalone --nproc_per_node=gpu pretrain/dino_patch.py --config-name 'debug'
-
-    # ISSUE WITH TORCHRUN ON SOL2: USES PYTHON3.8 INSTEAD OF PYTHON3.9 FOR SOME REASON
-    # torchrun --standalone pretrain/dino_patch.py --nproc_per_node=gpu --config-name 'debug'
 
     # m = {}
     # for i in range(torch.cuda.device_count()):

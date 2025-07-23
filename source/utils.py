@@ -1,8 +1,10 @@
+import os
 import tqdm
 import math
 import wandb
 import torch
 import random
+import getpass
 import matplotlib
 import subprocess
 import numpy as np
@@ -14,8 +16,10 @@ import torch.nn.functional as F
 import torch.distributed as dist
 import matplotlib.pyplot as plt
 
+
 from pathlib import Path
 from functools import partial
+from huggingface_hub import login
 from contextlib import nullcontext
 from collections import Counter
 from collections.abc import Callable
@@ -25,30 +29,7 @@ from sklearn import metrics
 from sklearn.model_selection import train_test_split
 from sksurv.metrics import concordance_index_censored, cumulative_dynamic_auc
 
-
-def is_dist_avail_and_initialized():
-    if not dist.is_available():
-        return False
-    if not dist.is_initialized():
-        return False
-    return True
-
-
-def get_world_size():
-    if not is_dist_avail_and_initialized():
-        return 1
-    return dist.get_world_size()
-
-
-def get_rank():
-    if not is_dist_avail_and_initialized():
-        return 0
-    return dist.get_rank()
-
-
-def is_main_process():
-    return get_rank() == 0
-
+import source.distributed as distributed
 
 def get_device(gpu_id: int):
     if gpu_id == -1 and torch.cuda.is_available():
@@ -59,15 +40,6 @@ def get_device(gpu_id: int):
         device_name = "cpu"
     device = torch.device(device_name)
     return device
-
-
-def fix_random_seeds(seed=31):
-    """
-    Fix random seeds.
-    """
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
-    np.random.seed(seed)
 
 
 def write_dictconfig(d, f, child: bool = False, ntab=0):
@@ -101,6 +73,18 @@ def write_dictconfig(d, f, child: bool = False, ntab=0):
                     for _ in range(ntab):
                         f.write("\t")
                     f.write(f"- {k}: {v}\n")
+
+
+def hf_login():
+    if "HF_TOKEN" not in os.environ and distributed.is_main_process():
+        hf_token = getpass.getpass(
+            "Enter your Hugging Face API token (input will not be visible): "
+        )
+        os.environ["HF_TOKEN"] = hf_token
+    if distributed.is_enabled_and_multiple_gpus():
+        dist.barrier()
+    if distributed.is_main_process():
+        login(os.environ["HF_TOKEN"])
 
 
 def initialize_wandb(
@@ -1037,7 +1021,7 @@ def test(
 
     with tqdm.tqdm(
         loader,
-        desc=(f"Test"),
+        desc="Inference",
         unit=" slide",
         ncols=80,
         unit_scale=batch_size,
@@ -1280,7 +1264,7 @@ def test_regression(
 
     with tqdm.tqdm(
         loader,
-        desc=(f"Test"),
+        desc="Inference",
         unit=" slide",
         ncols=80,
         unit_scale=batch_size,
@@ -1517,7 +1501,7 @@ def test_regression_masked(
 
     with tqdm.tqdm(
         loader,
-        desc=(f"Test"),
+        desc="Inference",
         unit=" slide",
         ncols=80,
         unit_scale=batch_size,
@@ -1750,7 +1734,7 @@ def test_ordinal(
 
     with tqdm.tqdm(
         loader,
-        desc=(f"Test"),
+        desc="Inference",
         unit=" slide",
         ncols=80,
         unit_scale=batch_size,
@@ -2077,7 +2061,7 @@ def test_survival(
     with autocast_context:
         with tqdm.tqdm(
             loader,
-            desc=(f"Test"),
+            desc="Test",
             unit=" patient",
             ncols=80,
             unit_scale=batch_size,
@@ -2358,7 +2342,7 @@ def test_on_regions(
 
     with tqdm.tqdm(
         loader,
-        desc=(f"Test"),
+        desc="Inference",
         unit=" slide",
         ncols=80,
         unit_scale=batch_size,
