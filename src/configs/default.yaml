@@ -1,0 +1,77 @@
+data:
+  train_csv:
+  tune_csv:
+  test_csv:
+
+output_dir: "output" # output directory
+
+task: "classification" # task type: classification, regression, survival
+
+num_classes: 6 # number of classes for classification task
+label_name: "label"
+label_mapping:
+
+metrics: # list of metrics to compute
+ - "quadratic_kappa"
+
+features_dir: "/path/to/precomputed/tile/features"
+features_dim: 1024
+
+model:
+  name: "hipt" # model name ("hipt", "lp" or "mlp")
+  level: "local" # hipt model level ("global" or "local")
+  batch_size: 1
+  embed_dim: ${features_dim}
+  hidden_dim: 256
+  num_layers: 3 # number of layers for "mlp" model
+  dropout: 0.0
+  region_size: 4096
+  patch_size: 256
+  embed_dim_patch: 384
+  embed_dim_region: 192
+  embed_dim_slide: 192
+  pretrain_weights: 'checkpoints/vit_4096_xs_dino.pth'
+  img_size_pretrained:
+  mask_attn_region: False
+  num_register_tokens_region: 0
+
+training:
+  nepochs: 100
+  batch_size: 1
+  gradient_accumulation: 32
+
+tuning:
+  batch_size: 1
+  tune_every: 1
+
+testing:
+  retrieve_checkpoint: "best"
+
+optim:
+  name: "adam"
+  lr: 0.0002
+  wd: 1e-5
+  lr_scheduler:
+    name: "step"
+    step_size: 20
+    gamma: 0.5
+
+early_stopping:
+  enable: false
+  tracking: "loss"
+  min_max: "min"
+  patience: 10
+  min_epoch: 30
+  save_all: false
+
+speed:
+  num_workers: 8 # number of workers for tiling slides
+
+wandb:
+  enable: false
+  project: "" # wandb project name
+  username: "" # wandb username
+  exp_name: "" # wandb experiment name
+  tags: [] # wandb tags
+  dir: "/home/user/"
+  group:
