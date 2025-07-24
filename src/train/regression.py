@@ -95,7 +95,7 @@ def main(args):
 
     print("Initializing model")
     model = ModelFactory(
-        name=cfg.model.name,
+        level=cfg.model.level,
         num_classes=1,
         options=cfg.model,
     ).get_model()
