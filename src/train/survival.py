@@ -1,28 +1,28 @@
 import argparse
+import multiprocessing as mp
 import os
 import time
-import tqdm
-import wandb
-import torch
-import pandas as pd
-import multiprocessing as mp
-
 from pathlib import Path
 
+import pandas as pd
+import torch
+import tqdm
+import wandb
+
+from src.data.dataset import DatasetOptions, ExtractedFeaturesSurvivalDataset
 from src.models import ModelFactory
 from src.utils import (
-    setup,
-    train_survival as train,
-    tune_survival as tune,
-    inference_survival as inference,
+    EarlyStopping,
     LossFactory,
     OptimizerFactory,
     SchedulerFactory,
-    EarlyStopping,
     compute_time,
-    update_log_dict,
 )
-from src.data.dataset import DatasetOptions, ExtractedFeaturesSurvivalDataset
+from src.utils import inference_survival as inference
+from src.utils import setup
+from src.utils import train_survival as train
+from src.utils import tune_survival as tune
+from src.utils import update_log_dict
 
 
 def get_args_parser(add_help: bool = True):
@@ -30,13 +30,18 @@ def get_args_parser(add_help: bool = True):
     parser.add_argument(
         "--config-file", default="", metavar="FILE", help="path to config file"
     )
+    parser.add_argument(
+        "opts",
+        help="Modify config options at the end of the command. For Yacs configs, use space-separated \"PATH.KEY VALUE\" pairs. For python-based LazyConfig, use \"path.key=value\".",
+        default=None,
+        nargs=argparse.REMAINDER,
+    )
     return parser
 
 
 def main(args):
 
-    config_file = args.config_file
-    cfg = setup(config_file)
+    cfg = setup(args)
 
     output_dir = Path(cfg.output_dir)
 
@@ -189,7 +194,7 @@ def main(args):
 
             # logging
             if cfg.wandb.enable:
-                wandb.log(log_dict, step=epoch + 1)
+                wandb.log(log_dict)
 
             epoch_end_time = time.time()
             epoch_mins, epoch_secs = compute_time(epoch_start_time, epoch_end_time)

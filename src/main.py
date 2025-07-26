@@ -1,14 +1,25 @@
-import sys
 import argparse
 import subprocess
+import sys
 
-from src.utils.config import get_cfg_from_file
+from src.utils.config import get_cfg_from_args
 
 
 def get_args_parser(add_help: bool = True):
     parser = argparse.ArgumentParser("hipt", add_help=add_help)
     parser.add_argument(
         "--config-file", default="", metavar="FILE", help="path to config file"
+    )
+    parser.add_argument(
+        "opts",
+        help="Modify config options at the end of the command. For Yacs configs, use space-separated \"PATH.KEY VALUE\" pairs. For python-based LazyConfig, use \"path.key=value\".",
+        default=None,
+        nargs=argparse.REMAINDER,
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=str,
+        help="output directory to save logs and checkpoints",
     )
     return parser
 
@@ -100,7 +111,7 @@ def survival_multi(config_file):
 def main(args):
 
     config_file = args.config_file
-    cfg = get_cfg_from_file(config_file)
+    cfg = get_cfg_from_args(args)
 
     multi_fold = False
     if cfg.data.fold_dir is not None:

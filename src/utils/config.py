@@ -19,15 +19,15 @@ def write_config(cfg, output_dir, name="config.yaml"):
     return saved_cfg_path
 
 
-def get_cfg_from_file(config_file):
+def get_cfg_from_args(args):
     default_cfg = OmegaConf.create(default_config)
-    cfg = OmegaConf.load(config_file)
-    cfg = OmegaConf.merge(default_cfg, cfg)
+    cfg = OmegaConf.load(args.config_file)
+    cfg = OmegaConf.merge(default_cfg, cfg, OmegaConf.from_cli(args.opts))
     OmegaConf.resolve(cfg)
     return cfg
 
 
-def setup(config_file):
+def setup(args):
     """
     Basic configuration setup without any distributed or GPU-specific initialization.
     This function:
@@ -36,7 +36,7 @@ def setup(config_file):
       - Fixes random seeds.
       - Creates the output directory.
     """
-    cfg = get_cfg_from_file(config_file)
+    cfg = get_cfg_from_args(args)
 
     run_id = datetime.datetime.now().strftime("%Y-%m-%d_%H_%M")
 

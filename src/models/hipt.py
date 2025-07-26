@@ -157,12 +157,13 @@ class LocalHIPT(BaseModel):
             else:
                 mask_patch = torch.cat((cls_token, mask_patch), dim=1)  # [M, num_patches+1]
 
-        # x = [M, 256, 384]
+        # x = [1, num_regions, num_patches, embed_dim_patch]
+        x = x.squeeze(0)
         x = self.vit_region(
             x.unfold(1, self.npatch, self.npatch).transpose(1, 2),
             mask=mask_patch,
-        )  # [M, 192]
-        x = self.global_phi(x)  # [M, 192]
+        )  # [num_regions, embed_dim_region]
+        x = self.global_phi(x)  # [num_regions, embed_dim_region]
 
         # in nn.TransformerEncoderLayer, batch_first defaults to False
         # hence, input is expected to be of shape (seq_length, batch, emb_size)
