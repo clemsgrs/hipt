@@ -18,11 +18,8 @@ features_dir: "/path/to/precomputed/tile/features"
 features_dim: 1024
 
 model:
-  name: "hipt" # model name ("hipt", "lp" or "mlp")
-  level: "local" # hipt model level ("global" or "local")
+  level: "local" # model level ("global" or "local")
   batch_size: 1
-  hidden_dim: 256
-  num_layers: 3 # number of layers for "mlp" model
   dropout: 0.0
   region_size: 4096
   patch_size: 256
