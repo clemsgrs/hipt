@@ -229,7 +229,7 @@ def main(args):
 
                 # logging
                 if cfg.wandb.enable:
-                    wandb.log(log_dict, step=epoch+1)
+                    wandb.log(log_dict)
 
                 epoch_end_time = time.time()
                 epoch_mins, epoch_secs = compute_time(epoch_start_time, epoch_end_time)
