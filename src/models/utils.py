@@ -1,4 +1,8 @@
-def update_state_dict(model_dict, state_dict):
+def update_state_dict(
+    *,
+    model_dict: dict,
+    state_dict: dict,
+):
     """
     Matches weights between `model_dict` and `state_dict`, accounting for:
     - Key mismatches (missing in model_dict)
@@ -38,13 +42,13 @@ def update_state_dict(model_dict, state_dict):
                     break
         if not matched_key:
             # key not found in state_dict
-            updated_state_dict[model_key] = model_val  # Keep original weights
+            updated_state_dict[model_key] = model_val  # keep original weights
             missing_keys += 1
             missing_keys_list.append(model_key)
-    # Log summary
-    msg = (
-        f"{success}/{len(model_dict)} weight(s) loaded successfully\n"
-        f"{shape_mismatch} weight(s) not loaded due to mismatching shapes: {shape_mismatch_list}\n"
-        f"{missing_keys} key(s) from checkpoint not found in model: {missing_keys_list}"
-    )
+    # log summary
+    msg = f"{success}/{len(model_dict)} weight(s) loaded successfully"
+    if shape_mismatch > 0:
+        msg += f"\n{shape_mismatch} weight(s) not loaded due to mismatching shapes: {shape_mismatch_list}"
+    if missing_keys > 0:
+        msg += f"\n{missing_keys} key(s) from checkpoint not found in model: {missing_keys_list}"
     return updated_state_dict, msg

@@ -105,7 +105,7 @@ class LocalHIPT(BaseModel):
             # remove `backbone.` prefix induced by multicrop wrapper
             state_dict = {k.replace("backbone.", ""): v for k, v in state_dict.items()}
             state_dict, msg = update_state_dict(
-                self.vit_region.state_dict(), state_dict
+                model_dict=self.vit_region.state_dict(), state_dict=state_dict
             )
             self.vit_region.load_state_dict(state_dict, strict=True)
             print(f"Pretrained weights found at {pretrained_weights}")

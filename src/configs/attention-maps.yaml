@@ -1,0 +1,52 @@
+model_id: "nphuvyvd"
+features_id: "jthnfzot"
+
+features_dir: "/data/temporary/clement/code/slide2vec/output/${features_id}"
+tiling_config: "${features_dir}/config.yaml"
+coordinates_dir: "${features_dir}/coordinates"
+
+output_dir: "output/attention-maps/${features_id}"
+
+wsi_name: "3da443b54bdf"
+wsi_path: "/data/temporary/leopard/data/slides/cologne/packed/${wsi_name}.tif"
+mask_path: "/data/temporary/leopard/data/slides/cologne/tissue_masks/${wsi_name}_tissue.tif"
+
+fold: 0
+level: "local"
+
+encoder:
+  name: "virchow2"
+  level: "${level}"
+  arch:
+  pretrained_weights:
+  batch_size: 1
+  mask_attn: false
+
+aggregator:
+  name: "hvit"
+  level: "${level}"
+  region_size: 2048
+  patch_size: 256
+  mask_attn: false
+  pretrained_weights: "/data/temporary/clement/leopard/baseline/survival-multi/${model_id}/checkpoints/fold_${fold}/best.pt"
+
+display: false # whether to display stitched heatmaps from multiple attention heads side by side
+downscale: 1
+threshold:
+highlight:
+opacity: 0.7 # set opacity for non-tissue content on stitched heatmap
+restrict_to_tissue: true
+gamma: 1.0
+font_fp: "/data/temporary/clement/code/hipt/montserrat.ttf"
+
+granularity:
+  patch: false
+  region: false
+  slide: false
+  offset:
+    patch: 16
+    region: 128
+    slide: 128
+
+wandb:
+  enable: false

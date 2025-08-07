@@ -3,6 +3,8 @@ import os
 from collections import OrderedDict, defaultdict
 from pathlib import Path
 from typing import Dict, Optional, Tuple
+import getpass
+from huggingface_hub import login
 
 import cv2
 import matplotlib
@@ -12,27 +14,45 @@ import torch
 import torch.nn as nn
 import torchvision
 import tqdm
+import omegaconf
 import wholeslidedata as wsd
-from einops import rearrange
 from PIL import Image, ImageDraw, ImageFont
 from scipy.ndimage import gaussian_filter, binary_closing
 from scipy.stats import rankdata
 
-import source.distributed as distributed
-import source.vision_transformer as vits
-from source.augmentations import RegionUnfolding
-from source.foundation_models import FoundationModelFactory
-from source.model_utils import Attn_Net_Gated
-from source.utils import hf_login, update_state_dict
-from source.wsi import WholeSlideImage
+import src.models.vision_transformer as vits
+from src.data.augmentations import RegionUnfolding
+from src.models.components import Attn_Net_Gated
+from src.models.utils import update_state_dict
+from src.interpretability.wsi import WholeSlideImage, SegmentationParameters
+from src.interpretability.fm import FoundationModelFactory
 
 
-def create_transforms(model, level):
+def get_config_from_path(config_path: Path | str):
+    full_cfg = omegaconf.OmegaConf.load(config_path)
+    cfg = full_cfg.tiling
+    if cfg.read_coordinates_from:
+        raise RuntimeError(
+            f"Provided tiling configuration might not be accurate as coordinates were read from: {cfg.read_coordinates_from}, please grab the tiling configuration from that folder instead"
+        )
+    return cfg
+
+
+def hf_login():
+    if "HF_TOKEN" not in os.environ:
+        hf_token = getpass.getpass(
+            "Enter your Hugging Face API token (input will not be visible): "
+        )
+        os.environ["HF_TOKEN"] = hf_token
+    login(os.environ["HF_TOKEN"])
+
+
+def create_transforms(model, level, patch_size):
     if level == "global":
         return model.get_transforms()
     elif level == "local":
         # check if model has get_transforms() method, if so add it in the compose
-        transforms_list = [torchvision.transforms.ToTensor(), RegionUnfolding(model.tile_size)]
+        transforms_list = [torchvision.transforms.ToTensor(), RegionUnfolding(patch_size)]
         if hasattr(model, "get_transforms") and callable(model.get_transforms):
             transforms_list.append(model.get_transforms())
         return torchvision.transforms.Compose(transforms_list)
@@ -40,29 +60,30 @@ def create_transforms(model, level):
         raise ValueError(f"Unknown model level: {level}")
 
 
-def get_encoder(
+def get_patch_transformer(
         model_options: Dict,
         model_device: torch.device = torch.device("cpu"),
 ):
     if model_options.name is not None:
         hf_login()
-        encoder = FoundationModelFactory(model_options).get_model()
+        patch_transformer = FoundationModelFactory(model_options).get_model()
     elif model_options.arch is not None:
-        encoder = get_patch_model(
+        patch_transformer = get_custom_patch_transformer(
             model_options.pretrained_weights,
             arch=model_options.arch,
             mask_attn=model_options.mask_attn,
             device=model_device,
-            verbose=distributed.is_main_process(),
+            verbose=True,
         )
-        # add 'tile_size' attribute to encoder
-        encoder.tile_size = model_options.patch_size
-    return encoder
+        # add 'tile_size' attribute to patch_transformer
+        patch_transformer.tile_size = model_options.patch_size
+    return patch_transformer
 
 
-def get_patch_model(
+def get_custom_patch_transformer(
     pretrained_weights: str,
     arch: str = "vit_small",
+    token_size: int = 16,
     mask_attn: bool = False,
     device: Optional[torch.device] = None,
     verbose: bool = True,
@@ -72,15 +93,15 @@ def get_patch_model(
         device = (
             torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
         )
-    patch_model = vits.__dict__[arch](
-        patch_size=16,
+    patch_transformer = vits.__dict__[arch](
+        patch_size=token_size,
         num_classes=0,
         mask_attn=mask_attn,
     )
-    for p in patch_model.parameters():
+    for p in patch_transformer.parameters():
         p.requires_grad = False
-    patch_model.eval()
-    patch_model.to(device)
+    patch_transformer.eval()
+    patch_transformer.to(device)
 
     if Path(pretrained_weights).is_file():
         if verbose:
@@ -94,23 +115,22 @@ def get_patch_model(
         state_dict = {k.replace("module.", ""): v for k, v in state_dict.items()}
         # remove `backbone.` prefix induced by multicrop wrapper
         state_dict = {k.replace("backbone.", ""): v for k, v in state_dict.items()}
-        state_dict, msg = update_state_dict(patch_model.state_dict(), state_dict)
-        patch_model.load_state_dict(state_dict, strict=True)
+        state_dict, msg = update_state_dict(model_dict=patch_transformer.state_dict(), state_dict=state_dict)
+        patch_transformer.load_state_dict(state_dict, strict=True)
         if verbose:
             print(f"Pretrained weights found at {pretrained_weights}")
             print(msg)
 
-    return patch_model
+    return patch_transformer
 
 
-def get_region_model(
-    state_dict,
+def get_region_transformer(
+    state_dict: dict,
     input_embed_dim: int,
+    region_size: int,
+    patch_size: int,
     arch: str = "vit4k_xs",
-    region_size: int = 4096,
-    patch_size: int = 256,
     mask_attn: bool = False,
-    img_size_pretrained: Optional[int] = None,
     device: Optional[torch.device] = None,
     verbose: bool = True,
 ):
@@ -118,28 +138,27 @@ def get_region_model(
         device = (
             torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
         )
-    region_model = vits.__dict__[arch](
+    region_transformer = vits.__dict__[arch](
         img_size=region_size,
         patch_size=patch_size,
         input_embed_dim=input_embed_dim,
         num_classes=0,
         mask_attn=mask_attn,
-        img_size_pretrained=img_size_pretrained,
     )
-    for p in region_model.parameters():
+    for p in region_transformer.parameters():
         p.requires_grad = False
-    region_model.eval()
-    region_model.to(device)
+    region_transformer.eval()
+    region_transformer.to(device)
 
     if verbose:
         print("Loading weights for region-level Transformer...")
     state_dict = {k.replace("vit_region.", ""): v for k, v in state_dict.items()}
-    state_dict, msg = update_state_dict(region_model.state_dict(), state_dict)
-    region_model.load_state_dict(state_dict, strict=True)
+    state_dict, msg = update_state_dict(model_dict=region_transformer.state_dict(), state_dict=state_dict)
+    region_transformer.load_state_dict(state_dict, strict=False)
     if verbose:
         print(msg)
 
-    return region_model
+    return region_transformer
 
 
 class SlideAgg(nn.Module):
@@ -189,24 +208,24 @@ class SlideAgg(nn.Module):
         return x_wsi
 
 
-def get_slide_model(
-    state_dict,
+def get_case_transformer(
+    state_dict: dict,
     device: Optional[torch.device] = None,
     verbose: bool = True,
 ):
-    slide_model = SlideAgg()
-    for p in slide_model.parameters():
+    case_transformer = SlideAgg()
+    for p in case_transformer.parameters():
         p.requires_grad = False
-    slide_model.eval()
-    slide_model.to(device)
+    case_transformer.eval()
+    case_transformer.to(device)
 
     if verbose:
         print("Loading weights for slide-level Transformer...")
-    state_dict, msg = update_state_dict(slide_model.state_dict(), state_dict)
-    slide_model.load_state_dict(state_dict, strict=True)
+    state_dict, msg = update_state_dict(model_dict=case_transformer.state_dict(), state_dict=state_dict)
+    case_transformer.load_state_dict(state_dict, strict=False)
     if verbose:
         print(msg)
-    return slide_model
+    return case_transformer
 
 
 def add_margin(pil_img, top, right, bottom, left, color):
@@ -260,8 +279,8 @@ def normalize_patch_scores(
 
 def concat_patch_scores(
     attns,
-    region_size: int = 4096,
-    patch_size: int = 256,
+    region_size: int,
+    patch_size: int,
     size: Optional[Tuple[int, int]] = None,
     method: str = 'min-max',
     min_val: Optional[float] = None,
@@ -418,7 +437,7 @@ def DrawMapFromCoords(
         # extract tile
         width, height = patch_size
         vis_spacing = wsi_object.get_level_spacing(vis_level)
-        tile = wsi_object.wsi.get_patch(x, y, width, height, spacing=vis_spacing, center=False)
+        tile = wsi_object.get_tile(x, y, width, height, vis_spacing)
 
         # downsample coordinates from level 0 to vis_level
         downsampled_x, downsampled_y = tuple(
@@ -442,15 +461,15 @@ def DrawMapFromCoords(
 
 
 def get_mask(
-    slide_path: str,
+    wsi_path: str,
     segmentation_mask_path: str,
     x: int,
     y: int,
-    region_size: int = 4096,
-    patch_size: int = 256,
-    mini_patch_size: int = 16,
-    spacing: float = 0.5,
-    backend: str = 'pyvips',
+    region_size: int,
+    patch_size: int,
+    token_size: int,
+    spacing: float,
+    backend: str = 'asap',
     downsample: int = 4,
     background_pixel_value: int = 0,
     tissue_pixel_value: int = 1,
@@ -458,7 +477,7 @@ def get_mask(
     offset: Optional[int] = None,
 ):
     # load the slide
-    wsi = wsd.WholeSlideImage(Path(slide_path), backend=backend)
+    wsi = wsd.WholeSlideImage(Path(wsi_path), backend=backend)
     # load segmentation mask
     mask = wsd.WholeSlideImage(Path(segmentation_mask_path), backend=backend)
     # scale coordinates from slide's level 0 to mask's level 0
@@ -471,9 +490,9 @@ def get_mask(
     # the ratio should thus give an integer
     sr = int(downsample_spacing / wsi.get_real_spacing(spacing))
     scaled_region_size = region_size // sr
-    # scale patch_size and mini_patch_size
+    # scale patch_size and token_size
     scaled_patch_size = patch_size // sr
-    scaled_mini_patch_size = mini_patch_size // sr
+    scaled_token_size = token_size // sr
 
     x_mask, y_mask = int(x * sx), int(y * sy)
     region_mask = mask.get_patch(
@@ -517,19 +536,19 @@ def get_mask(
     # compute tissue percentage for each mini patch in each patch
     region_patches = split_into_blocks(region_mask, scaled_patch_size)
 
-    region_mini_patches = []
+    region_tokenes = []
     for p in region_patches:
-        mp = split_into_blocks(p, scaled_mini_patch_size)
-        region_mini_patches.append(mp)
-    region_mini_patches = np.stack(region_mini_patches)
-    tissue = region_mini_patches == tissue_pixel_value
+        mp = split_into_blocks(p, scaled_token_size)
+        region_tokenes.append(mp)
+    region_tokenes = np.stack(region_tokenes)
+    tissue = region_tokenes == tissue_pixel_value
     pct = np.sum(tissue, axis=(-2, -1)) / tissue[0][0].size # (npatch**2, nminipatch**2)
     pct = torch.Tensor(pct)
 
-    mask_mini_patch = (pct > pct_thresh).int()  # (num_patches, nminipatch**2)
+    mask_token = (pct > pct_thresh).int()  # (num_patches, nminipatch**2)
     # add the [CLS] token to the mask
-    cls_token = mask_mini_patch.new_ones((mask_mini_patch.size(0),1))
-    mask_mini_patch = torch.cat((cls_token, mask_mini_patch), dim=1)  # [num_patches, nminipatch**2+1]
+    cls_token = mask_token.new_ones((mask_token.size(0),1))
+    mask_token = torch.cat((cls_token, mask_token), dim=1)  # [num_patches, nminipatch**2+1]
     # infer patch-level mask
     pct_patch = torch.sum(pct, axis=-1) / pct.numel()
     mask_patch = (pct_patch > pct_thresh).int().unsqueeze(0)
@@ -537,18 +556,18 @@ def get_mask(
     cls_token = mask_patch.new_ones((mask_patch.size(0),1))
     mask_patch = torch.cat((cls_token, mask_patch), dim=1)  # [1, num_patches+1]
 
-    return mask_patch, mask_mini_patch
+    return mask_patch, mask_token
 
 
 def generate_masks(
     slide_id: str,
-    slide_path: str,
+    wsi_path: str,
     segmentation_mask_path: str,
     region_dir: str,
-    region_size: int = 4096,
-    patch_size: int = 256,
-    mini_patch_size: int = 16,
-    spacing: float = 0.5,
+    region_size: int,
+    patch_size: int,
+    token_size: int,
+    spacing: float,
     backend: str = 'asap',
     downsample: int = 4,
     region_format: str = "jpg",
@@ -556,7 +575,7 @@ def generate_masks(
     pct_thresh: float = 0.0,
 ):
     # load the slide
-    wsi = wsd.WholeSlideImage(Path(slide_path), backend=backend)
+    wsi = wsd.WholeSlideImage(Path(wsi_path), backend=backend)
     # load segmentation mask
     mask = wsd.WholeSlideImage(Path(segmentation_mask_path), backend=backend)
     # scale coordinates from slide's level 0 to mask's level 0
@@ -569,9 +588,9 @@ def generate_masks(
     # the ratio should thus give an integer
     sr = round(downsample_spacing / wsi.get_real_spacing(spacing))
     scaled_region_size = region_size // sr
-    # scale patch_size and mini_patch_size
+    # scale patch_size and token_size
     scaled_patch_size = patch_size // sr
-    scaled_mini_patch_size = mini_patch_size // sr
+    scaled_token_size = token_size // sr
     # retrieve region's (x,y) coordinates
     # should appear in the same order as in the corresponding slide feature vector
     coordinates = sorted(
@@ -614,22 +633,22 @@ def generate_masks(
         # compute tissue percentage for each mini patch in each patch
         region_patches = split_into_blocks(region, scaled_patch_size)
 
-        region_mini_patches = []
+        region_tokenes = []
         for p in region_patches:
-            mp = split_into_blocks(p, scaled_mini_patch_size)
-            region_mini_patches.append(mp)
-        region_mini_patches = np.stack(region_mini_patches)
-        tissue = region_mini_patches == tissue_pixel_value
+            mp = split_into_blocks(p, scaled_token_size)
+            region_tokenes.append(mp)
+        region_tokenes = np.stack(region_tokenes)
+        tissue = region_tokenes == tissue_pixel_value
         tissue_pct = np.sum(tissue, axis=(-2, -1)) / tissue[0][0].size
         tissue_pcts.append(tissue_pct)
 
     pct = np.stack(tissue_pcts)  # (M, npatch**2, nminipatch**2)
     pct = torch.Tensor(pct)
 
-    mask_mini_patch = (pct > pct_thresh).int()  # (M, num_patches, nminipatch**2)
+    mask_token = (pct > pct_thresh).int()  # (M, num_patches, nminipatch**2)
     # add the [CLS] token to the mask
-    cls_token = mask_mini_patch.new_ones((mask_mini_patch.size(0),mask_mini_patch.size(1),1))
-    mask_mini_patch = torch.cat((cls_token, mask_mini_patch), dim=2)  # [M, num_patches, nminipatch**2+1]
+    cls_token = mask_token.new_ones((mask_token.size(0),mask_token.size(1),1))
+    mask_token = torch.cat((cls_token, mask_token), dim=2)  # [M, num_patches, nminipatch**2+1]
     # infer patch-level mask
     pct_patch = torch.sum(pct, axis=-1) / pct[0].numel()
     mask_patch = (pct_patch > pct_thresh).int()
@@ -637,77 +656,18 @@ def generate_masks(
     cls_token = mask_patch.new_ones((mask_patch.size(0),1))
     mask_patch = torch.cat((cls_token, mask_patch), dim=1)  # [M, num_patches+1]
 
-    return mask_patch, mask_mini_patch
-
-
-def get_patch_attention_scores(
-    patch: Image,
-    patch_model: nn.Module,
-    transforms: torchvision.transforms.Compose,
-    mini_patch_size: int = 16,
-    downscale: int = 1,
-    mini_patch_attn_mask: Optional[torch.Tensor] = None,
-    patch_device: torch.device = torch.device("cuda:0"),
-):
-    """
-    Forward pass in patch-level Transformer with attention scores saved.
-
-    Args:
-    - patch (PIL.Image): input patch
-    - patch_model (nn.Module): patch-level Transformer
-    - mini_patch_size (int): size of mini-patches used for unrolling input patch
-    - downscale (int): how much to downscale the output patch by (e.g. downscale=4 will resize 256x256 regions to 64x64)
-    - patch_device (torch.device): device on which patch_model is
-
-    Returns:
-    - attention (torch.Tensor): [1, nhead, patch_size/downscale, patch_size/downscale] tensor of attention maps
-    """
-    patch_size = patch.size[0]
-    n_minipatch = patch_size // mini_patch_size
-
-    with torch.no_grad():
-        batch = transforms(patch).unsqueeze(0)  # (1, 3, patch_size, patch_size)
-        batch = batch.to(patch_device, non_blocking=True)
-
-        attention = patch_model.get_last_selfattention(
-            batch,
-            mask=mini_patch_attn_mask,
-        )  # (1, 6, n_minipatch**2+1, n_minipatch**2+1)
-        nh = attention.shape[1]  # number of head
-        attention = attention[:, :, 0, 1:].reshape(
-            n_minipatch**2, nh, -1
-        )  # (1, 6, 1, n_minipatch**2) -> (n_minipatch**2, 6, 1)
-        attention = attention.reshape(
-            1, nh, n_minipatch, n_minipatch
-        )  # (1, 6, n_minipatch, n_minipatch)
-        attention = (
-            nn.functional.interpolate(
-                attention, scale_factor=int(mini_patch_size / downscale), mode="nearest"
-            )
-            .cpu()
-            .numpy()
-        )  # (1, 6, patch_size, patch_size) when downscale = 1
-        # 'nearest' interpolation guarantees the values in the up-sampled array
-        # lie in the same set as the values in the original array
-
-        if downscale != 1:
-            batch = nn.functional.interpolate(
-                batch, scale_factor=(1 / downscale), mode="nearest"
-            )
-
-    return tensorbatch2im(batch), attention
+    return mask_patch, mask_token
 
 
 def get_region_attention_scores(
     region: Image,
-    patch_model: nn.Module,
-    region_model: nn.Module,
+    patch_transformer: nn.Module,
+    region_transformer: nn.Module,
+    patch_size: int,
     transforms: torchvision.transforms.Compose,
-    patch_size: int = 256,
-    mini_patch_size: int = 16,
     downscale: int = 1,
     patch_attn_mask: Optional[torch.Tensor] = None,
-    mini_patch_attn_mask: Optional[torch.Tensor] = None,
+    token_attn_mask: Optional[torch.Tensor] = None,
     patch_device: torch.device = torch.device("cuda:0"),
     region_device: torch.device = torch.device("cuda:0"),
     compute_patch_attention: bool = True,
@@ -717,47 +677,47 @@ def get_region_attention_scores(
 
     Args:
     - region (PIL.Image): input region
-    - patch_model (nn.Module): patch-level Transformer
-    - region_model (nn.Module): region-level Transformer
-    - patch_size (int): size of patches used for unrolling input region
-    - mini_patch_size (int): size of mini-patches used for unrolling patch_model inputs
+    - patch_transformer (nn.Module): patch-level Transformer
+    - region_transformer (nn.Module): region-level Transformer
     - downscale (int): how much to downscale the output regions by (e.g. downscale=4 will resize 4096x4096 regions to 1024x1024)
-    - patch_device (torch.device): device on which patch_model is
-    - region_device (torch.device): device on which region_model is
+    - patch_device (torch.device): device on which patch_transformer is
+    - region_device (torch.device): device on which region_transformer is
 
     Returns:
     - np.array: [n_patch**2, patch_size/downscale, patch_size/downscale, 3] array sequence of image patch_size-sized patches from the input region.
     - patch_attention (torch.Tensor): [n_patch**2, nhead, patch_size/downscale, patch_size/downscale] tensor sequence of attention maps for patch_size-sized patches.
     - region_attention (torch.Tensor): [nhead, region_size/downscale, region_size/downscale] tensor sequence of attention maps for input region.
     """
+    token_size = patch_transformer.token_size
     region_size = region.size[0]
+
     n_patch = region_size // patch_size
-    n_minipatch = patch_size // mini_patch_size
+    n_token = patch_size // token_size
 
     with torch.no_grad():
         patches = transforms(region)  # [n_patch**2, 3, patch_size, patch_size]
         patches = patches.to(patch_device, non_blocking=True)
-        if mini_patch_attn_mask is not None:
-            mini_patch_attn_mask = mini_patch_attn_mask.to(patch_device, non_blocking=True)
-        patch_features = patch_model(patches, mask=mini_patch_attn_mask)  # (n_patch**2, 384)
+        if token_attn_mask is not None:
+            token_attn_mask = token_attn_mask.to(patch_device, non_blocking=True)
+        patch_features = patch_transformer(patches, mask=token_attn_mask)  # (n_patch**2, 384)
 
         patch_attention = None
         if compute_patch_attention:
-            patch_attention = patch_model.get_last_selfattention(
+            patch_attention = patch_transformer.get_last_selfattention(
                 patches,
-                mask=mini_patch_attn_mask,
-            )  # (n_patch**2, nhead, n_minipatch**2+1, n_minipatch**2+1)
+                mask=token_attn_mask,
+            )  # (n_patch**2, nhead, n_token**2+1, n_token**2+1)
             nh = patch_attention.shape[1]  # number of head
             patch_attention = patch_attention[:, :, 0, 1:].reshape(
                 n_patch**2, nh, -1
-            )  # (n_patch**2, nhead, n_minipatch**2)
+            )  # (n_patch**2, nhead, n_token**2)
             patch_attention = patch_attention.reshape(
-                n_patch**2, nh, n_minipatch, n_minipatch
-            )  # (n_patch**2, nhead, n_minipatch, n_minipatch)
+                n_patch**2, nh, n_token, n_token
+            )  # (n_patch**2, nhead, n_token, n_token)
             patch_attention = (
                 nn.functional.interpolate(
                     patch_attention,
-                    scale_factor=int(mini_patch_size / downscale),
+                    scale_factor=int(token_size / downscale),
                     mode="nearest",
                 )
                 .cpu()
@@ -771,7 +731,7 @@ def get_region_attention_scores(
         )  # (1, 384, n_patch, n_patch)
         if patch_attn_mask is not None:
             patch_attn_mask = patch_attn_mask.to(region_device)
-        region_attention = region_model.get_last_selfattention(
+        region_attention = region_transformer.get_last_selfattention(
             region_features.detach().to(region_device),
             mask=patch_attn_mask,
         )  # (1, nhead, n_patch**2+1, n_patch**2+1)
@@ -801,47 +761,45 @@ def get_region_attention_scores(
 
 
 def get_slide_attention_scores(
-    slide_path: Path,
+    wsi_path: Path,
     coordinates_dir: Path,
-    patch_model: nn.Module,
-    region_model: nn.Module,
-    slide_model: nn.Module,
+    patch_transformer: nn.Module,
+    region_transformer: nn.Module,
+    case_transformer: nn.Module,
+    patch_size: int,
     transforms: torchvision.transforms.Compose,
-    patch_size: int = 256,
     downscale: int = 1,
     granular: bool = False,
     offset: int = 1024,
-    spacing: Optional[float] = None,
     patch_attn_mask: Optional[torch.Tensor] = None,
-    mini_patch_attn_mask: Optional[torch.Tensor] = None,
+    token_attn_mask: Optional[torch.Tensor] = None,
     patch_device: torch.device = torch.device("cuda:0"),
     region_device: torch.device = torch.device("cuda:0"),
     slide_device: torch.device = torch.device("cuda:0"),
-    main_process: bool = True,
+    verbose: bool = True,
 ):
     """
     Forward pass in hierarchical model with attention scores saved.
 
     Args:
-    - slide_path (Path): path to the slide
+    - wsi_path (Path): path to the slide
     - coordinates_dir (Path): path to root folder containing tiles coordinates
-    - patch_model (nn.Module): patch-level Transformer
-    - region_model (nn.Module): region-level Transformer
-    - slide_model (nn.Module): slide-level Transformer
-    - patch_size (int): size of patches used for unrolling input region
+    - patch_transformer (nn.Module): patch-level Transformer
+    - region_transformer (nn.Module): region-level Transformer
+    - case_transformer (nn.Module): slide-level Transformer
     - downscale (int): how much to downscale the output regions by (e.g. downscale=4 will resize 4096x4096 regions to 1024x1024)
-    - patch_device (torch.device): device on which patch_model is
-    - region_device (torch.device): device on which region_model is
-    - main_process (bool): controls tqdm display when running with multiple gpus
+    - patch_device (torch.device): device on which patch_transformer is
+    - region_device (torch.device): device on which region_transformer is
+    - verbose (bool): controls tqdm display when running with multiple gpus
 
     Returns:
     - np.array: [n_patch**2, patch_size/downscale, patch_size/downscale, 3] array sequence of image patch_size-sized patches from the input region.
     - patch_attention (torch.Tensor): [n_patch**2, nhead, patch_size/downscale, patch_size/downscale] tensor sequence of attention maps for patch_size-sized patches.
     - region_attention (torch.Tensor): [nhead, region_size/downscale, region_size/downscale] tensor sequence of attention maps for input region.
     """
-    wsi = wsd.WholeSlideImage(slide_path, backend="asap")
+    wsi = wsd.WholeSlideImage(wsi_path, backend="asap")
 
-    slide_id = slide_path.stem.replace(" ", "_")
+    slide_id = wsi_path.stem.replace(" ", "_")
     coordinates_file = coordinates_dir / f"{slide_id}.npy"
     coordinates_arr = np.load(coordinates_file)
     nregions = len(coordinates_arr)
@@ -858,11 +816,11 @@ def get_slide_attention_scores(
         resize_factor = coordinates_arr["resize_factor"][0]
 
     region_spacing = wsi.spacings[region_level]
-    region_size = int(region_size_resized / resize_factor)
+    region_size = int(round(region_size_resized / resize_factor,0))
 
     if granular:
 
-        assert slide_path
+        assert wsi_path
         w, h = wsi.shapes[region_level]
 
         offset_ = offset
@@ -902,7 +860,7 @@ def get_slide_attention_scores(
                             desc=f"Gathering attention scores [{i*(2*ncomp*ncomp)+j*(ncomp*ncomp)+offset_x*ncomp+offset_y+1-skip_count}/{(4*ncomp**2)-4*ncomp+1}]",
                             unit="region",
                             leave=True,
-                            disable=not main_process,
+                            disable=not verbose,
                         ) as t1:
 
                             for k, (x,y) in enumerate(t1):
@@ -931,10 +889,10 @@ def get_slide_attention_scores(
 
                                     patches = transforms(offset_region)
                                     patches = patches.to(patch_device, non_blocking=True)
-                                    mpm = None
-                                    if mini_patch_attn_mask is not None:
-                                        mpm = mini_patch_attn_mask[k].to(patch_device, non_blocking=True)
-                                    patch_features = patch_model(patches, mask=mpm)  # (n_patch**2, 384)
+                                    token_mask = None
+                                    if token_attn_mask is not None:
+                                        token_mask = token_attn_mask[k].to(patch_device, non_blocking=True)
+                                    patch_features = patch_transformer(patches, mask=token_mask)  # (n_patch**2, 384)
 
                                     regions = (
                                         patch_features.unfold(0, n_patch, n_patch)
@@ -942,10 +900,10 @@ def get_slide_attention_scores(
                                         .unsqueeze(dim=0)
                                     )  # (1, 384, n_patch, n_patch)
                                     regions = regions.to(region_device, non_blocking=True)
-                                    pm = None
+                                    patch_mask = None
                                     if patch_attn_mask is not None:
-                                        pm = patch_attn_mask[k].unsqueeze(0).to(region_device, non_blocking=True)
-                                    region_features = region_model(regions, mask=pm)  # (1, 192)
+                                        patch_mask = patch_attn_mask[k].unsqueeze(0).to(region_device, non_blocking=True)
+                                    region_features = region_transformer(regions, mask=patch_mask)  # (1, 192)
 
                                     features.append(region_features)
 
@@ -953,7 +911,7 @@ def get_slide_attention_scores(
 
                             feature_seq = torch.stack(features, dim=0).squeeze(1)  # (M, 192)
                             feature_seq = feature_seq.to(slide_device, non_blocking=True)
-                            slide_attention = slide_model(feature_seq, return_attention=True)
+                            slide_attention = case_transformer(feature_seq, return_attention=True)
                             slide_attention = slide_attention.squeeze(0)  # (M)
                             slide_attention = normalize_slide_scores(slide_attention.cpu().numpy())  # (M)
                             slide_attention *= 100
@@ -1039,7 +997,7 @@ def get_slide_attention_scores(
             desc="Gathering attention scores",
             unit="region",
             leave=True,
-            disable=not main_process,
+            disable=not verbose,
         ) as t1:
             for k, (x,y) in enumerate(t1):
                 region_arr = wsi.get_patch(
@@ -1060,10 +1018,10 @@ def get_slide_attention_scores(
                 with torch.no_grad():
                     patches = transforms(region)  # (n_patch**2, 3, patch_size, patch_size)
                     patches = patches.to(patch_device, non_blocking=True)
-                    mpm = None
-                    if mini_patch_attn_mask is not None:
-                        mpm = mini_patch_attn_mask[k].to(patch_device, non_blocking=True)
-                    patch_features = patch_model(patches, mask=mpm)  # (n_patch**2, 384)
+                    token_mask = None
+                    if token_attn_mask is not None:
+                        token_mask = token_attn_mask[k].to(patch_device, non_blocking=True)
+                    patch_features = patch_transformer(patches, mask=token_mask)  # (n_patch**2, 384)
 
                     regions = (
                         patch_features.unfold(0, n_patch, n_patch)
@@ -1071,10 +1029,10 @@ def get_slide_attention_scores(
                         .unsqueeze(dim=0)
                     )  # (1, 384, n_patch, n_patch)
                     regions = regions.to(region_device, non_blocking=True)
-                    pm = None
+                    patch_mask = None
                     if patch_attn_mask is not None:
-                        pm = patch_attn_mask[k].unsqueeze(0).to(region_device, non_blocking=True)
-                    region_features = region_model(regions, mask=pm)  # (1, 192)
+                        patch_mask = patch_attn_mask[k].unsqueeze(0).to(region_device, non_blocking=True)
+                    region_features = region_transformer(regions, mask=patch_mask)  # (1, 192)
 
                     features.append(region_features)
 
@@ -1082,7 +1040,7 @@ def get_slide_attention_scores(
 
             feature_seq = torch.stack(features, dim=0).squeeze(1)  # (M, 192)
             feature_seq = feature_seq.to(slide_device, non_blocking=True)
-            slide_attention = slide_model(feature_seq, return_attention=True)
+            slide_attention = case_transformer(feature_seq, return_attention=True)
             slide_attention = slide_attention.squeeze(0)  # (M)
             slide_attention = normalize_slide_scores(slide_attention.cpu().numpy())  # (M)
             slide_attention = slide_attention.reshape(-1, 1, 1)  # (M, 1, 1)
@@ -1105,1382 +1063,50 @@ def get_slide_attention_scores(
     return slide_attention, coords
 
 
-def create_patch_heatmaps_indiv(
-    patch: Image,
-    patch_model: nn.Module,
-    output_dir: Path,
-    patch_size: int = 256,
-    mini_patch_size: int = 16,
-    threshold: float = 0.5,
-    alpha: float = 0.5,
-    cmap: matplotlib.colors.LinearSegmentedColormap = plt.get_cmap("coolwarm"),
-    granular: bool = False,
-    offset: int = 16,
-    downscale: int = 1,
-    patch_device: torch.device = torch.device("cuda:0"),
-):
-    """
-    Creates patch heatmaps (saved individually).
-
-    Args:
-    - patch (PIL.Image): input patch
-    - patch_model (nn.Module): patch-level Transformer
-    - output_dir (Path): output directory for saving heatmaps
-    - patch_size (int): size of input patch
-    - mini_patch_size (int): size of mini-patches used for unrolling patch_model inputs
-    - threshold (float): filter out mini-patches with attention scores lower than this value (set to None to disbale heatmap thresholding)
-    - alpha (float): image blending factor for cv2.addWeighted
-    - cmap (matplotlib.pyplot): colormap for creating heatmaps
-    - granular (bool): create additional offset patches to get more granular heatmaps
-    - offset (int): if granular is True, uses this value to offset patches
-    - downscale (int): how much to downscale the output heatmap by (e.g. downscale=4 will resize 256x256 heatmaps to 64x64)
-    - patch_device (torch.device): device on which patch_model is
-    """
-    patch1 = patch.copy()
-    _, att = get_patch_attention_scores(
-        patch1, patch_model, mini_patch_size=mini_patch_size, downscale=downscale, patch_device=patch_device
-    )
-    offset_ = offset
-
-    if granular:
-        offset = int(offset_ * patch_size / 256)
-        patch2 = add_margin(
-            patch.crop((offset, offset, patch_size, patch_size)),
-            top=0,
-            left=0,
-            bottom=offset,
-            right=offset,
-            color=(255, 255, 255),
-        )
-        _, att_2 = get_patch_attention_scores(
-            patch2,
-            patch_model,
-            mini_patch_size=mini_patch_size,
-            downscale=downscale,
-            patch_device=patch_device,
-        )
-
-    save_region = np.array(patch.copy())
-    nhead_patch = patch_model.num_heads
-
-    with tqdm.tqdm(
-        range(nhead_patch),
-        desc="Patch-level Transformer heatmaps",
-        unit="head",
-        leave=True,
-    ) as t:
-        for i in t:
-            att_scores = normalize_patch_scores(att[:, i, :, :], size=(patch_size,) * 2)
-
-            if granular:
-                att_scores_2 = normalize_patch_scores(
-                    att_2[:, i, :, :], size=(patch_size,) * 2
-                )
-                att_scores *= 100
-                att_scores_2 *= 100
-                new_att_scores_2 = np.zeros_like(att_scores_2)
-                new_att_scores_2[offset:patch_size, offset:patch_size] = att_scores_2[
-                    : (patch_size - offset), : (patch_size - offset)
-                ]
-                patch_overlay = np.ones_like(att_scores_2) * 100
-                patch_overlay[offset:patch_size, offset:patch_size] += 100
-                att_scores = (att_scores + new_att_scores_2) / patch_overlay
-
-            if threshold != None:
-                att_mask = att_scores.copy()
-                att_mask[att_mask < threshold] = 0
-                att_mask[att_mask >= threshold] = 0.95
-
-                color_block = (cmap(att_mask) * 255)[:, :, :3].astype(np.uint8)
-                patch_hm = cv2.addWeighted(
-                    color_block,
-                    alpha,
-                    save_region.copy(),
-                    1 - alpha,
-                    0,
-                    save_region.copy(),
-                )
-                patch_hm[att_mask == 0] = 0
-                img_inverse = save_region.copy()
-                img_inverse[att_mask == 0.95] = 0
-                patch_hm = patch_hm + img_inverse
-                img_thresh = Image.fromarray(patch_hm)
-                img_thresh.save(
-                    Path(output_dir, f"{patch_size}_head_{i}_thresh.png")
-                )
-
-            color_block = (cmap(att_scores) * 255)[:, :, :3].astype(np.uint8)
-            patch_hm = cv2.addWeighted(
-                color_block, alpha, save_region.copy(), 1 - alpha, 0, save_region.copy()
-            )
-            img = Image.fromarray(patch_hm)
-            img.save(Path(output_dir, f"{patch_size}_head_{i}.png"))
-
-
-def create_patch_heatmaps_concat(
-    patch: Image,
-    patch_model: nn.Module,
-    output_dir: Path,
-    patch_size: int = 256,
-    mini_patch_size: int = 16,
-    fname: str = "patch",
-    threshold: float = 0.5,
-    alpha: float = 0.5,
-    cmap: matplotlib.colors.LinearSegmentedColormap = plt.get_cmap("coolwarm"),
-    granular: bool = False,
-    offset: int = 16,
-    downscale: int = 1,
-    patch_device: torch.device = torch.device("cuda:0"),
-):
-    """
-    Creates patch heatmaps (concatenated for easy comparison)
-
-    Args:
-    - patch (PIL.Image): input patch
-    - patch_model (nn.Module): patch-level Transformer
-    - output_dir (Path): output directory for saving heatmaps
-    - patch_size (int): size of input patch
-    - mini_patch_size (int): size of mini-patches used for unrolling patch_model inputs
-    - fname (str): file naming template
-    - threshold (float): filter out mini-patches with attention scores lower than this value (set to None to disbale heatmap thresholding)
-    - alpha (float): image blending factor for cv2.addWeighted
-    - cmap (matplotlib.pyplot): colormap for creating heatmaps
-    - granular (bool): create additional offset patches to get more granular heatmaps
-    - offset (int): if granular is True, uses this value to offset patches
-    - downscale (int): how much to downscale the output heatmap by (e.g. downscale=4 will resize 256x256 heatmaps to 64x64)
-    - patch_device (torch.device): device on which patch_model is
-    """
-    patch1 = patch.copy()
-    _, att = get_patch_attention_scores(
-        patch1, patch_model, mini_patch_size=mini_patch_size, downscale=downscale, patch_device=patch_device
-    )
-    offset_ = offset
-
-    if granular:
-        offset = int(offset_ * patch_size / 256)
-        patch2 = add_margin(
-            patch.crop((offset, offset, patch_size, patch_size)),
-            top=0,
-            left=0,
-            bottom=offset,
-            right=offset,
-            color=(255, 255, 255),
-        )
-        _, att_2 = get_patch_attention_scores(
-            patch2,
-            patch_model,
-            mini_patch_size=mini_patch_size,
-            downscale=downscale,
-            patch_device=patch_device,
-        )
-
-    save_region = np.array(patch.copy())
-    nhead_patch = patch_model.num_heads
-
-    hms, hms_thresh = [], []
-
-    with tqdm.tqdm(
-        range(nhead_patch),
-        desc="Patch-level Transformer heatmaps",
-        unit="head",
-        leave=True,
-    ) as t:
-        for i in t:
-            att_scores = normalize_patch_scores(att[:, i, :, :], size=(patch_size,) * 2)
-
-            if granular:
-                att_scores_2 = normalize_patch_scores(
-                    att_2[:, i, :, :], size=(patch_size,) * 2
-                )
-                att_scores *= 100
-                att_scores_2 *= 100
-                new_att_scores_2 = np.zeros_like(att_scores_2)
-                new_att_scores_2[offset:patch_size, offset:patch_size] = att_scores_2[
-                    : (patch_size - offset), : (patch_size - offset)
-                ]
-                patch_overlay = np.ones_like(att_scores_2) * 100
-                patch_overlay[offset:patch_size, offset:patch_size] += 100
-                att_scores = (att_scores + new_att_scores_2) / patch_overlay
-
-            if threshold != None:
-                att_mask = att_scores.copy()
-                att_mask[att_mask < threshold] = 0
-                att_mask[att_mask >= threshold] = 0.95
-
-                color_block = (cmap(att_mask) * 255)[:, :, :3].astype(np.uint8)
-                region_hm = cv2.addWeighted(
-                    color_block,
-                    alpha,
-                    save_region.copy(),
-                    1 - alpha,
-                    0,
-                    save_region.copy(),
-                )
-                region_hm[att_mask == 0] = 0
-                img_inverse = save_region.copy()
-                img_inverse[att_mask == 0.95] = 0
-                region_hm = region_hm + img_inverse
-                hms_thresh.append(region_hm)
-
-            color_block = (cmap(att_scores) * 255)[:, :, :3].astype(np.uint8)
-            region_hm = cv2.addWeighted(
-                color_block, alpha, save_region.copy(), 1 - alpha, 0, save_region.copy()
-            )
-            hms.append(region_hm)
-
-    hms = [Image.fromarray(img) for img in hms]
-    hms_thresh = [Image.fromarray(img) for img in hms_thresh]
-
-    concat_img = getConcatImage(
-        [getConcatImage(hms[0:3]), getConcatImage(hms[3:6])], how="vertical"
-    )
-
-    concat_img.save(Path(output_dir, f"{fname}_{patch_size}_hm.png"))
-
-    concat_img_thresh = getConcatImage(
-        [getConcatImage(hms_thresh[0:3]), getConcatImage(hms_thresh[3:6])],
-        how="vertical",
-    )
-    concat_img_thresh.save(Path(output_dir, f"{fname}_{patch_size}_thresh.png"))
-
-
-
-    # """
-    # Forward pass in hierarchical model with attention scores saved.
-
-    # Args:
-    # - region (PIL.Image): input region
-    # - patch_model (torch.nn): patch-level ViT
-    # - region_model (torch.nn): region-level Transformer
-    # - patch_size (int): size of patches used for unrolling input region
-    # - mini_patch_size (int): size of mini-patches used for unrolling patch_model inputs
-    # - downscale (int): how much to downscale the output image by (e.g. downscale=4 & input image size 4096x4096 will give an output image of size 1024x1024)
-
-    # Returns:
-    # - np.array: [n_patch**2, patch_size/downscale, patch_size/downscale, 3] array sequence of image patch_size-sized patches from the input region.
-    # - patch_attention (torch.Tensor): [n_patch**2, nhead, patch_size/downscale, patch_size/downscale] tensor sequence of attention maps for patch_size-sized patches.
-    # - region_attention (torch.Tensor): [nhead, region_size/downscale, region_size/downscale] tensor sequence of attention maps for input region.
-    # """
-    # t = transforms.Compose(
-    #     [transforms.ToTensor(), transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5])]
-    # )
-    # region_size = region.size[0]
-    # n_patch = region_size // patch_size
-    # n_minipatch = patch_size // mini_patch_size
-
-    # with torch.no_grad():
-    #     patches = (
-    #         t(region)
-    #         .unsqueeze(0)
-    #         .unfold(2, patch_size, patch_size)
-    #         .unfold(3, patch_size, patch_size)
-    #     )  # (1, 3, region_size, region_size) -> (1, 3, n_patch, n_patch, patch_size, patch_size)
-    #     patches = rearrange(
-    #         patches, "b c p1 p2 w h -> (b p1 p2) c w h"
-    #     )  # (n_patch**2, 3, patch_size, patch_size)
-    #     patches = patches.to(patch_device, non_blocking=True)
-    #     patch_features = patch_model(patches)  # (n_patch**2, 384)
-
-    #     patch_attention = patch_model.get_last_selfattention(
-    #         patches
-    #     )  # (n_patch**2, nhead, n_minipatch**2+1, n_minipatch**2+1)
-    #     nh = patch_attention.shape[1]  # number of head
-    #     patch_attention = patch_attention[:, :, 0, 1:].reshape(
-    #         n_patch**2, nh, -1
-    #     )  # (n_patch**2, nhead, n_minipatch**2)
-    #     patch_attention = patch_attention.reshape(
-    #         n_patch**2, nh, n_minipatch, n_minipatch
-    #     )  # (n_patch**2, nhead, n_minipatch, n_minipatch)
-    #     patch_attention = (
-    #         nn.functional.interpolate(
-    #             patch_attention,
-    #             scale_factor=int(mini_patch_size / downscale),
-    #             mode="nearest",
-    #         )
-    #         .cpu()
-    #         .numpy()
-    #     )  # (n_patch**2, nhead, patch_size, patch_size) when downscale = 1
-    #     # 'nearest' interpolation guarantees the values in the up-sampled array
-    #     # lie in the same set as the values in the original array
-
-    #     region_features = (
-    #         patch_features.unfold(0, n_patch, n_patch).transpose(0, 1).unsqueeze(dim=0)
-    #     )  # (1, 384, n_patch, n_patch)
-    #     region_attention = region_model.get_last_selfattention(
-    #         region_features.detach().to(region_device)
-    #     )  # (1, nhead, n_patch**2+1, n_patch**2+1)
-    #     nh = region_attention.shape[1]  # number of head
-    #     region_attention = region_attention[0, :, 0, 1:].reshape(
-    #         nh, -1
-    #     )  # (nhead, 1, n_patch**2) -> (nhead, n_patch**2)
-    #     region_attention = region_attention.reshape(
-    #         nh, n_patch, n_patch
-    #     )  # (nhead, n_patch, n_patch)
-    #     region_attention = (
-    #         nn.functional.interpolate(
-    #             region_attention.unsqueeze(0),
-    #             scale_factor=int(patch_size / downscale),
-    #             mode="nearest",
-    #         )[0]
-    #         .cpu()
-    #         .numpy()
-    #     )  # (nhead, region_size, region_size) when downscale = 1
-
-    #     if downscale != 1:
-    #         patches = nn.functional.interpolate(
-    #             patches, scale_factor=(1 / downscale), mode="nearest"
-    #         )
-
-    # return tensorbatch2im(patches), patch_attention, region_attention
-
-
-def create_region_heatmaps_indiv(
-    region: Image,
-    patch_model: nn.Module,
-    region_model: nn.Module,
-    transforms: torchvision.transforms.Compose,
-    output_dir: Path,
-    patch_size: int = 256,
-    mini_patch_size: int = 16,
-    fname: str = "region",
-    downscale: int = 1,
-    alpha: float = 0.5,
-    cmap: matplotlib.colors.LinearSegmentedColormap = plt.get_cmap("coolwarm"),
-    threshold: Optional[float] = None,
-    granular: bool = False,
-    offset: int = 128,
-    patch_device: torch.device = torch.device("cuda:0"),
-    region_device: torch.device = torch.device("cuda:0"),
-):
-    """
-    Creates following region heatmaps: patch-level ViT, region-level ViT & hierarchical heatmaps
-
-    Args:
-    - region (PIL.Image): input region
-    - patch_model (nn.Module): patch-level Transformer
-    - region_model (nn.Module): region-level Transformer
-    - output_dir (Path): output directory for saving heatmaps
-    - patch_size (int): size of patches used for unrolling input region
-    - mini_patch_size (int): size of mini-patches used for unrolling patch_model inputs
-    - fname (str): file naming template
-    - downscale (int): how much to downscale the output heatmap by (e.g. downscale=4 will resize 256x256 heatmaps to 64x64)
-    - alpha (float): image blending factor for cv2.addWeighted
-    - cmap (matplotlib.pyplot): colormap for creating heatmaps
-    - threshold (float): filter out patches with attention scores lower than this value (set to None to disbale heatmap thresholding)
-    - granular (bool): create additional offset patches to get more granular heatmaps
-    - offset (int): if granular is True, uses this value to offset patches
-    - patch_device (torch.device): device on which patch_model is
-    - region_device (torch.device): device on which region_model is
-    """
-    region_size = region.size[0]
-    n_patch = region_size // patch_size
-
-    nhead_patch = patch_model.num_heads
-    nhead_region = region_model.num_heads
-    offset_ = offset
-
-    _, patch_att, region_att = get_region_attention_scores(
-        region,
-        patch_model,
-        region_model,
-        transforms=transforms,
-        patch_size=patch_size,
-        mini_patch_size=mini_patch_size,
-        downscale=downscale,
-        patch_device=patch_device,
-        region_device=region_device,
-    )  # (n_patch**2, nhead, patch_size, patch_size) when downscale = 1
-
-    if granular:
-        offset = int(offset_ * region_size / 4096)
-        region2 = add_margin(
-            region.crop((offset, offset, region_size, region_size)),
-            top=0,
-            left=0,
-            bottom=offset,
-            right=offset,
-            color=(255, 255, 255),
-        )
-        region3 = add_margin(
-            region.crop((offset * 2, offset * 2, region_size, region_size)),
-            top=0,
-            left=0,
-            bottom=offset * 2,
-            right=offset * 2,
-            color=(255, 255, 255),
-        )
-        region4 = add_margin(
-            region.crop((offset * 3, offset * 3, region_size, region_size)),
-            top=0,
-            left=0,
-            bottom=offset * 3,
-            right=offset * 3,
-            color=(255, 255, 255),
-        )
-
-        _, patch_att_2, region_att_2 = get_region_attention_scores(
-            region2,
-            patch_model,
-            region_model,
-            transforms=transforms,
-            patch_size=patch_size,
-            mini_patch_size=mini_patch_size,
-            downscale=downscale,
-            patch_device=patch_device,
-            region_device=region_device,
-        )
-        _, _, region_att_3 = get_region_attention_scores(
-            region3,
-            patch_model,
-            region_model,
-            transforms=transforms,
-            patch_size=patch_size,
-            mini_patch_size=mini_patch_size,
-            downscale=downscale,
-            patch_device=patch_device,
-            region_device=region_device,
-            compute_patch_attention=False,
-        )
-        _, _, region_att_4 = get_region_attention_scores(
-            region4,
-            patch_model,
-            region_model,
-            transforms=transforms,
-            patch_size=patch_size,
-            mini_patch_size=mini_patch_size,
-            downscale=downscale,
-            patch_device=patch_device,
-            region_device=region_device,
-            compute_patch_attention=False,
-        )
-
-        offset_2 = offset // downscale
-        offset_3 = (offset * 2) // downscale
-        offset_4 = (offset * 3) // downscale
-
-    s = region_size // downscale
-    # given region is an RGB image, so the default filter for resizing is Resampling.BICUBIC
-    # which is fine as we're resizing the image here, not attention scores
-    save_region = np.array(region.resize((s, s)))
-
-    patch_output_dir = Path(output_dir, f"{fname}_{patch_size}")
-    patch_output_dir.mkdir(exist_ok=True, parents=True)
-
-    with tqdm.tqdm(
-        range(nhead_patch),
-        desc="Patch-level Transformer heatmaps",
-        unit="head",
-        leave=True,
-    ) as t:
-        for i in t:
-            patch_att_scores = concat_patch_scores(
-                patch_att[:, i, :, :],
-                region_size=region_size,
-                patch_size=patch_size,
-                size=(s // n_patch,) * 2,
-            )
-
-            if granular:
-                patch_att_scores_2 = concat_patch_scores(
-                    patch_att_2[:, i, :, :],
-                    region_size=region_size,
-                    patch_size=patch_size,
-                    size=(s // n_patch,) * 2,
-                )
-                patch_att_scores *= 100
-                patch_att_scores_2 *= 100
-                new_patch_att_scores_2 = np.zeros_like(patch_att_scores_2)
-                new_patch_att_scores_2[offset_2:s, offset_2:s] = patch_att_scores_2[
-                    : (s - offset_2), : (s - offset_2)
-                ]
-                patch_overlay = np.ones_like(patch_att_scores_2) * 100
-                patch_overlay[offset_2:s, offset_2:s] += 100
-                patch_att_scores = (
-                    patch_att_scores + new_patch_att_scores_2
-                ) / patch_overlay
-
-            if threshold != None:
-                thresh_output_dir = Path(output_dir, f"{fname}_{patch_size}_thresh")
-                thresh_output_dir.mkdir(exist_ok=True, parents=True)
-
-                att_mask = patch_att_scores.copy()
-                att_mask[att_mask < threshold] = 0
-                att_mask[att_mask >= threshold] = 0.95
-
-                patch_color_block = (cmap(att_mask) * 255)[:, :, :3].astype(np.uint8)
-                patch_hm = cv2.addWeighted(
-                    patch_color_block,
-                    alpha,
-                    save_region.copy(),
-                    1 - alpha,
-                    0,
-                    save_region.copy(),
-                )
-                patch_hm[att_mask == 0] = 0
-                img_inverse = save_region.copy()
-                img_inverse[att_mask == 0.95] = 0
-                patch_hm = patch_hm + img_inverse
-                img = Image.fromarray(patch_hm)
-                img.save(Path(thresh_output_dir, f"head_{i}.png"))
-
-            patch_color_block = (cmap(patch_att_scores) * 255)[:, :, :3].astype(
-                np.uint8
-            )
-            patch_hm = cv2.addWeighted(
-                patch_color_block,
-                alpha,
-                save_region.copy(),
-                1 - alpha,
-                0,
-                save_region.copy(),
-            )
-            img = Image.fromarray(patch_hm)
-            img.save(Path(patch_output_dir, f"head_{i}.png"))
-
-    region_output_dir = Path(output_dir, f"{fname}_{region_size}")
-    region_output_dir.mkdir(exist_ok=True, parents=True)
-
-    with tqdm.tqdm(
-        range(nhead_region),
-        desc="Region-level Transformer heatmaps",
-        unit="head",
-        leave=True,
-    ) as t:
-        for j in t:
-            region_att_scores = normalize_region_scores(region_att[j], size=(s,) * 2, min_val=region_att[j].min(), max_val=region_att[j].max())
-
-            if granular:
-                region_att_scores_2 = normalize_region_scores(
-                    region_att_2[j], size=(s,) * 2, min_val=region_att_2[j].min(), max_val=region_att_2[j].max()
-                )
-                region_att_scores_3 = normalize_region_scores(
-                    region_att_3[j], size=(s,) * 2, min_val=region_att_3[j].min(), max_val=region_att_3[j].max()
-                )
-                region_att_scores_4 = normalize_region_scores(
-                    region_att_4[j], size=(s,) * 2, min_val=region_att_4[j].min(), max_val=region_att_4[j].max()
-                )
-                region_att_scores *= 100
-                region_att_scores_2 *= 100
-                region_att_scores_3 *= 100
-                region_att_scores_4 *= 100
-                new_region_att_scores_2 = np.zeros_like(region_att_scores_2)
-                new_region_att_scores_2[offset_2:s, offset_2:s] = region_att_scores_2[
-                    : (s - offset_2), : (s - offset_2)
-                ]
-                new_region_att_scores_3 = np.zeros_like(region_att_scores_3)
-                new_region_att_scores_3[offset_3:s, offset_3:s] = region_att_scores_3[
-                    : (s - offset_3), : (s - offset_3)
-                ]
-                new_region_att_scores_4 = np.zeros_like(region_att_scores_4)
-                new_region_att_scores_4[offset_4:s, offset_4:s] = region_att_scores_4[
-                    : (s - offset_4), : (s - offset_4)
-                ]
-                region_overlay = np.ones_like(new_region_att_scores_2) * 100
-                region_overlay[offset_2:s, offset_2:s] += 100
-                region_overlay[offset_3:s, offset_3:s] += 100
-                region_overlay[offset_4:s, offset_4:s] += 100
-                region_att_scores = (
-                    region_att_scores
-                    + new_region_att_scores_2
-                    + new_region_att_scores_3
-                    + new_region_att_scores_4
-                ) / region_overlay
-
-            if threshold != None:
-                thresh_region_output_dir = Path(
-                    output_dir, f"{fname}_{region_size}_thresh"
-                )
-                thresh_region_output_dir.mkdir(exist_ok=True, parents=True)
-
-                att_mask = region_att_scores.copy()
-                att_mask[att_mask < threshold] = 0
-                att_mask[att_mask >= threshold] = 0.95
-
-                region_color_block = (cmap(att_mask) * 255)[:, :, :3].astype(np.uint8)
-                region_hm = cv2.addWeighted(
-                    region_color_block,
-                    alpha,
-                    save_region.copy(),
-                    1 - alpha,
-                    0,
-                    save_region.copy(),
-                )
-                region_hm[att_mask == 0] = 0
-                img_inverse = save_region.copy()
-                img_inverse[att_mask == 0.95] = 0
-                region_hm = region_hm + img_inverse
-                img = Image.fromarray(region_hm)
-                img.save(Path(thresh_region_output_dir, f"head_{j}.png"))
-
-            region_color_block = (cmap(region_att_scores) * 255)[:, :, :3].astype(
-                np.uint8
-            )
-            region_hm = cv2.addWeighted(
-                region_color_block,
-                alpha,
-                save_region.copy(),
-                1 - alpha,
-                0,
-                save_region.copy(),
-            )
-            img = Image.fromarray(region_hm)
-            img.save(Path(region_output_dir, f"head_{j}.png"))
-
-    hierarchical_output_dir = Path(output_dir, f"{fname}_{region_size}_{patch_size}")
-    hierarchical_output_dir.mkdir(exist_ok=True, parents=True)
-
-    with tqdm.tqdm(
-        range(nhead_region),
-        desc="Hierarchical heatmaps",
-        unit="head",
-        leave=True,
-    ) as t1:
-        for j in t1:
-            region_att_scores = normalize_region_scores(region_att[j], size=(s,) * 2, min_val=region_att[j].min(), max_val=region_att[j].max())
-
-            if granular:
-                region_att_scores_2 = normalize_region_scores(
-                    region_att_2[j], size=(s,) * 2, min_val=region_att_2[j].min(), max_val=region_att_2[j].max()
-                )
-                region_att_scores_3 = normalize_region_scores(
-                    region_att_3[j], size=(s,) * 2, min_val=region_att_3[j].min(), max_val=region_att_3[j].max()
-                )
-                region_att_scores_4 = normalize_region_scores(
-                    region_att_4[j], size=(s,) * 2, min_val=region_att_4[j].min(), max_val=region_att_4[j].max()
-                )
-                region_att_scores *= 100
-                region_att_scores_2 *= 100
-                region_att_scores_3 *= 100
-                region_att_scores_4 *= 100
-                new_region_att_scores_2 = np.zeros_like(region_att_scores_2)
-                new_region_att_scores_2[offset_2:s, offset_2:s] = region_att_scores_2[
-                    : (s - offset_2), : (s - offset_2)
-                ]
-                new_region_att_scores_3 = np.zeros_like(region_att_scores_3)
-                new_region_att_scores_3[offset_3:s, offset_3:s] = region_att_scores_3[
-                    : (s - offset_3), : (s - offset_3)
-                ]
-                new_region_att_scores_4 = np.zeros_like(region_att_scores_4)
-                new_region_att_scores_4[offset_4:s, offset_4:s] = region_att_scores_4[
-                    : (s - offset_4), : (s - offset_4)
-                ]
-                region_overlay = np.ones_like(new_region_att_scores_2) * 100
-                region_overlay[offset_2:s, offset_2:s] += 100
-                region_overlay[offset_3:s, offset_3:s] += 100
-                region_overlay[offset_4:s, offset_4:s] += 100
-                region_att_scores = (
-                    region_att_scores
-                    + new_region_att_scores_2
-                    + new_region_att_scores_3
-                    + new_region_att_scores_4
-                ) / region_overlay
-
-            with tqdm.tqdm(
-                range(nhead_patch),
-                desc=f"Region head [{j+1}/{nhead_region}]",
-                unit="head",
-                leave=False,
-            ) as t2:
-                for i in t2:
-                    patch_att_scores = concat_patch_scores(
-                        patch_att[:, i, :, :],
-                        region_size=region_size,
-                        patch_size=patch_size,
-                        size=(s // n_patch,) * 2,
-                    )
-
-                    if granular:
-                        patch_att_scores_2 = concat_patch_scores(
-                            patch_att_2[:, i, :, :],
-                            region_size=region_size,
-                            patch_size=patch_size,
-                            size=(s // n_patch,) * 2,
-                        )
-                        patch_att_scores *= 100
-                        patch_att_scores_2 *= 100
-                        new_patch_att_scores_2 = np.zeros_like(patch_att_scores_2)
-                        new_patch_att_scores_2[
-                            offset_2:s, offset_2:s
-                        ] = patch_att_scores_2[: (s - offset_2), : (s - offset_2)]
-                        # TODO: why do they introduce a factor 2 here?
-                        patch_overlay = np.ones_like(patch_att_scores_2) * 100 * 2
-                        patch_overlay[offset_2:s, offset_2:s] += 100 * 2
-                        patch_att_scores = (
-                            (patch_att_scores + new_patch_att_scores_2)
-                            * 2
-                            / patch_overlay
-                        )
-
-                    if granular:
-                        score = (
-                            region_att_scores * region_overlay
-                            + patch_att_scores * patch_overlay
-                        ) / (region_overlay + patch_overlay)
-                    else:
-                        score = (region_att_scores + patch_att_scores) / 2
-
-                    if threshold != None:
-                        thresh_hierarchical_output_dir = Path(
-                            output_dir, f"{fname}_{region_size}_{patch_size}_thresh"
-                        )
-                        thresh_hierarchical_output_dir.mkdir(
-                            exist_ok=True, parents=True
-                        )
-
-                        att_mask = score.copy()
-                        att_mask[att_mask < threshold] = 0
-                        att_mask[att_mask >= threshold] = 0.95
-
-                        color_block = (cmap(att_mask) * 255)[:, :, :3].astype(np.uint8)
-                        hm = cv2.addWeighted(
-                            color_block,
-                            alpha,
-                            save_region.copy(),
-                            1 - alpha,
-                            0,
-                            save_region.copy(),
-                        )
-                        hm[att_mask == 0] = 0
-                        img_inverse = save_region.copy()
-                        img_inverse[att_mask == 0.95] = 0
-                        hm = hm + img_inverse
-                        img = Image.fromarray(hm)
-                        img.save(
-                            Path(
-                                thresh_hierarchical_output_dir,
-                                f"rhead_{j}_phead_{i}.png",
-                            )
-                        )
-
-                    color_block = (cmap(score) * 255)[:, :, :3].astype(np.uint8)
-                    hm = cv2.addWeighted(
-                        color_block,
-                        alpha,
-                        save_region.copy(),
-                        1 - alpha,
-                        0,
-                        save_region.copy(),
-                    )
-                    img = Image.fromarray(hm)
-                    img.save(
-                        Path(
-                            hierarchical_output_dir,
-                            f"rhead_{j}_phead_{i}.png",
-                        )
-                    )
-
-
-def create_region_heatmaps_concat(
-    region: Image,
-    patch_model: nn.Module,
-    region_model: nn.Module,
-    transforms: torchvision.transforms.Compose,
-    output_dir: Path,
-    patch_size: int = 256,
-    mini_patch_size: int = 16,
-    downscale: int = 1,
-    alpha: float = 0.5,
-    cmap: matplotlib.colors.LinearSegmentedColormap = plt.get_cmap("coolwarm"),
-    granular: bool = False,
-    offset: int = 128,
-    patch_device: torch.device = torch.device("cuda:0"),
-    region_device: torch.device = torch.device("cuda:0"),
-):
-    """
-    Creates region heatmaps (concatenated for easy comparison)
-
-    Args:
-    - region (PIL.Image): input region
-    - patch_model (nn.Module): patch-level Transformer
-    - region_model (nn.Module): region-level Transformer
-    - output_dir (Path): output directory for saving heatmaps
-    - patch_size (int): size of patches used for unrolling input region
-    - mini_patch_size (int): size of mini-patches used for unrolling patch_model inputs
-    - downscale (int): how much to downscale the output heatmap by (e.g. downscale=4 will resize 256x256 heatmaps to 64x64)
-    - alpha (float): image blending factor for cv2.addWeighted
-    - cmap (matplotlib.pyplot): colormap for creating heatmaps
-    - granular (bool): create additional offset patches to get more granular heatmaps
-    - offset (int): if granular is True, uses this value to offset patches
-    - patch_device (torch.device): device on which patch_model is
-    - region_device (torch.device): device on which region_model is
-    """
-    region_size = region.size[0]
-    n_patch = region_size // patch_size
-
-    nhead_patch = patch_model.num_heads
-    nhead_region = region_model.num_heads
-    offset_ = offset
-
-    _, patch_att, region_att = get_region_attention_scores(
-        region,
-        patch_model,
-        region_model,
-        transforms=transforms,
-        patch_size=patch_size,
-        mini_patch_size=mini_patch_size,
-        downscale=downscale,
-        patch_device=patch_device,
-        region_device=region_device,
-    )  # (256, 6, 128, 128), (6, 2048, 2048) when downscale = 2
-
-    if granular:
-        offset = int(offset_ * region_size / 4096)
-        region2 = add_margin(
-            region.crop((offset, offset, region_size, region_size)),
-            top=0,
-            left=0,
-            bottom=offset,
-            right=offset,
-            color=(255, 255, 255),
-        )
-        region3 = add_margin(
-            region.crop((offset * 2, offset * 2, region_size, region_size)),
-            top=0,
-            left=0,
-            bottom=offset * 2,
-            right=offset * 2,
-            color=(255, 255, 255),
-        )
-        region4 = add_margin(
-            region.crop((offset * 3, offset * 3, region_size, region_size)),
-            top=0,
-            left=0,
-            bottom=offset * 3,
-            right=offset * 3,
-            color=(255, 255, 255),
-        )
-
-        _, patch_att_2, region_att_2 = get_region_attention_scores(
-            region2,
-            patch_model,
-            region_model,
-            transforms=transforms,
-            patch_size=patch_size,
-            mini_patch_size=mini_patch_size,
-            downscale=downscale,
-            patch_device=patch_device,
-            region_device=region_device,
-        )
-        _, _, region_att_3 = get_region_attention_scores(
-            region3,
-            patch_model,
-            region_model,
-            transforms=transforms,
-            patch_size=patch_size,
-            mini_patch_size=mini_patch_size,
-            downscale=downscale,
-            patch_device=patch_device,
-            region_device=region_device,
-            compute_patch_attention=False,
-        )
-        _, _, region_att_4 = get_region_attention_scores(
-            region4,
-            patch_model,
-            region_model,
-            transforms=transforms,
-            patch_size=patch_size,
-            mini_patch_size=mini_patch_size,
-            downscale=downscale,
-            patch_device=patch_device,
-            region_device=region_device,
-            compute_patch_attention=False,
-        )
-
-        offset_2 = offset // downscale
-        offset_3 = (offset * 2) // downscale
-        offset_4 = (offset * 3) // downscale
-
-    s = region_size // downscale  # 2048 for downscale = 2, region_size = 4096
-    # given region is an RGB image, so the default filter for resizing is Resampling.BICUBIC
-    # which is fine as we're resizing the image here, not attention scores
-    save_region = np.array(
-        region.resize((s, s))
-    )  # (2048, 2048) for downscale = 2, region_size = 4096
-
-    with tqdm.tqdm(
-        range(nhead_region),
-        desc="Hierarchical heatmaps",
-        unit="head",
-        leave=True,
-    ) as t1:
-        for j in t1:
-            region_att_scores_1 = normalize_region_scores(
-                region_att[j], size=(s,) * 2, min_val=region_att[j].min(), max_val=region_att[j].max()
-            )  # (2048, 2048) for downscale = 2
-
-            if granular:
-                region_att_scores_2 = normalize_region_scores(
-                    region_att_2[j], size=(s,) * 2, min_val=region_att_2[j].min(), max_val=region_att_2[j].max()
-                )
-                region_att_scores_3 = normalize_region_scores(
-                    region_att_3[j], size=(s,) * 2, min_val=region_att_3[j].min(), max_val=region_att_3[j].max()
-                )
-                region_att_scores_4 = normalize_region_scores(
-                    region_att_4[j], size=(s,) * 2, min_val=region_att_4[j].min(), max_val=region_att_4[j].max()
-                )
-                region_att_scores_1 *= 100
-                region_att_scores_2 *= 100
-                region_att_scores_3 *= 100
-                region_att_scores_4 *= 100
-                new_region_att_scores_2 = np.zeros_like(region_att_scores_2)
-                new_region_att_scores_2[offset_2:s, offset_2:s] = region_att_scores_2[
-                    : (s - offset_2), : (s - offset_2)
-                ]
-                new_region_att_scores_3 = np.zeros_like(region_att_scores_3)
-                new_region_att_scores_3[offset_3:s, offset_3:s] = region_att_scores_3[
-                    : (s - offset_3), : (s - offset_3)
-                ]
-                new_region_att_scores_4 = np.zeros_like(region_att_scores_4)
-                new_region_att_scores_4[offset_4:s, offset_4:s] = region_att_scores_4[
-                    : (s - offset_4), : (s - offset_4)
-                ]
-                region_overlay = np.ones_like(new_region_att_scores_2) * 100
-                region_overlay[offset_2:s, offset_2:s] += 100
-                region_overlay[offset_3:s, offset_3:s] += 100
-                region_overlay[offset_4:s, offset_4:s] += 100
-                region_att_scores = (
-                    region_att_scores_1
-                    + new_region_att_scores_2
-                    + new_region_att_scores_3
-                    + new_region_att_scores_4
-                ) / region_overlay
-
-            # TODO: why do they run cmap on region_att_scores_1/100 and not on region_att_scores?
-            region_color_block = (cmap(region_att_scores_1 / 100) * 255)[
-                :, :, :3
-            ].astype(np.uint8)
-            region_hm = cv2.addWeighted(
-                region_color_block,
-                alpha,
-                save_region.copy(),
-                1 - alpha,
-                0,
-                save_region.copy(),
-            )  # (2048, 2048) for downscale = 2, region_size = 4096
-
-            with tqdm.tqdm(
-                range(nhead_patch),
-                desc=f"Region head [{j+1}/{nhead_region}]",
-                unit="head",
-                leave=False,
-            ) as t2:
-                for i in t2:
-                    patch_att_scores = concat_patch_scores(
-                        patch_att[:, i, :, :],
-                        region_size=region_size,
-                        patch_size=patch_size,
-                        size=(s // n_patch,) * 2,
-                    )  # (2048, 2048) for downscale = 2
-
-                    if granular:
-                        patch_att_scores_2 = concat_patch_scores(
-                            patch_att_2[:, i, :, :],
-                            region_size=region_size,
-                            patch_size=patch_size,
-                            size=(s // n_patch,) * 2,
-                        )
-                        patch_att_scores *= 100
-                        patch_att_scores_2 *= 100
-                        new_patch_att_scores_2 = np.zeros_like(patch_att_scores_2)
-                        new_patch_att_scores_2[
-                            offset_2:s, offset_2:s
-                        ] = patch_att_scores_2[: (s - offset_2), : (s - offset_2)]
-                        # TODO: why do they introduce a factor 2 here?
-                        patch_overlay = np.ones_like(patch_att_scores_2) * 100 * 2
-                        patch_overlay[offset_2:s, offset_2:s] += 100 * 2
-                        patch_att_scores = (
-                            (patch_att_scores + new_patch_att_scores_2)
-                            * 2
-                            / patch_overlay
-                        )
-
-                    patch_color_block = (cmap(patch_att_scores) * 255)[:, :, :3].astype(
-                        np.uint8
-                    )
-                    patch_hm = cv2.addWeighted(
-                        patch_color_block,
-                        alpha,
-                        save_region.copy(),
-                        1 - alpha,
-                        0,
-                        save_region.copy(),
-                    )  # (2048, 2048) for downscale = 2
-
-                    if granular:
-                        score = (
-                            region_att_scores * region_overlay
-                            + patch_att_scores * patch_overlay
-                        ) / (region_overlay + patch_overlay)
-                    else:
-                        score = (region_att_scores_1 + patch_att_scores) / 2
-
-                    color_block = (cmap(score) * 255)[:, :, :3].astype(np.uint8)
-                    hierarchical_region_hm = cv2.addWeighted(
-                        color_block,
-                        alpha,
-                        save_region.copy(),
-                        1 - alpha,
-                        0,
-                        save_region.copy(),
-                    )  # (2048, 2048) for downscale = 2
-
-                    pad = 100
-                    canvas = Image.new(
-                        "RGB", (s * 2 + pad * 3,) * 2, (255,) * 3
-                    )  # (2 * region_size // downscale + 100, 2 * region_size // downscale + 100, 3) ; (4096, 4096, 3) for downscale = 2, region_size = 4096
-                    draw = ImageDraw.Draw(canvas)
-                    draw.text(
-                        (s * 0.5 + pad, pad // 4),
-                        f"patch-level Transformer (Head: {i})",
-                        (0, 0, 0),
-                    )
-                    canvas = canvas.rotate(90)
-                    draw = ImageDraw.Draw(canvas)
-                    draw.text(
-                        (s * 1.5 + pad * 2, pad // 4),
-                        f"region-level Transformer (Head: {j})",
-                        (0, 0, 0),
-                    )
-                    canvas.paste(
-                        Image.fromarray(save_region), (pad, pad)
-                    )  # (2048, 2048) for downscale = 2, region_size = 4096 ; (100, 100)
-                    canvas.paste(
-                        Image.fromarray(region_hm), (s + 2 * pad, pad)
-                    )  # (2048, 2048) for downscale = 2, region_size = 4096 ; (2048+100, 100)
-                    canvas.paste(
-                        Image.fromarray(patch_hm), (pad, s + 2 * pad)
-                    )  # (2048, 2048) for downscale = 2, region_size = 4096 ; (100, 2048+100)
-                    canvas.paste(
-                        Image.fromarray(hierarchical_region_hm),
-                        (s + 2 * pad, s + 2 * pad),
-                    )  # (2048, 2048) for downscale = 2, region_size = 4096 ; (2048+100, 2048+100)
-                    canvas.save(Path(output_dir, f"rhead_{j}_phead_{i}.png"))
-
-
-def get_slide_heatmaps_patch_level(
-    slide_path: Path,
+def get_region_level_heatmaps(
+    wsi_path: Path,
     coordinates_dir: Path,
-    patch_model: nn.Module,
-    region_model: nn.Module,
+    patch_transformer: nn.Module,
+    region_transformer: nn.Module,
+    patch_size: int,
     transforms: torchvision.transforms.Compose,
     output_dir: Path,
-    patch_size: int = 256,
-    mini_patch_size: int = 16,
-    downscale: int = 1,
-    alpha: float = 0.5,
-    cmap: matplotlib.colors.LinearSegmentedColormap = plt.get_cmap("coolwarm"),
-    threshold: Optional[float] = None,
-    highlight: Optional[float] = None,
-    opacity: float = 0.3,
-    granular: bool = False,
-    offset: int = 128,
-    segmentation_mask_path: Optional[str] = None,
-    spacing: Optional[float] = None,
-    downsample: Optional[int] = None,
-    background_pixel_value: Optional[int] = None,
-    tissue_pixel_value: Optional[int] = None,
-    patch_attn_mask: Optional[torch.Tensor] = None,
-    mini_patch_attn_mask: Optional[torch.Tensor] = None,
-    patch_device: torch.device = torch.device("cuda:0"),
-    region_device: torch.device = torch.device("cuda:0"),
-    main_process: bool = True,
-):
-    """
-    Returns heatmaps of patch-level Transformer attention for each region extracted in the slide.
-    These can later be stitched together for slide-level heatmap visualization.
-
-    Args:
-    - slide_path (Path): path to slide
-    - coordinates_dir (Path): path to root folder containing region coordinates .npy files
-    - patch_model (nn.Module): patch-level Transformer
-    - region_model (nn.Module): region-level Transformer
-    - output_dir (Path): output directory for saving heatmaps
-    - patch_size (int): size of patches used for unrolling input region
-    - mini_patch_size (int): size of mini-patches used for unrolling patch_model inputs
-    - downscale (int): how much to downscale the output heatmap by (e.g. downscale=4 will resize 256x256 heatmaps to 64x64)
-    - alpha (float): image blending factor for cv2.addWeighted
-    - cmap (matplotlib.pyplot): colormap for creating heatmaps
-    - threshold (float): filter out regions with attention scores lower than this value (set to None to disbale heatmap thresholding)
-    - highlight (float): filter out regions with attention scores lower than this value (set to None to disbale heatmap highlighting)
-    - opacity (float): if highlight, set opacity for non-highlighted regions on stitched heatmap
-    - granular (bool): create additional offset regions to get more granular heatmaps
-    - offset (int): if granular is True, uses this value to offset regions
-    - patch_device (torch.device): device on which patch_model is
-    - region_device (torch.device): device on which region_model is
-    - main_process (bool): controls tqdm display when running with multiple gpus
-    """
-    slide_id = slide_path.stem.replace(" ", "_")
-    wsi = wsd.WholeSlideImage(slide_path, backend="asap")
-
-    patch_output_dir = Path(output_dir, "patch", f"{patch_size}")
-    patch_output_dir.mkdir(exist_ok=True, parents=True)
-
-    coordinates_file = coordinates_dir / f"{slide_id}.npy"
-    coordinates_arr = np.load(coordinates_file)
-    nregions = len(coordinates_arr)
-
-    try:
-        coordinates = list(zip(coordinates_arr[:,0], coordinates_arr[:,1]))
-        region_size_resized = coordinates_arr[0][2]
-        region_level = coordinates_arr[0][3]
-        resize_factor = coordinates_arr[0][4]
-    except Exception as e:
-        coordinates = list(zip(coordinates_arr["x"], coordinates_arr["y"]))
-        region_size_resized = coordinates_arr["tile_size_resized"][0]
-        region_level = coordinates_arr["tile_level"][0]
-        resize_factor = coordinates_arr["resize_factor"][0]
-
-    region_spacing = wsi.spacings[region_level]
-    region_size = int(region_size_resized / resize_factor)
-
-    nhead_patch = patch_model.num_heads
-    offset_ = offset
-
-    mask_attn_patch = (mini_patch_attn_mask is not None)
-    mask_attn_region = (patch_attn_mask is not None)
-    mask_attention = mask_attn_patch or mask_attn_region
-
-    with tqdm.tqdm(
-        coordinates,
-        desc="Gathering attention scores",
-        unit="region",
-        leave=True,
-        disable=not main_process,
-    ) as t1:
-        for k, (x,y) in enumerate(t1):
-            region_arr = wsi.get_patch(
-                x,
-                y,
-                region_size_resized,
-                region_size_resized,
-                spacing=region_spacing,
-                center=False,
-            )
-            region = Image.fromarray(region_arr)
-            if region_size != region_size_resized:
-                region = region.resize((region_size, region_size))
-
-            n_patch = region_size // patch_size
-
-            pm, mpm = None, None
-            if mask_attn_patch:
-                mpm = mini_patch_attn_mask[k]
-            if mask_attn_region:
-                pm = patch_attn_mask[k].unsqueeze(0)
-
-            _, patch_att, _ = get_region_attention_scores(
-                region,
-                patch_model,
-                region_model,
-                transforms=transforms,
-                patch_size=patch_size,
-                mini_patch_size=mini_patch_size,
-                downscale=downscale,
-                patch_attn_mask=pm,
-                mini_patch_attn_mask=mpm,
-                patch_device=patch_device,
-                region_device=region_device,
-            )
-
-            if granular:
-                shifted_patch_attention = []
-                for e in range(offset, region_size, offset):
-                    shifted_region = add_margin(
-                        region.crop((e, e, region_size, region_size)),
-                        top=0,
-                        left=0,
-                        bottom=e,
-                        right=e,
-                        color=(255, 255, 255),
-                    )
-                    shifted_path_mask, shifted_token_mask = None, None
-                    if mask_attention:
-                        shifted_path_mask, shifted_token_mask = get_mask(
-                            slide_path,
-                            segmentation_mask_path,
-                            x,
-                            y,
-                            region_size,
-                            patch_size,
-                            mini_patch_size,
-                            spacing,
-                            backend='asap',
-                            downsample=downsample,
-                            background_pixel_value=background_pixel_value,
-                            tissue_pixel_value=tissue_pixel_value,
-                            offset=e,
-                        )
-                        if not mask_attn_patch:
-                            shifted_token_mask = None
-                        if not mask_attn_region:
-                            shifted_path_mask = None
-                    _, shifted_patch_att, _ = get_region_attention_scores(
-                        shifted_region,
-                        patch_model,
-                        region_model,
-                        transforms=transforms,
-                        patch_size=patch_size,
-                        mini_patch_size=mini_patch_size,
-                        downscale=downscale,
-                        patch_attn_mask=shifted_path_mask,
-                        mini_patch_attn_mask=shifted_token_mask,
-                        patch_device=patch_device,
-                        region_device=region_device,
-                    )
-                    shifted_patch_attention.append(shifted_patch_att)
-
-            s = region_size // downscale
-            # given region is an RGB image, so the default filter for resizing is Resampling.BICUBIC
-            # which is fine as we're resizing the image here, not attention scores
-            save_region = np.array(region.resize((s, s)))
-
-            with tqdm.tqdm(
-                range(nhead_patch),
-                desc=f"Processing region [{k+1}/{nregions}]",
-                unit="head",
-                leave=False,
-                disable=not main_process,
-            ) as t2:
-                for i in t2:
-
-                    patch_att_scores = concat_patch_scores(
-                        patch_att[:, i, :, :],
-                        region_size=region_size,
-                        patch_size=patch_size,
-                        size=(s // n_patch,) * 2,
-                    )
-
-                    if granular:
-                        patch_att_scores *= 100
-                        patch_overlay = np.ones_like(patch_att_scores) * 100
-                        for edx, e in enumerate(range(offset, region_size, offset)):
-                            e_scaled = e // downscale
-                            shifted_patch_att_scores = concat_patch_scores(
-                                shifted_patch_attention[edx][:, i, :, :],
-                                region_size=region_size,
-                                patch_size=patch_size,
-                                size=(s // n_patch,) * 2,
-                            )
-                            shifted_patch_att_scores *= 100
-                            new_shifted_patch_att_scores = np.zeros_like(shifted_patch_att_scores)
-                            new_shifted_patch_att_scores[
-                                e_scaled:s, e_scaled:s
-                            ] = shifted_patch_att_scores[: (s - e_scaled), : (s - e_scaled)]
-                            patch_att_scores += new_shifted_patch_att_scores
-                            patch_overlay[e_scaled:s, e_scaled:s] += 100
-
-                        patch_att_scores = patch_att_scores / patch_overlay
-
-                    if threshold != None:
-                        thresh_patch_hm_output_dir = Path(
-                            patch_output_dir, "thresholded", f"head_{i}"
-                        )
-                        thresh_patch_hm_output_dir.mkdir(exist_ok=True, parents=True)
-
-                        att_mask = patch_att_scores.copy()
-                        att_mask[att_mask < threshold] = 0
-                        att_mask[att_mask >= threshold] = 0.95
-
-                        patch_color_block = (cmap(att_mask) * 255)[:, :, :3].astype(
-                            np.uint8
-                        )
-                        patch_hm = cv2.addWeighted(
-                            patch_color_block,
-                            alpha,
-                            save_region.copy(),
-                            1 - alpha,
-                            0,
-                            save_region.copy(),
-                        )
-                        patch_hm[att_mask == 0] = 0
-                        img_inverse = save_region.copy()
-                        img_inverse[att_mask == 0.95] = 0
-                        patch_hm = patch_hm + img_inverse
-                        img = Image.fromarray(patch_hm)
-                        img.save(Path(thresh_patch_hm_output_dir, f"{x}_{y}.png"))
-
-                    if highlight != None:
-                        highlight_patch_hm_output_dir = Path(
-                            patch_output_dir, "highlighted", f"head_{i}"
-                        )
-                        highlight_patch_hm_output_dir.mkdir(exist_ok=True, parents=True)
-                        save_region = np.array(region.resize((s, s)))
-                        rgba_region = np.dstack((save_region, np.zeros((s,s), dtype=np.uint8)+255))
-                        att_mask = patch_att_scores.copy()
-                        att_mask[att_mask < highlight] = 0
-                        att_mask[att_mask >= highlight] = 1
-                        highlighted_hm = rgba_region * (att_mask >= highlight)[..., np.newaxis]
-                        m_black = (highlighted_hm[:, :, 0:3] == [0,0,0]).all(2)
-                        transparent_region = np.dstack((save_region, np.zeros((s,s), dtype=np.uint8)+int(255*opacity)))
-                        highlighted_hm[m_black] = transparent_region[m_black]
-                        img = Image.fromarray(highlighted_hm, mode='RGBA')
-                        img.save(Path(highlight_patch_hm_output_dir, f"{x}_{y}.png"))
-
-                    patch_color_block = (cmap(patch_att_scores) * 255)[:, :, :3].astype(
-                        np.uint8
-                    )
-                    patch_hm = cv2.addWeighted(
-                        patch_color_block,
-                        alpha,
-                        save_region.copy(),
-                        1 - alpha,
-                        0,
-                        save_region.copy(),
-                    )
-                    patch_hm_output_dir = Path(patch_output_dir, "regular", f"head_{i}")
-                    patch_hm_output_dir.mkdir(exist_ok=True, parents=True)
-                    img = Image.fromarray(patch_hm)
-                    img.save(Path(patch_hm_output_dir, f"{x}_{y}.png"))
-
-    return patch_output_dir
-
-
-def get_slide_heatmaps_region_level(
-    slide_path: Path,
-    coordinates_dir: Path,
-    patch_model: nn.Module,
-    region_model: nn.Module,
-    transforms: torchvision.transforms.Compose,
-    output_dir: Path,
-    patch_size: int = 256,
-    mini_patch_size: int = 16,
     downscale: int = 1,
     granular: bool = False,
     offset: int = 128,
     segmentation_mask_path: Optional[str] = None,
+    segmentation_parameters: SegmentationParameters | None = None,
     spacing: Optional[float] = None,
     downsample: Optional[int] = None,
-    background_pixel_value: Optional[int] = None,
-    tissue_pixel_value: Optional[int] = None,
+    background_pixel_value: Optional[int] = 0,
+    tissue_pixel_value: Optional[int] = 1,
     patch_attn_mask: Optional[torch.Tensor] = None,
-    mini_patch_attn_mask: Optional[torch.Tensor] = None,
+    token_attn_mask: Optional[torch.Tensor] = None,
     compute_patch_attention: bool =True,
     patch_device: torch.device = torch.device("cuda:0"),
     region_device: torch.device = torch.device("cuda:0"),
-    main_process: bool = True,
+    verbose: bool = True,
 ):
     """
     Returns heatmaps of region-level Transformer attention for each region extracted in the slide.
     These can later be stitched together for slide-level heatmap visualization.
 
     Args:
-    - slide_path (Path): path to the slide
+    - wsi_path (Path): path to the slide
     - coordinates_dir (Path): path to root folder containing region coordinates in .npy files
-    - patch_model (nn.Module): patch-level Transformer
-    - region_model (nn.Module): region-level Transformer
+    - patch_transformer (nn.Module): patch-level Transformer
+    - region_transformer (nn.Module): region-level Transformer
     - output_dir (Path): output directory for saving heatmaps
-    - patch_size (int): size of patches used for unrolling input region
-    - mini_patch_size (int): size of mini-patches used for unrolling patch_model inputs
     - downscale (int): how much to downscale the output heatmap by (e.g. downscale=4 will resize 256x256 heatmaps to 64x64)
     - region_fmt (str): file format used for extracted regions
     - granular (bool): create additional offset regions to get more granular heatmaps
     - offset (int): if granular is True, uses this value to offset regions
-    - patch_device (torch.device): device on which patch_model is
-    - region_device (torch.device): device on which region_model is
-    - main_process (bool): controls tqdm display when running with multiple gpus
+    - patch_device (torch.device): device on which patch_transformer is
+    - region_device (torch.device): device on which region_transformer is
+    - verbose (bool): controls tqdm display when running with multiple gpus
     """
-    slide_id = slide_path.stem.replace(" ", "_")
-    wsi_object = WholeSlideImage(slide_path, segmentation_mask_path, downsample=downsample)
+    slide_id = wsi_path.stem.replace(" ", "_")
+    wsi_object = WholeSlideImage(wsi_path, segmentation_mask_path, segment_params=segmentation_parameters)
 
     coordinates_file = coordinates_dir / f"{slide_id}.npy"
     coordinates_arr = np.load(coordinates_file)
@@ -2500,7 +1126,7 @@ def get_slide_heatmaps_region_level(
     width, height = wsi_object.level_dimensions[0]
 
     region_spacing = wsi_object.spacings[region_level]
-    region_size = int(region_size_resized / resize_factor)
+    region_size = int(round(region_size_resized / resize_factor,0))
 
     # scale offsset from desired spacing to region_spacing
     offset_resized = int(offset * resize_factor)
@@ -2508,11 +1134,11 @@ def get_slide_heatmaps_region_level(
     attention_dir = output_dir / "attention" / "region" / f"{region_size}"
     attention_dir.mkdir(exist_ok=True, parents=True)
 
-    nhead_region = region_model.num_heads
+    nhead_region = region_transformer.num_heads
     head_min = [float('inf')] * nhead_region
     head_max = [float('-inf')] * nhead_region
 
-    mask_attn_patch = (mini_patch_attn_mask is not None)
+    mask_attn_patch = (token_attn_mask is not None)
     mask_attn_region = (patch_attn_mask is not None)
     mask_attention = mask_attn_patch or mask_attn_region
 
@@ -2521,37 +1147,35 @@ def get_slide_heatmaps_region_level(
         desc="Gathering attention scores",
         unit="region",
         leave=True,
-        disable=not main_process,
+        disable=not verbose,
     ) as t1:
         for k, (x,y) in enumerate(t1):
-            region_arr = wsi_object.wsi.get_patch(
+            region_arr = wsi_object.get_tile(
                 x,
                 y,
                 region_size_resized,
                 region_size_resized,
-                spacing=region_spacing,
-                center=False,
+                region_spacing,
             )
             region = Image.fromarray(region_arr)
             if region_size != region_size_resized:
                 region = region.resize((region_size, region_size))
 
-            pm, mpm = None, None
+            patch_mask, token_mask = None, None
             if mask_attn_patch:
-                mpm = mini_patch_attn_mask[k]
+                token_mask = token_attn_mask[k]
             if mask_attn_region:
-                pm = patch_attn_mask[k].unsqueeze(0)
+                patch_mask = patch_attn_mask[k].unsqueeze(0)
 
             _, _, region_att = get_region_attention_scores(
                 region,
-                patch_model,
-                region_model,
+                patch_transformer,
+                region_transformer,
+                patch_size,
                 transforms=transforms,
-                patch_size=patch_size,
-                mini_patch_size=mini_patch_size,
                 downscale=downscale,
-                patch_attn_mask=pm,
-                mini_patch_attn_mask=mpm,
+                patch_attn_mask=patch_mask,
+                token_attn_mask=token_mask,
                 patch_device=patch_device,
                 region_device=region_device,
                 compute_patch_attention=compute_patch_attention,
@@ -2578,13 +1202,12 @@ def get_slide_heatmaps_region_level(
                         shift_y = dy * e_y
                         x_shifted = min(max(x + shift_x, 0), width)
                         y_shifted = min(max(y + shift_y, 0), height)
-                        shifted_region_arr = wsi_object.wsi.get_patch(
+                        shifted_region_arr = wsi_object.get_tile(
                             x_shifted,
                             y_shifted,
                             region_size_resized,
                             region_size_resized,
-                            spacing=region_spacing,
-                            center=False,
+                            region_spacing,
                         )
                         shifted_region = Image.fromarray(shifted_region_arr)
                         if region_size != region_size_resized:
@@ -2592,13 +1215,13 @@ def get_slide_heatmaps_region_level(
                         shifted_patch_mask, shifted_token_mask = None, None
                         if mask_attention:
                             shifted_patch_mask, shifted_token_mask = get_mask(
-                                slide_path,
+                                wsi_path,
                                 segmentation_mask_path,
                                 x,
                                 y,
                                 region_size,
                                 patch_size,
-                                mini_patch_size,
+                                patch_transformer.token_size,
                                 spacing,
                                 backend='asap',
                                 downsample=downsample,
@@ -2613,14 +1236,13 @@ def get_slide_heatmaps_region_level(
 
                         _, _, shifted_region_att = get_region_attention_scores(
                             shifted_region,
-                            patch_model,
-                            region_model,
+                            patch_transformer,
+                            region_transformer,
+                            patch_size,
                             transforms=transforms,
-                            patch_size=patch_size,
-                            mini_patch_size=mini_patch_size,
                             downscale=downscale,
                             patch_attn_mask=shifted_patch_mask,
-                            mini_patch_attn_mask=shifted_token_mask,
+                            token_attn_mask=shifted_token_mask,
                             patch_device=patch_device,
                             region_device=region_device,
                             compute_patch_attention=compute_patch_attention,
@@ -2632,7 +1254,7 @@ def get_slide_heatmaps_region_level(
                 desc=f"Processing region [{k+1}/{nregions}]",
                 unit="head",
                 leave=False,
-                disable=not main_process,
+                disable=not verbose,
             ) as t2:
                 for j in t2:
 
@@ -2693,15 +1315,15 @@ def get_slide_heatmaps_region_level(
     return attention_dir
 
 
-def get_slide_heatmaps_slide_level(
-    slide_path: Path,
+def get_case_level_heatmaps(
+    wsi_path: Path,
     coordinates_dir: Path,
-    patch_model: nn.Module,
-    region_model: nn.Module,
-    slide_model: nn.Module,
+    patch_transformer: nn.Module,
+    region_transformer: nn.Module,
+    case_transformer: nn.Module,
+    patch_size: int,
     transforms: torchvision.transforms.Compose,
     output_dir: Path,
-    patch_size: int = 256,
     downscale: int = 1,
     alpha: float = 0.5,
     cmap: matplotlib.colors.LinearSegmentedColormap = plt.get_cmap("coolwarm"),
@@ -2710,59 +1332,55 @@ def get_slide_heatmaps_slide_level(
     opacity: float = 0.3,
     granular: bool = False,
     offset: int = 1024,
-    spacing: Optional[float] = None,
-    gaussian_smoothing: bool = False,
-    gaussian_offset: int = 128,
     patch_attn_mask: Optional[torch.Tensor] = None,
-    mini_patch_attn_mask: Optional[torch.Tensor] = None,
+    token_attn_mask: Optional[torch.Tensor] = None,
     patch_device: torch.device = torch.device("cuda:0"),
     region_device: torch.device = torch.device("cuda:0"),
     slide_device: torch.device = torch.device("cuda:0"),
-    main_process: bool = True,
+    verbose: bool = True,
 ):
     """
     Returns heatmaps of slide-level Transformer attention for each region extracted in the slide.
     These can later be stitched together for slide-level heatmap visualization.
 
     Args:
-    - slide_path (Path): path to the slide
+    - wsi_path (Path): path to the slide
     - coordinates_dir (Path): path to root folder containing region coordinates in .npy files
-    - patch_model (nn.Module): patch-level Transformer
-    - region_model (nn.Module): region-level Transformer
-    - slide_model (nn.Module): slide-level Transformer
-    - patch_size (int): size of patches used for unrolling input region
+    - patch_transformer (nn.Module): patch-level Transformer
+    - region_transformer (nn.Module): region-level Transformer
+    - case_transformer (nn.Module): slide-level Transformer
     - downscale (int): how much to downscale the output heatmap by (e.g. downscale=4 will resize 256x256 heatmaps to 64x64)
     - alpha (float): image blending factor for cv2.addWeighted
     - cmap (matplotlib.pyplot): colormap for creating heatmaps
     - threshold (float): filter out regions with attention scores lower than this value (set to None to disbale heatmap thresholding)
     - highlight (float): filter out regions with attention scores lower than this value (set to None to disbale heatmap highlighting)
     - opacity (float): if highlight, set opacity for non-highlighted regions on stitched heatmap
-    - patch_device (torch.device): device on which patch_model is
-    - region_device (torch.device): device on which region_model is
-    - main_process (bool): controls tqdm display when running with multiple gpus
+    - patch_device (torch.device): device on which patch_transformer is
+    - region_device (torch.device): device on which region_transformer is
+    - verbose (bool): controls tqdm display when running with multiple gpus
     """
-    slide_id = slide_path.stem.replace(" ", "_")
+    slide_id = wsi_path.stem.replace(" ", "_")
 
     att, coords = get_slide_attention_scores(
-        slide_path,
+        wsi_path,
         coordinates_dir,
-        patch_model,
-        region_model,
-        slide_model,
+        patch_transformer,
+        region_transformer,
+        case_transformer,
+        patch_size,
         transforms=transforms,
-        patch_size=patch_size,
         downscale=downscale,
         granular=granular,
         offset=offset,
-        spacing=spacing,
         patch_attn_mask=patch_attn_mask,
-        mini_patch_attn_mask=mini_patch_attn_mask,
+        token_attn_mask=token_attn_mask,
         patch_device=patch_device,
         region_device=region_device,
         slide_device=slide_device,
     )  # (M, region_size, region_size), (M)
+    print(f"attn.min: {att.min()}, attn.max: {att.max()}")
 
-    wsi = wsd.WholeSlideImage(slide_path, backend="asap")
+    wsi = wsd.WholeSlideImage(wsi_path, backend="asap")
 
     coordinates_file = coordinates_dir / f"{slide_id}.npy"
     coordinates_arr = np.load(coordinates_file)
@@ -2779,17 +1397,20 @@ def get_slide_heatmaps_slide_level(
         resize_factor = coordinates_arr["resize_factor"][0]
 
     region_spacing = wsi.spacings[region_level]
-    region_size = int(region_size_resized / resize_factor)
+    region_size = int(round(region_size_resized / resize_factor,0))
 
-    slide_output_dir = Path(output_dir, "slide", f"{region_size}")
-    slide_output_dir.mkdir(exist_ok=True, parents=True)
+    attention_dir = output_dir / "attention" / "slide" / f"{region_size}"
+    attention_dir.mkdir(exist_ok=True, parents=True)
+
+    visualization_dir = output_dir / "visualization" / "slide" / f"{region_size}"
+    visualization_dir.mkdir(exist_ok=True, parents=True)
 
     with tqdm.tqdm(
         coordinates,
         desc="Gathering attention scores",
         unit="region",
         leave=True,
-        disable=not main_process,
+        disable=not verbose,
     ) as t1:
         for k, (x,y) in enumerate(t1):
             region_arr = wsi.get_patch(
@@ -2805,10 +1426,9 @@ def get_slide_heatmaps_slide_level(
                 region = region.resize((region_size, region_size))
 
             s = region_size // downscale
-            g_offset = gaussian_offset // downscale
 
             if threshold != None:
-                thresh_slide_hm_output_dir = slide_output_dir / "thresholded"
+                thresh_slide_hm_output_dir = visualization_dir / "thresholded"
                 thresh_slide_hm_output_dir.mkdir(exist_ok=True, parents=True)
                 save_region = np.array(region.resize((s, s)))
                 att_mask = att[k].copy()
@@ -2832,7 +1452,7 @@ def get_slide_heatmaps_slide_level(
                 img.save(Path(thresh_slide_hm_output_dir, f"{x}_{y}.png"))
 
             if highlight != None:
-                highlight_slide_hm_output_dir = slide_output_dir / "highlighted"
+                highlight_slide_hm_output_dir = visualization_dir / "highlighted"
                 highlight_slide_hm_output_dir.mkdir(exist_ok=True, parents=True)
                 save_region = np.array(region.resize((s, s)))
                 rgba_region = np.dstack((save_region, np.zeros((s,s), dtype=np.uint8)+255))
@@ -2843,32 +1463,8 @@ def get_slide_heatmaps_slide_level(
                 img = Image.fromarray(highlighted_hm)
                 img.save(Path(highlight_slide_hm_output_dir, f"{x}_{y}.png"))
 
-            if gaussian_smoothing:
-                neighbors, descriptors = find_neighboring_regions((x,y), coords, region_size)
-                if neighbors:
-                    for n, d in zip(neighbors,descriptors):
-                        n_idx = neighbors.index(n)
-                        n_att = att[n_idx]
-                        if d == "top":
-                            smoothed_concat_attn = np.zeros((s*2, s))
-                            concat_att = np.concatenate([n_att, att[k]], axis=0)
-                            smoothed_concat_attn[s-g_offset:s+g_offset, :] = gaussian_filter(concat_att[s-g_offset:s+g_offset, :], sigma=offset//2, axes=0)
-                            att[k, :g_offset, :] = smoothed_concat_attn[s:s+g_offset, :]
-                        elif d == "bot":
-                            smoothed_concat_attn = np.zeros((s*2, s))
-                            concat_att = np.concatenate([att[k], n_att], axis=0)
-                            smoothed_concat_attn[s-g_offset:s+g_offset, :] = gaussian_filter(concat_att[s-g_offset:s+g_offset, :], sigma=offset//2, axes=0)
-                            att[k, s-g_offset:s, :] = smoothed_concat_attn[s-g_offset:s, :]
-                        elif d == "left":
-                            smoothed_concat_attn = np.zeros((s, s*2))
-                            concat_att = np.concatenate([n_att, att[k]], axis=1)
-                            smoothed_concat_attn[:, s-g_offset:s+g_offset] = gaussian_filter(concat_att[:, s-g_offset:s+g_offset], sigma=offset//2, axes=1)
-                            att[k, :, :g_offset] = smoothed_concat_attn[:, s:s+g_offset]
-                        elif d == "right":
-                            smoothed_concat_attn = np.zeros((s, s*2))
-                            concat_att = np.concatenate([att[k], n_att], axis=1)
-                            smoothed_concat_attn[:, s-g_offset:s+g_offset] = gaussian_filter(concat_att[:, s-g_offset:s+g_offset], sigma=offset//2, axes=1)
-                            att[k, :, s-g_offset:s] = smoothed_concat_attn[:, s-g_offset:s]
+            # save raw attention scores to disk
+            np.save(Path(attention_dir, f"{x}_{y}.npy"), att[k])
 
             # given region is an RGB image, so the default filter for resizing is Resampling.BICUBIC
             # which is fine as we're resizing the image here, not attention scores
@@ -2883,92 +1479,88 @@ def get_slide_heatmaps_slide_level(
                 0,
                 save_region.copy(),
             )
-            slide_hm_output_dir = slide_output_dir / "regular"
+            slide_hm_output_dir = visualization_dir / "regular"
             slide_hm_output_dir.mkdir(exist_ok=True, parents=True)
             img = Image.fromarray(hm)
             img.save(Path(slide_hm_output_dir, f"{x}_{y}.png"))
 
-    return slide_output_dir
+    return attention_dir
 
 
-def get_slide_blended_heatmaps(
-    slide_path: Path,
+def get_factorized_heatmaps(
+    wsi_path: Path,
     coordinates_dir: Path,
-    patch_model: nn.Module,
-    region_model: nn.Module,
-    slide_model: nn.Module,
+    patch_transformer: nn.Module,
+    region_transformer: nn.Module,
+    case_transformer: nn.Module,
+    patch_size: int,
     transforms: torchvision.transforms.Compose,
     level: str,
     output_dir: Path,
+    gamma: float,
     method: str = "multiply",
-    gamma: float = 0.5,
-    patch_size: int = 256,
-    mini_patch_size: int = 16,
     downscale: int = 1,
     alpha: float = 0.5,
     cmap: matplotlib.colors.LinearSegmentedColormap = plt.get_cmap("coolwarm"),
     threshold: Optional[float] = None,
-    smoothing: Optional[Dict] = None,
+    granularity: Optional[Dict] = None,
     segmentation_mask_path: Optional[str] = None,
     spacing: Optional[float] = None,
     downsample: Optional[int] = None,
-    background_pixel_value: Optional[int] = None,
-    tissue_pixel_value: Optional[int] = None,
+    background_pixel_value: Optional[int] = 0,
+    tissue_pixel_value: Optional[int] = 1,
     patch_attn_mask: Optional[torch.Tensor] = None,
-    mini_patch_attn_mask: Optional[torch.Tensor] = None,
+    token_attn_mask: Optional[torch.Tensor] = None,
     compute_patch_attention: bool = True,
     patch_device: torch.device = torch.device("cuda:0"),
     region_device: torch.device = torch.device("cuda:0"),
     slide_device: torch.device = torch.device("cuda:0"),
-    main_process: bool = True,
+    verbose: bool = True,
 ):
     """
-    Returns blended heatmaps (patch-level, region-level & slide-level Transformer heatmaps blended together) for each region extracted in the slide.
+    Returns factorized heatmaps (patch-level, region-level & slide-level Transformer heatmaps factorized together) for each region extracted in the slide.
     These can later be stitched together for slide-level heatmap visualization.
 
     Args:
-    - slide_path (Path): path to the slide
+    - wsi_path (Path): path to the slide
     - coordinates_dir (Path): path to root folder containing region coordinates in .npy files
-    - patch_model (nn.Module): patch-level Transformer
-    - region_model (nn.Module): region-level Transformer
-    - slide_model (nn.Module): slide-level Transformer
+    - patch_transformer (nn.Module): patch-level Transformer
+    - region_transformer (nn.Module): region-level Transformer
+    - case_transformer (nn.Module): slide-level Transformer
     - level (str): level at which the model was trained on
     - output_dir (Path): output directory for saving heatmaps
     - gamma (float): factor weighting the importance given to frozen model attention scores w.r.t finetuned model attention scores
-    - patch_size (int): size of patches used for unrolling input region
-    - mini_patch_size (int): size of mini-patches used for unrolling patch_model inputs
     - downscale (int): how much to downscale the output heatmap by (e.g. downscale=4 will resize 256x256 heatmaps to 64x64)
     - alpha (float): image blending factor for cv2.addWeighted
     - cmap (matplotlib.pyplot): colormap for creating heatmaps
     - threshold (float): filter out patches with attention scores lower than this value (set to None to disbale heatmap thresholding)
     - save_to_disk (bool): wether to save individual region heatmaps to disk
-    - smoothing (bool): create additional offset patches to get more granular heatmaps
-    - patch_device (torch.device): device on which patch_model is
-    - region_device (torch.device): device on which region_model is
-    - slide_device (torch.device): device on which slide_model is
-    - main_process (bool): controls tqdm display when running with multiple gpus
+    - granularity (dict): create additional offset patches to get more granular heatmaps
+    - patch_device (torch.device): device on which patch_transformer is
+    - region_device (torch.device): device on which region_transformer is
+    - slide_device (torch.device): device on which case_transformer is
+    - verbose (bool): controls tqdm display when running with multiple gpus
     """
-    slide_id = slide_path.stem.replace(" ", "_")
-    wsi = wsd.WholeSlideImage(slide_path, backend="asap")
+    slide_id = wsi_path.stem.replace(" ", "_")
+    wsi = wsd.WholeSlideImage(wsi_path, backend="asap")
 
     slide_attention, _ = get_slide_attention_scores(
-        slide_path,
+        wsi_path,
         coordinates_dir,
-        patch_model,
-        region_model,
-        slide_model,
+        patch_transformer,
+        region_transformer,
+        case_transformer,
+        patch_size,
         transforms=transforms,
-        patch_size=patch_size,
         downscale=downscale,
-        granular=smoothing.slide,
-        offset=smoothing.offset.slide,
-        spacing=spacing,
+        granular=granularity.slide,
+        offset=granularity.offset.slide,
         patch_attn_mask=patch_attn_mask,
-        mini_patch_attn_mask=mini_patch_attn_mask,
+        token_attn_mask=token_attn_mask,
         patch_device=patch_device,
         region_device=region_device,
         slide_device=slide_device,
-        main_process=main_process,
+        verbose=verbose,
     )  # (M, region_size, region_size), (M)
 
     coordinates_file = coordinates_dir / f"{slide_id}.npy"
@@ -2988,18 +1580,24 @@ def get_slide_blended_heatmaps(
 
     width, height = wsi.shapes[0]
     region_spacing = wsi.spacings[region_level]
-    region_size = int(region_size_resized / resize_factor)
+    region_size = int(round(region_size_resized / resize_factor,0))
 
-    visualization_dir = output_dir / "visualization" / "blended" / f"{region_size}-{patch_size}"
+    token_size = patch_transformer.token_size
+
+    visualization_dir = output_dir / "visualization" / "factorized" / f"{region_size}-{patch_size}"
     visualization_dir.mkdir(exist_ok=True, parents=True)
 
-    attention_dir = output_dir / "attention" / "blended" / "region" / f"{region_size}-{patch_size}"
-    attention_dir.mkdir(exist_ok=True, parents=True)
+    raw_attention_dir = output_dir / "attention" / "factorized" / "raw" / f"{region_size}-{patch_size}"
+    raw_attention_dir.mkdir(exist_ok=True, parents=True)
+
+    factorized_attention_dir = output_dir / "attention" / "factorized" / "factorized" / f"{region_size}-{patch_size}"
+    factorized_attention_dir.mkdir(exist_ok=True, parents=True)
 
     nhead_patch = 1
+    compute_patch_attention = compute_patch_attention and gamma != 1
     if compute_patch_attention:
-        nhead_patch = patch_model.num_heads
-    nhead_region = region_model.num_heads
+        nhead_patch = patch_transformer.num_heads
+    nhead_region = region_transformer.num_heads
 
     head_min_region = [float('inf')] * nhead_region
     head_max_region = [float('-inf')] * nhead_region
@@ -3007,7 +1605,7 @@ def get_slide_blended_heatmaps(
     head_min_patch = [float('inf')] * nhead_region
     head_max_patch = [float('-inf')] * nhead_region
 
-    mask_attn_patch = (mini_patch_attn_mask is not None)
+    mask_attn_patch = (token_attn_mask is not None)
     mask_attn_region = (patch_attn_mask is not None)
     mask_attention = mask_attn_patch or mask_attn_region
 
@@ -3016,7 +1614,7 @@ def get_slide_blended_heatmaps(
         desc="Gathering attention scores",
         unit="region",
         leave=True,
-        disable=not main_process,
+        disable=not verbose,
     ) as t1:
         for k, (x,y) in enumerate(t1):
             region_arr = wsi.get_patch(
@@ -3033,22 +1631,21 @@ def get_slide_blended_heatmaps(
 
             n_patch = region_size // patch_size
 
-            pm, mpm = None, None
+            patch_mask, token_mask = None, None
             if mask_attn_patch:
-                mpm = mini_patch_attn_mask[k]
+                token_mask = token_attn_mask[k]
             if mask_attn_region:
-                pm = patch_attn_mask[k].unsqueeze(0)
+                patch_mask = patch_attn_mask[k].unsqueeze(0)
 
             _, patch_att, region_att = get_region_attention_scores(
                 region,
-                patch_model,
-                region_model,
+                patch_transformer,
+                region_transformer,
+                patch_size,
                 transforms=transforms,
-                patch_size=patch_size,
-                mini_patch_size=mini_patch_size,
                 downscale=downscale,
-                patch_attn_mask=pm,
-                mini_patch_attn_mask=mpm,
+                patch_attn_mask=patch_mask,
+                token_attn_mask=token_mask,
                 patch_device=patch_device,
                 region_device=region_device,
                 compute_patch_attention=compute_patch_attention,
@@ -3056,7 +1653,7 @@ def get_slide_blended_heatmaps(
 
             slide_att_scores = slide_attention[k]
 
-            if smoothing.region:
+            if granularity.region:
                 directions = [
                     (-1, -1),  # Northwest
                     (0, -1),   # North
@@ -3069,7 +1666,7 @@ def get_slide_blended_heatmaps(
                 ]
                 shifted_patch_attention = defaultdict(list)
                 shifted_region_attention = defaultdict(list)
-                offset = min(smoothing.offset.patch, smoothing.offset.region)
+                offset = min(granularity.offset.patch, granularity.offset.region)
                 # scale offsset from desired spacing to region_spacing
                 offset_resized = int(offset * resize_factor)
                 for dx, dy in directions:
@@ -3095,13 +1692,13 @@ def get_slide_blended_heatmaps(
                         shifted_patch_mask, shifted_token_mask = None, None
                         if mask_attention:
                             shifted_patch_mask, shifted_token_mask = get_mask(
-                                slide_path,
+                                wsi_path,
                                 segmentation_mask_path,
                                 x,
                                 y,
                                 region_size,
                                 patch_size,
-                                mini_patch_size,
+                                token_size,
                                 spacing,
                                 backend='asap',
                                 downsample=downsample,
@@ -3116,14 +1713,13 @@ def get_slide_blended_heatmaps(
 
                         _, shifted_patch_att, shifted_region_att = get_region_attention_scores(
                             shifted_region,
-                            patch_model,
-                            region_model,
+                            patch_transformer,
+                            region_transformer,
+                            patch_size,
                             transforms=transforms,
-                            patch_size=patch_size,
-                            mini_patch_size=mini_patch_size,
                             downscale=downscale,
                             patch_attn_mask=shifted_patch_mask,
-                            mini_patch_attn_mask=shifted_token_mask,
+                            token_attn_mask=shifted_token_mask,
                             patch_device=patch_device,
                             region_device=region_device,
                             compute_patch_attention=compute_patch_attention,
@@ -3136,13 +1732,14 @@ def get_slide_blended_heatmaps(
                 desc=f"Processing region [{k+1}/{nregions}]",
                 unit="head",
                 leave=False,
-                disable=not main_process,
+                disable=not verbose,
             ) as t2:
                 for j in t2:
 
                     region_scores = region_att[j]
+                    region_overlay = np.ones_like(region_scores)
 
-                    if smoothing.region:
+                    if granularity.region:
                         directions = [
                             (-1, -1),  # Northwest
                             (0, -1),   # North
@@ -3153,8 +1750,7 @@ def get_slide_blended_heatmaps(
                             (0, 1),    # South
                             (1, 1),    # Southeast
                         ]
-                        region_overlay = np.ones_like(region_scores)
-                        offset = min(smoothing.offset.patch, smoothing.offset.region)
+                        offset = min(granularity.offset.patch, granularity.offset.region)
                         for dx, dy in directions:
                             for edx, e in enumerate(range(offset, region_size, offset)):
                                 e_scaled = e // downscale
@@ -3184,29 +1780,29 @@ def get_slide_blended_heatmaps(
                     head_min_region[j] = min(head_min_region[j], region_scores.min())
                     head_max_region[j] = max(head_max_region[j], region_scores.max())
 
-                    region_attention_head_dir = attention_dir / f"head_{j}"
+                    region_attention_head_dir = raw_attention_dir / f"head_{j}"
                     region_attention_head_dir.mkdir(exist_ok=True, parents=True)
                     np.save(Path(region_attention_head_dir, f"{x}_{y}.npy"), region_scores)
                     np.save(Path(region_attention_head_dir, f"{x}_{y}_overlay.npy"), region_overlay)
 
                     if compute_patch_attention:
 
-                        #TODO: fix smoothing based on new multi-direction logic (see above)
+                        #TODO: fix granularity based on new multi-direction logic (see above)
 
                         with tqdm.tqdm(
                             range(nhead_patch),
                             desc=f"Region head [{j+1}/{nhead_region}]",
                             unit="head",
                             leave=False,
-                            disable=not main_process,
+                            disable=not verbose,
                         ) as t3:
                             for i in t3:
 
                                 patch_scores = patch_att[:, i, :, :]
 
-                                if smoothing.patch:
+                                if granularity.patch:
                                     patch_overlay = np.ones_like(patch_scores)
-                                    offset = min(smoothing.offset.patch, smoothing.offset.region)
+                                    offset = min(granularity.offset.patch, granularity.offset.region)
                                     for edx, e in enumerate(range(offset, region_size, offset)):
                                         e_scaled = e // downscale
                                         shifted_patch_att_scores = np.zeros_like(patch_scores)
@@ -3233,7 +1829,7 @@ def get_slide_blended_heatmaps(
         desc="Overlaying attention scores",
         unit="region",
         leave=True,
-        disable=not main_process,
+        disable=not verbose,
     ) as t1:
         for k, (x,y) in enumerate(t1):
 
@@ -3254,26 +1850,25 @@ def get_slide_blended_heatmaps(
             # which is fine as we're resizing the image here, not attention scores
             save_region = np.array(region.resize((s, s)))
 
-
             with tqdm.tqdm(
                 range(nhead_region),
                 desc=f"Processing region [{k+1}/{nregions}]",
                 unit="head",
                 leave=False,
-                disable=not main_process,
+                disable=not verbose,
             ) as t2:
                 for j in t2:
 
-                    region_scores = np.load(Path(attention_dir, f"head_{j}", f"{x}_{y}.npy"))
+                    region_scores = np.load(Path(raw_attention_dir, f"head_{j}", f"{x}_{y}.npy"))
                     normalized_region_scores = normalize_region_scores(region_scores, size=(s,) * 2, min_val=head_min_region[j], max_val=head_max_region[j])
-                    region_overlay = np.load(Path(attention_dir, f"head_{j}", f"{x}_{y}_overlay.npy"))
+                    region_overlay = np.load(Path(raw_attention_dir, f"head_{j}", f"{x}_{y}_overlay.npy"))
 
                     with tqdm.tqdm(
                         range(nhead_patch),
                         desc=f"Region head [{j+1}/{nhead_region}]",
                         unit="head",
                         leave=False,
-                        disable=not main_process,
+                        disable=not verbose,
                     ) as t3:
                         for i in t3:
 
@@ -3290,7 +1885,7 @@ def get_slide_blended_heatmaps(
                                 )
                                 patch_overlay = np.load(Path(attention_dir, "patch", f"head_{j}", f"{x}_{y}_overlay.npy"))
 
-                                if smoothing.region:
+                                if granularity.region:
                                     if level == "global":
                                         if method == "average":
                                             n = 2
@@ -3367,14 +1962,14 @@ def get_slide_blended_heatmaps(
                             if threshold != None:
 
                                 if compute_patch_attention:
-                                    thresh_blended_hm_output_dir = Path(
+                                    thresh_factorized_hm_output_dir = Path(
                                         visualization_dir, "thresholded", f"region-head-{j}-patch-head-{i}"
                                     )
                                 else:
-                                    thresh_blended_hm_output_dir = Path(
+                                    thresh_factorized_hm_output_dir = Path(
                                         visualization_dir, "thresholded", f"region-head-{j}"
                                     )
-                                thresh_blended_hm_output_dir.mkdir(exist_ok=True, parents=True)
+                                thresh_factorized_hm_output_dir.mkdir(exist_ok=True, parents=True)
 
                                 att_mask = score.copy()
                                 att_mask[att_mask < threshold] = 0
@@ -3398,10 +1993,15 @@ def get_slide_blended_heatmaps(
                                 img = Image.fromarray(region_hm)
                                 img.save(
                                     Path(
-                                        thresh_blended_hm_output_dir,
+                                        thresh_factorized_hm_output_dir,
                                         f"{x}_{y}.png",
                                     )
                                 )
+
+                            # save raw factorized attention scores to disk
+                            region_attention_head_dir = factorized_attention_dir / f"head_{j}"
+                            region_attention_head_dir.mkdir(exist_ok=True, parents=True)
+                            np.save(Path(region_attention_head_dir, f"{x}_{y}.npy"), score)
 
                             color_block = (cmap(score) * 255)[:, :, :3].astype(np.uint8)
                             region_hm = cv2.addWeighted(
@@ -3413,14 +2013,14 @@ def get_slide_blended_heatmaps(
                                 save_region.copy(),
                             )
                             if compute_patch_attention:
-                                blended_hm_output_dir = Path(visualization_dir, "regular", f"region-head-{j}-patch-head-{i}")
+                                factorized_hm_output_dir = Path(visualization_dir, "regular", f"region-head-{j}-patch-head-{i}")
                             else:
-                                blended_hm_output_dir = Path(visualization_dir, "regular", f"region-head-{j}")
-                            blended_hm_output_dir.mkdir(exist_ok=True, parents=True)
+                                factorized_hm_output_dir = Path(visualization_dir, "regular", f"region-head-{j}")
+                            factorized_hm_output_dir.mkdir(exist_ok=True, parents=True)
                             img = Image.fromarray(region_hm)
-                            img.save(Path(blended_hm_output_dir, f"{x}_{y}.png",))
+                            img.save(Path(factorized_hm_output_dir, f"{x}_{y}.png",))
 
-    return visualization_dir
+    return factorized_attention_dir
 
 
 def attention_cmap_overlay(attention_map: np.ndarray, canvas: np.ndarray, cmap: matplotlib.colors.LinearSegmentedColormap, alpha: float) -> Image.Image:
@@ -3491,43 +2091,43 @@ def attention_contour_overlay(attention_map: np.ndarray, canvas: np.ndarray, cma
 
 
 def stitch_slide_heatmaps(
-    slide_path: Path,
+    wsi_path: Path,
     attention_dir: Path,
     output_dir: Path,
     spacing: float,
+    tolerance: float,
     patch_size: int,
     name: str = None,
     suffix: str = None,
-    downsample: int = 32,
+    segmentation_parameters: SegmentationParameters | None = None,
     downscale: int = 1,
     cmap: matplotlib.colors.LinearSegmentedColormap = plt.get_cmap("coolwarm"),
     segmentation_mask_path: Path = None,
     opacity: float = 0.5,
     threshold: Optional[float] = None,
     restrict_to_tissue: bool = False,
-    main_process: bool = True,
+    verbose: bool = True,
 ):
     """
     Returns region-level heatmaps stitched together at the slide-level.
 
     Args:
-    - slide_path (Path): path to the whole slide image
+    - wsi_path (Path): path to the whole slide image
     - attention_dir (Path): path to the directory containing unnormalized attention scores as .npy files
     - output_dir (Path): output directory for saving heatmaps
     - spacing (float): pixel spacing (in mpp) at which regions were extracted for that slide
     - name (str): file naming template
-    - downsample (int): uses this value to find the closest downsample level in the WSI for slide-level heatmap visualization
     - downscale (int): how much to downscale the output heatmap by (e.g. downscale=4 will resize 256x256 heatmaps to 64x64)
     - cmap (matplotlib.colors.LinearSegmentedColormap): colormap for plotting heatmaps
     - opacity (float): set opacity for non-tissue content on stitched heatmap
     - threshold (float): filter out attention scores lower than this value (set to None to disbale thresholding)
     - restrict_to_tissue (bool): whether to restrict highlighted regions to tissue content only
     """
-    wsi_object = WholeSlideImage(slide_path, mask_path=segmentation_mask_path, downsample=downsample)
+    wsi_object = WholeSlideImage(wsi_path, mask_path=segmentation_mask_path, segment_params=segmentation_parameters)
 
-    vis_level = wsi_object.get_best_level_for_downsample_custom(downsample)
+    vis_level = wsi_object.get_best_level_for_downsample_custom(segmentation_parameters.downsample)
     vis_spacing = wsi_object.get_level_spacing(vis_level)
-    wsi_canvas = wsi_object.wsi.get_slide(spacing=vis_spacing)
+    wsi_canvas = wsi_object.get_slide(spacing=vis_spacing)
     # x and y axes get inverted when using get_slide method
     width, height, _ = wsi_canvas.shape
 
@@ -3574,14 +2174,14 @@ def stitch_slide_heatmaps(
                     desc=f"Gathering min/max for head [{i+1}/{num_heads}]",
                     unit="region",
                     leave=False,
-                    disable=not main_process,
+                    disable=not verbose,
                 ) as t2:
                     for fp in t2:
                         attention_array = np.load(fp)
                         head_min[i] = min(head_min[i], attention_array.min())
                         head_max[i] = max(head_max[i], attention_array.max())
 
-    stitched_attention = np.zeros((width,height))
+    stitched_attention = np.zeros((width,height)) # wsi size at vis_level
     with tqdm.tqdm(
         range(num_heads),
         desc="Stitching heatmaps",
@@ -3602,18 +2202,24 @@ def stitch_slide_heatmaps(
                 desc=f"Stitching attention head [{i+1}/{num_heads}]",
                 unit="region",
                 leave=False,
-                disable=not main_process,
+                disable=not verbose,
             ) as t2:
                 for fp in t2:
+                    # x, y defined w.r.t level 0
                     x, y = int(fp.stem.split("_")[0]), int(fp.stem.split("_")[1])
-                    attention_array = np.load(fp)
+                    attention_array = np.load(fp) # (region_size, region_size)
                     w, h = attention_array.shape
-                    # normalize attention array
+                    # head-wise normalized attention array
                     attention_array = (attention_array - head_min[i]) / (head_max[i] - head_min[i] + 1e-8)
 
                     # need to scale attention_array from spacing level to vis level
-                    spacing_level = wsi_object.get_best_level_for_spacing(spacing)
-                    downsample_factor = tuple(dv/ds for dv,ds in zip(wsi_object.level_downsamples[vis_level], wsi_object.level_downsamples[spacing_level]))
+                    resize_factor = 1
+                    spacing_level, is_within_tolerance = wsi_object.get_best_level_for_spacing(spacing, tolerance)
+                    if not is_within_tolerance:
+                        natural_spacing = wsi_object.get_level_spacing(spacing_level)
+                        resize_factor = spacing / natural_spacing
+
+                    downsample_factor = tuple(dv/ds/resize_factor for dv,ds in zip(wsi_object.level_downsamples[vis_level], wsi_object.level_downsamples[spacing_level]))
                     w_downsampled = int(round(w * downscale / downsample_factor[0], 0))
                     h_downsampled = int(round(h * downscale / downsample_factor[1], 0))
 
@@ -3625,8 +2231,8 @@ def stitch_slide_heatmaps(
 
                     # need to scale coordinates from level 0 to vis_level
                     downsample_factor = tuple(dv/ds for dv,ds in zip(wsi_object.level_downsamples[vis_level], wsi_object.level_downsamples[0]))
-                    x_downsampled = int(round(x * 1 / downsample_factor[0], 0))
-                    y_downsampled = int(round(y * 1 / downsample_factor[1], 0))
+                    x_downsampled = int(round(x / downsample_factor[0], 0))
+                    y_downsampled = int(round(y / downsample_factor[1], 0))
 
                     stitched_attention[
                         y_downsampled : min(y_downsampled + h_downsampled, width),
@@ -3660,8 +2266,11 @@ def stitch_slide_heatmaps(
             # smoothed_attention = np.power(smoothed_attention, 0.5)
             smoothed_attention[smoothed_attention < 0.5] = 0
 
+            # print(f"wsi_canvas.shape: {wsi_canvas.shape}")
+            # print(f"smoothed_attention.shape: {smoothed_attention.shape}")
             overlayed_attention = attention_cmap_overlay(smoothed_attention, wsi_canvas, cmap, opacity)
             # overlayed_attention = attention_contour_overlay(smoothed_attention, wsi_canvas, cmap, threshold=0.5, alpha=opacity)
+            # print(f"overlayed_attention.size: {overlayed_attention.size}")
 
             if suffix:
                 fname = f"{fname}-{suffix}"
@@ -3672,7 +2281,7 @@ def stitch_slide_heatmaps(
 
 
 def display_stitched_heatmaps(
-    slide_path: Path,
+    wsi_path: Path,
     heatmap_dir: Path,
     output_dir: Path,
     name: str,
@@ -3682,13 +2291,12 @@ def display_stitched_heatmaps(
     coordinates_dir: Optional[Path] = None,
     downsample: int = 32,
     font_fp: Path = Path("arial.ttf"),
-    run_id: Optional[str] = None,
 ):
     """
     Display stitched heatmaps from multiple heads together, optionally alongside a visualization of patch extraction results.
 
     Args:
-    - slide_path (Path): path to the whole slide image
+    - wsi_path (Path): path to the whole slide image
     - heatmap_dir (Path): path to the directory containing heatmaps as .png files
     - output_dir (Path): output directory for saving heatmaps
     - name (str): file naming template
@@ -3699,7 +2307,7 @@ def display_stitched_heatmaps(
     - key (str): if display_patching is True, key used to retrieve extracted regions' coordinates
     - font_fp (Path): path to the font used for matplotlib figure text (e.g. for title & subtitles)
     """
-    slide_id = slide_path.stem
+    slide_id = wsi_path.stem
 
     heatmap_paths = sorted(list(heatmap_dir.glob(f"*.png")))
     heatmaps = {
@@ -3723,12 +2331,12 @@ def display_stitched_heatmaps(
             region_level = coordinates_arr["tile_level"][0]
             resize_factor = coordinates_arr["resize_factor"][0]
 
-        region_size = int(region_size_resized / resize_factor)
+        region_size = int(round(region_size_resized / resize_factor,0))
 
-        wsi_object = WholeSlideImage(slide_path)
+        wsi_object = WholeSlideImage(wsi_path)
         vis_level = wsi_object.get_best_level_for_downsample_custom(downsample)
         vis_spacing = wsi_object.get_level_spacing(vis_level)
-        slide_canvas = wsi_object.wsi.get_slide(spacing=vis_spacing)
+        slide_canvas = wsi_object.get_slide(spacing=vis_spacing)
 
         # scale region_size from region_level to vis_level
         downsample_factor = tuple(dv/ds for dv,ds in zip(wsi_object.level_downsamples[region_level], wsi_object.level_downsamples[vis_level]))
@@ -3759,8 +2367,6 @@ def display_stitched_heatmaps(
     ax.remove()
     plt.yticks(fontsize='large')
     color_bar_name = "color_bar.png"
-    if run_id:
-        color_bar_name = f"color_bar_{run_id}.png"
     plt.savefig(color_bar_name, bbox_inches='tight', dpi=150)
     plt.close()
     cbar = Image.open(color_bar_name)
@@ -3810,102 +2416,3 @@ def display_stitched_heatmaps(
 
     stitched_hm_path = Path(output_dir, f"{name}.png")
     canvas.save(stitched_hm_path, dpi=(300, 300))
-
-
-# Smoothing utility functions
-
-def find_neighboring_regions(coord, coordinates, region_size, scheme: int = 4):
-    x, y = coord
-    if scheme == 4:
-        neighbors_candidates = [(x,y-region_size), (x,y+region_size), (x-region_size,y), (x+region_size,y)]
-        descriptors = ["top", "bot", "left", "right"]
-    elif scheme == 8:
-        pass
-    neighbors = [n for n in neighbors_candidates if n in coordinates]
-    descriptors = [d for i, d in enumerate(descriptors) if neighbors_candidates[i] in coordinates]
-    if len(neighbors) > 0:
-        return neighbors, descriptors
-    else:
-        return None, None
-
-
-def find_l2r_neighbor(coords, region_coords, region_size):
-    x, y = coords
-    neigh = (x+region_size,y)
-    if neigh in region_coords:
-        return neigh
-    else:
-        return None
-
-
-# def create_overlap_regions(coords, region_coords, region_dir: Path, region_size: int):
-#     x1, y1 = coords
-#     fp1 = Path(region_dir, f"{x1}_{y1}.jpg")
-#     region1 = Image.open(fp1)
-#     # find top-to-bottom neighbor
-#     t2b_neighbor = find_t2b_neighbor(coords, region_coords, region_size)
-#     # find left-ro-right neighbor
-#     l2r_neighbor = find_l2r_neighbor(coords, region_coords, region_size)
-#     # iterate over neighboring pairs
-#     overlap_regions, overlap_coords = [], []
-#     if t2b_neighbor != None:
-#         x2, y2 = t2b_neighbor
-#         fp2 = Path(region_dir, f"{x2}_{y2}.jpg")
-#         region2 = Image.open(fp2)
-#         #TODO: might need to inverse x,y axes
-#         area1 = (0, region_size//2, region_size, region_size)
-#         area2 = (0, 0, region_size, region_size//2)
-#         crop1 = region1.crop(area1)
-#         crop2 = region2.crop(area2)
-#         canvas = Image.new(
-#             size=(region_size,region_size), mode=region1.mode,
-#         )
-#         canvas.paste(crop1, (0, 0))
-#         canvas.paste(crop2, (0, region_size//2))
-#         overlap_regions.append(canvas)
-#         overlap_coords.append(t2b_neighbor)
-#     if l2r_neighbor != None:
-#         x2, y2 = l2r_neighbor
-#         fp2 = Path(region_dir, f"{x2}_{y2}.jpg")
-#         region2 = Image.open(fp2)
-#         #TODO: might need to inverse x,y axes
-#         area1 = (region_size//2, 0, region_size, region_size)
-#         area2 = (0, 0, region_size//2, region_size)
-#         crop1 = region1.crop(area1)
-#         crop2 = region2.crop(area2)
-#         canvas = Image.new(
-#             size=(region_size,region_size), mode=region1.mode,
-#         )
-#         canvas.paste(crop1, (0, 0))
-#         canvas.paste(crop2, (region_size//2, 0))
-#         overlap_regions.append(canvas)
-#         overlap_coords.append(l2r_neighbor)
-#     return overlap_regions, overlap_coords
-
-
-def load_heatmaps_from_disk(root_dir, disable: bool = True):
-    heatmaps, coords = defaultdict(list), defaultdict(list)
-    nhead = len([_ for _ in root_dir.glob(f"head_*/")])
-    with tqdm.tqdm(
-        range(nhead),
-        desc="Loading heatmaps from disk",
-        unit="head",
-        leave=False,
-        disable=disable,
-    ) as t1:
-        for i in t1:
-            head_dir = Path(root_dir, f"head_{i}")
-            hms = [fp for fp in head_dir.glob("*.png")]
-            with tqdm.tqdm(
-                hms,
-                desc=f"Loading heatmap for head [{i+1}/{nhead}]",
-                unit="heatmap",
-                leave=False,
-                disable=disable,
-            ) as t2:
-                for fp in t2:
-                    x, y = int(fp.stem.split("_")[0]), int(fp.stem.split("_")[1])
-                    hm = np.array(Image.open(fp))
-                    heatmaps[i].append(hm)
-                    coords[i].append((x, y))
-    return heatmaps, coords
