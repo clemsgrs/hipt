@@ -28,13 +28,64 @@ from src.interpretability.wsi import WholeSlideImage, SegmentationParameters
 from src.interpretability.fm import FoundationModelFactory
 
 
+def transform_tiling_config(old_config: dict) -> dict:
+    """
+    Transforms old tiling config format (list of single-key dicts) into the new structured format.
+    """
+
+    # Extract and flatten top-level tiling keys
+    seg_params = old_config.get('seg_params', [])
+    filter_params = old_config.get('params', [])
+
+    # Build the new config
+    new_config = {
+            'read_coordinates_from': None,
+            'backend': old_config['backend'],
+            'params': {
+                'spacing': old_config['spacing'],
+                'tolerance': 0.07,
+                'tile_size': old_config['tile_size'],
+                'overlap': filter_params.get('overlap', 0.0),
+                'min_tissue_percentage': filter_params.get('tissue_thresh', 0.01),
+                'drop_holes': filter_params.get('drop_holes', False),
+                'use_padding': filter_params.get('use_padding', True),
+            },
+            'seg_params': {
+                'downsample': old_config['downsample'],
+                'sthresh': seg_params.get('sthresh', 8),
+                'sthresh_up': 255,
+                'mthresh': seg_params.get('mthresh', 7),
+                'close': seg_params.get('close', 4),
+                'use_otsu': seg_params.get('use_otsu', False),
+                'tissue_pixel_value': old_config.get('tissue_pixel_value', 1),
+            },
+            'filter_params': {
+                'ref_tile_size': filter_params.get('ref_tile_size', 16),
+                'a_t': filter_params.get('a_t', 4),
+                'a_h': filter_params.get('a_h', 2),
+                'max_n_holes': filter_params.get('max_n_holes', 8),
+            },
+            'visu_params': {
+                'downsample': 32
+            }
+    }
+
+    return new_config
+
+
 def get_config_from_path(config_path: Path | str):
     full_cfg = omegaconf.OmegaConf.load(config_path)
     cfg = full_cfg.tiling
-    if cfg.read_coordinates_from:
-        raise RuntimeError(
-            f"Provided tiling configuration might not be accurate as coordinates were read from: {cfg.read_coordinates_from}, please grab the tiling configuration from that folder instead"
-        )
+    if hasattr(cfg, "read_coordinates_from"):
+        if cfg.read_coordinates_from:
+            raise RuntimeError(
+                f"Provided tiling configuration might not be accurate as coordinates were read from: {cfg.read_coordinates_from}, please grab the tiling configuration from that folder instead"
+            )
+    else:
+        # reorganize older config
+        cfg = transform_tiling_config(cfg)
+        # Convert dict to an object with attribute access
+        cfg = omegaconf.OmegaConf.create(cfg)
     return cfg
 
 
@@ -208,24 +259,24 @@ class SlideAgg(nn.Module):
         return x_wsi
 
 
-def get_case_transformer(
+def get_slide_transformer(
     state_dict: dict,
     device: Optional[torch.device] = None,
     verbose: bool = True,
 ):
-    case_transformer = SlideAgg()
-    for p in case_transformer.parameters():
+    slide_transformer = SlideAgg()
+    for p in slide_transformer.parameters():
         p.requires_grad = False
-    case_transformer.eval()
-    case_transformer.to(device)
+    slide_transformer.eval()
+    slide_transformer.to(device)
 
     if verbose:
         print("Loading weights for slide-level Transformer...")
-    state_dict, msg = update_state_dict(model_dict=case_transformer.state_dict(), state_dict=state_dict)
-    case_transformer.load_state_dict(state_dict, strict=False)
+    state_dict, msg = update_state_dict(model_dict=slide_transformer.state_dict(), state_dict=state_dict)
+    slide_transformer.load_state_dict(state_dict, strict=False)
     if verbose:
         print(msg)
-    return case_transformer
+    return slide_transformer
 
 
 def add_margin(pil_img, top, right, bottom, left, color):
@@ -765,7 +816,7 @@ def get_slide_attention_scores(
     coordinates_dir: Path,
     patch_transformer: nn.Module,
     region_transformer: nn.Module,
-    case_transformer: nn.Module,
+    slide_transformer: nn.Module,
     patch_size: int,
     transforms: torchvision.transforms.Compose,
     downscale: int = 1,
@@ -786,7 +837,7 @@ def get_slide_attention_scores(
     - coordinates_dir (Path): path to root folder containing tiles coordinates
     - patch_transformer (nn.Module): patch-level Transformer
     - region_transformer (nn.Module): region-level Transformer
-    - case_transformer (nn.Module): slide-level Transformer
+    - slide_transformer (nn.Module): slide-level Transformer
     - downscale (int): how much to downscale the output regions by (e.g. downscale=4 will resize 4096x4096 regions to 1024x1024)
     - patch_device (torch.device): device on which patch_transformer is
     - region_device (torch.device): device on which region_transformer is
@@ -911,7 +962,7 @@ def get_slide_attention_scores(
 
                             feature_seq = torch.stack(features, dim=0).squeeze(1)  # (M, 192)
                             feature_seq = feature_seq.to(slide_device, non_blocking=True)
-                            slide_attention = case_transformer(feature_seq, return_attention=True)
+                            slide_attention = slide_transformer(feature_seq, return_attention=True)
                             slide_attention = slide_attention.squeeze(0)  # (M)
                             slide_attention = normalize_slide_scores(slide_attention.cpu().numpy())  # (M)
                             slide_attention *= 100
@@ -1040,7 +1091,7 @@ def get_slide_attention_scores(
 
             feature_seq = torch.stack(features, dim=0).squeeze(1)  # (M, 192)
             feature_seq = feature_seq.to(slide_device, non_blocking=True)
-            slide_attention = case_transformer(feature_seq, return_attention=True)
+            slide_attention = slide_transformer(feature_seq, return_attention=True)
             slide_attention = slide_attention.squeeze(0)  # (M)
             slide_attention = normalize_slide_scores(slide_attention.cpu().numpy())  # (M)
             slide_attention = slide_attention.reshape(-1, 1, 1)  # (M, 1, 1)
@@ -1315,12 +1366,12 @@ def get_region_level_heatmaps(
     return attention_dir
 
 
-def get_case_level_heatmaps(
+def get_slide_level_heatmaps(
     wsi_path: Path,
     coordinates_dir: Path,
     patch_transformer: nn.Module,
     region_transformer: nn.Module,
-    case_transformer: nn.Module,
+    slide_transformer: nn.Module,
     patch_size: int,
     transforms: torchvision.transforms.Compose,
     output_dir: Path,
@@ -1348,7 +1399,7 @@ def get_case_level_heatmaps(
     - coordinates_dir (Path): path to root folder containing region coordinates in .npy files
     - patch_transformer (nn.Module): patch-level Transformer
     - region_transformer (nn.Module): region-level Transformer
-    - case_transformer (nn.Module): slide-level Transformer
+    - slide_transformer (nn.Module): slide-level Transformer
     - downscale (int): how much to downscale the output heatmap by (e.g. downscale=4 will resize 256x256 heatmaps to 64x64)
     - alpha (float): image blending factor for cv2.addWeighted
     - cmap (matplotlib.pyplot): colormap for creating heatmaps
@@ -1361,12 +1412,12 @@ def get_case_level_heatmaps(
     """
     slide_id = wsi_path.stem.replace(" ", "_")
 
-    att, coords = get_slide_attention_scores(
+    att, _ = get_slide_attention_scores(
         wsi_path,
         coordinates_dir,
         patch_transformer,
         region_transformer,
-        case_transformer,
+        slide_transformer,
         patch_size,
         transforms=transforms,
         downscale=downscale,
@@ -1378,7 +1429,6 @@ def get_case_level_heatmaps(
         region_device=region_device,
         slide_device=slide_device,
     )  # (M, region_size, region_size), (M)
-    print(f"attn.min: {att.min()}, attn.max: {att.max()}")
 
     wsi = wsd.WholeSlideImage(wsi_path, backend="asap")
 
@@ -1492,7 +1542,7 @@ def get_factorized_heatmaps(
     coordinates_dir: Path,
     patch_transformer: nn.Module,
     region_transformer: nn.Module,
-    case_transformer: nn.Module,
+    slide_transformer: nn.Module,
     patch_size: int,
     transforms: torchvision.transforms.Compose,
     level: str,
@@ -1526,7 +1576,7 @@ def get_factorized_heatmaps(
     - coordinates_dir (Path): path to root folder containing region coordinates in .npy files
     - patch_transformer (nn.Module): patch-level Transformer
     - region_transformer (nn.Module): region-level Transformer
-    - case_transformer (nn.Module): slide-level Transformer
+    - slide_transformer (nn.Module): slide-level Transformer
     - level (str): level at which the model was trained on
     - output_dir (Path): output directory for saving heatmaps
     - gamma (float): factor weighting the importance given to frozen model attention scores w.r.t finetuned model attention scores
@@ -1538,18 +1588,17 @@ def get_factorized_heatmaps(
     - granularity (dict): create additional offset patches to get more granular heatmaps
     - patch_device (torch.device): device on which patch_transformer is
     - region_device (torch.device): device on which region_transformer is
-    - slide_device (torch.device): device on which case_transformer is
+    - slide_device (torch.device): device on which slide_transformer is
     - verbose (bool): controls tqdm display when running with multiple gpus
     """
     slide_id = wsi_path.stem.replace(" ", "_")
-    wsi = wsd.WholeSlideImage(wsi_path, backend="asap")
 
     slide_attention, _ = get_slide_attention_scores(
         wsi_path,
         coordinates_dir,
         patch_transformer,
         region_transformer,
-        case_transformer,
+        slide_transformer,
         patch_size,
         transforms=transforms,
         downscale=downscale,
@@ -1562,6 +1611,8 @@ def get_factorized_heatmaps(
         slide_device=slide_device,
         verbose=verbose,
     )  # (M, region_size, region_size), (M)
+
+    wsi = wsd.WholeSlideImage(wsi_path, backend="asap")
 
     coordinates_file = coordinates_dir / f"{slide_id}.npy"
     coordinates_arr = np.load(coordinates_file)
@@ -1584,14 +1635,14 @@ def get_factorized_heatmaps(
 
     token_size = patch_transformer.token_size
 
-    visualization_dir = output_dir / "visualization" / "factorized" / f"{region_size}-{patch_size}"
-    visualization_dir.mkdir(exist_ok=True, parents=True)
-
     raw_attention_dir = output_dir / "attention" / "factorized" / "raw" / f"{region_size}-{patch_size}"
     raw_attention_dir.mkdir(exist_ok=True, parents=True)
 
     factorized_attention_dir = output_dir / "attention" / "factorized" / "factorized" / f"{region_size}-{patch_size}"
     factorized_attention_dir.mkdir(exist_ok=True, parents=True)
+
+    visualization_dir = output_dir / "visualization" / "factorized" / f"{region_size}-{patch_size}"
+    visualization_dir.mkdir(exist_ok=True, parents=True)
 
     nhead_patch = 1
     compute_patch_attention = compute_patch_attention and gamma != 1
@@ -1649,9 +1700,8 @@ def get_factorized_heatmaps(
                 patch_device=patch_device,
                 region_device=region_device,
                 compute_patch_attention=compute_patch_attention,
-            ) # (n_patch**2, nhead, patch_size, patch_size) when downscale = 1
-
-            slide_att_scores = slide_attention[k]
+            )
+            # region_att is (nhead, region_size, region_size) when downscale = 1
 
             if granularity.region:
                 directions = [
@@ -1832,6 +1882,8 @@ def get_factorized_heatmaps(
         disable=not verbose,
     ) as t1:
         for k, (x,y) in enumerate(t1):
+
+            slide_att_scores = slide_attention[k]
 
             region_arr = wsi.get_patch(
                 x,
@@ -2103,6 +2155,7 @@ def stitch_slide_heatmaps(
     downscale: int = 1,
     cmap: matplotlib.colors.LinearSegmentedColormap = plt.get_cmap("coolwarm"),
     segmentation_mask_path: Path = None,
+    smoothing: bool = True,
     opacity: float = 0.5,
     threshold: Optional[float] = None,
     restrict_to_tissue: bool = False,
@@ -2256,21 +2309,20 @@ def stitch_slide_heatmaps(
                             x_downsampled : min(x_downsampled + w_downsampled, height),
                         ] * tissue_mask
 
+            if smoothing:
+                scale = spacing / vis_spacing
+                sigma = int(scale * patch_size * 0.25)
+                if threshold is not None:
+                    stitched_attention[stitched_attention < threshold] = 0
+                smoothed_attention = gaussian_filter(stitched_attention, sigma=sigma)
+                # gamma correction
+                # smoothed_attention = np.power(smoothed_attention, 0.5)
+                smoothed_attention[smoothed_attention < 0.5] = 0
 
-            scale = spacing / vis_spacing
-            sigma = int(scale * patch_size * 0.25)
-            if threshold is not None:
-                stitched_attention[stitched_attention < threshold] = 0
-            smoothed_attention = gaussian_filter(stitched_attention, sigma=sigma)
-            # gamma correction
-            # smoothed_attention = np.power(smoothed_attention, 0.5)
-            smoothed_attention[smoothed_attention < 0.5] = 0
-
-            # print(f"wsi_canvas.shape: {wsi_canvas.shape}")
-            # print(f"smoothed_attention.shape: {smoothed_attention.shape}")
-            overlayed_attention = attention_cmap_overlay(smoothed_attention, wsi_canvas, cmap, opacity)
-            # overlayed_attention = attention_contour_overlay(smoothed_attention, wsi_canvas, cmap, threshold=0.5, alpha=opacity)
-            # print(f"overlayed_attention.size: {overlayed_attention.size}")
+                overlayed_attention = attention_cmap_overlay(smoothed_attention, wsi_canvas, cmap, opacity)
+                # overlayed_attention = attention_contour_overlay(smoothed_attention, wsi_canvas, cmap, threshold=0.5, alpha=opacity)
+            else:
+                overlayed_attention = attention_cmap_overlay(stitched_attention, wsi_canvas, cmap, opacity)
 
             if suffix:
                 fname = f"{fname}-{suffix}"

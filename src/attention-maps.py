@@ -12,11 +12,11 @@ from src.interpretability.utils import (
     cmap_map,
     get_patch_transformer,
     get_region_transformer,
-    get_case_transformer,
+    get_slide_transformer,
     generate_masks,
     get_config_from_path,
     get_region_level_heatmaps,
-    get_case_level_heatmaps,
+    get_slide_level_heatmaps,
     get_factorized_heatmaps,
     stitch_slide_heatmaps,
     display_stitched_heatmaps,
@@ -111,12 +111,12 @@ def main(cfg: DictConfig):
 
     start_idx = list(aggregator_sd.keys()).index("global_phi.0.weight")
     end_idx = list(aggregator_sd.keys()).index("global_rho.0.bias")
-    case_transformer_sd = {
+    slide_transformer_sd = {
         k: v
         for i, (k, v) in enumerate(aggregator_sd.items())
         if i >= start_idx and i <= end_idx
     }
-    case_transformer = get_case_transformer(state_dict=case_transformer_sd, device=device)
+    slide_transformer = get_slide_transformer(state_dict=slide_transformer_sd, device=device)
     print("=+="*10)
 
     custom_cmap = cmap_map(lambda x: x / 2 + 0.5, matplotlib.cm.jet)
@@ -165,7 +165,6 @@ def main(cfg: DictConfig):
         verbose=True,
     )
 
-    attention_dir = Path("/data/temporary/clement/code/hipt/output/attention-maps/jthnfzot/2025-08-06_23_00/3da443b54bdf/attention/region/2048")
     stitched_heatmap_dir = stitch_slide_heatmaps(
         wsi_path,
         attention_dir,
@@ -203,12 +202,12 @@ def main(cfg: DictConfig):
 
     print(f"Computing slide-level heatmaps...")
 
-    attention_dir = get_case_level_heatmaps(
+    attention_dir = get_slide_level_heatmaps(
         wsi_path,
         coordinates_dir,
         patch_transformer,
         region_transformer,
-        case_transformer,
+        slide_transformer,
         cfg.aggregator.patch_size,
         transforms,
         output_dir,
@@ -239,6 +238,7 @@ def main(cfg: DictConfig):
         cmap=custom_cmap,
         segmentation_mask_path=mask_path,
         restrict_to_tissue=cfg.restrict_to_tissue,
+        smoothing=False, # disable gaussian smoothing for slide-level heatmaps
         opacity=cfg.opacity,
         verbose=True,
     )
@@ -263,12 +263,12 @@ def main(cfg: DictConfig):
 
     print(f"Computing factorized heatmaps (gamma={cfg.gamma})")
 
-    heatmap_dir = get_factorized_heatmaps(
+    factorized_attention_dir = get_factorized_heatmaps(
         wsi_path,
         coordinates_dir,
         patch_transformer,
         region_transformer,
-        case_transformer,
+        slide_transformer,
         cfg.aggregator.patch_size,
         transforms,
         cfg.aggregator.level,
@@ -291,14 +291,14 @@ def main(cfg: DictConfig):
         verbose=True,
     )
 
-    heatmap_dir_reg = heatmap_dir / "regular"
     stitched_heatmap_dir = stitch_slide_heatmaps(
         wsi_path,
-        heatmap_dir_reg,
+        factorized_attention_dir,
         output_dir,
         name="factorized",
         spacing=tiling_config.params.spacing,
         tolerance=tiling_config.params.tolerance,
+        patch_size=cfg.aggregator.patch_size,
         segmentation_parameters=tiling_config.seg_params,
         downscale=cfg.downscale,
         cmap=custom_cmap,
