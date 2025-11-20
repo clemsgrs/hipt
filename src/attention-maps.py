@@ -1,14 +1,16 @@
+import tqdm
 import torch
 import random
 import argparse
 import matplotlib
 import numpy as np
+import pandas as pd
 
 from pathlib import Path
 from omegaconf import DictConfig
 
 from src.utils import setup
-from src.interpretability.utils import (
+from src.interpretability import (
     cmap_map,
     get_patch_transformer,
     get_region_transformer,
@@ -46,22 +48,7 @@ def get_args_parser(add_help: bool = True):
 def main(cfg: DictConfig):
 
     cfg = setup(args)
-
-    wsi_path = Path(cfg.wsi_path)
-    wsi_name = wsi_path.stem.replace(" ", "_")
-
-    mask_path = None
-    if cfg.mask_path:
-        mask_path = Path(cfg.mask_path)
-
-    tiling_config = get_config_from_path(cfg.tiling_config)
-
-    output_dir = Path(cfg.output_dir, wsi_name)
-    output_dir.mkdir(exist_ok=True, parents=True)
-
-    coordinates_dir = Path(cfg.coordinates_dir)
-
-    mask_attention = (cfg.encoder.mask_attn is True) or (cfg.aggregator.mask_attn is True)
+    output_dir = Path(cfg.output_dir)
 
     # seed everything to ensure reproducible heatmaps
     seed = 0
@@ -120,207 +107,231 @@ def main(cfg: DictConfig):
     print("=+="*10)
 
     custom_cmap = cmap_map(lambda x: x / 2 + 0.5, matplotlib.cm.jet)
+    custom_cmap.set_bad(color=(0,0,0,0))
 
-    mask_patch, mask_token = None, None
-    if mask_attention:
-        mask_patch, mask_token = generate_masks(
-            wsi_name,
-            wsi_path,
-            mask_path,
-            coordinates_dir,
-            region_size=cfg.aggregator.region_size,
-            patch_size=cfg.aggregator.patch_size,
-            token_size=patch_transformer.token_size,
-            spacing=tiling_config.params.spacing,
-            downsample=1,
-            tissue_pixel_value=tiling_config.seg_params.tissue_pixel_value,
-        )
+    df = pd.read_csv(cfg.csv)
+    wsi_paths = [Path(x) for x in df.wsi_path.tolist()]
+    mask_paths = [Path(x) for x in df.mask_path.tolist()]
+    coordinates_paths = [Path(x) for x in df.coordinates_path.tolist()]
 
-    #########################
-    # REGION-LEVEL HEATMAPS #
-    #########################
+    mask_attention = (cfg.encoder.mask_attn is True) or (cfg.aggregator.mask_attn is True)
 
-    print(f"Computing region-level heatmaps...")
+    with tqdm.tqdm(
+        zip(wsi_paths, mask_paths, coordinates_paths),
+        desc="Generating attention maps",
+        unit=" wsi",
+        leave=True,
+    ) as t:
+        for wsi_path, mask_path, coordinates_path in t:
 
-    attention_dir = get_region_level_heatmaps(
-        wsi_path=wsi_path,
-        coordinates_dir=coordinates_dir,
-        patch_transformer=patch_transformer,
-        region_transformer=region_transformer,
-        patch_size=cfg.aggregator.patch_size,
-        transforms=transforms,
-        output_dir=output_dir,
-        downscale=cfg.downscale,
-        granular=cfg.granularity.region,
-        offset=cfg.granularity.offset.region,
-        segmentation_mask_path=mask_path,
-        segmentation_parameters=tiling_config.seg_params,
-        spacing=tiling_config.params.spacing,
-        tissue_pixel_value=tiling_config.seg_params.tissue_pixel_value,
-        patch_attn_mask=mask_patch,
-        token_attn_mask=mask_token,
-        compute_patch_attention=False,
-        patch_device=device,
-        region_device=device,
-        verbose=True,
-    )
+            wsi_name = wsi_path.stem.replace(" ", "_")
+            output_subdir = output_dir / wsi_name
+            output_subdir.mkdir(exist_ok=True, parents=True)
 
-    stitched_heatmap_dir = stitch_slide_heatmaps(
-        wsi_path,
-        attention_dir,
-        output_dir,
-        name="region",
-        spacing=tiling_config.params.spacing,
-        tolerance=tiling_config.params.tolerance,
-        patch_size=cfg.aggregator.patch_size,
-        segmentation_parameters=tiling_config.seg_params,
-        downscale=cfg.downscale,
-        cmap=custom_cmap,
-        segmentation_mask_path=mask_path,
-        opacity=cfg.opacity,
-        threshold=cfg.threshold,
-        restrict_to_tissue=cfg.restrict_to_tissue,
-        verbose=True,
-    )
+            root_dir = coordinates_path.parents[1]
+            tiling_config_file = root_dir / "config.yaml"
+            tiling_config = get_config_from_path(tiling_config_file)
 
-    if cfg.display:
-        display_stitched_heatmaps(
-            wsi_path,
-            stitched_heatmap_dir,
-            output_dir,
-            name="region",
-            display_patching=True,
-            cmap=custom_cmap,
-            coordinates_dir=coordinates_dir,
-            downsample=tiling_config.seg_params.downsample,
-            font_fp=cfg.font_fp,
-        )
+            mask_patch, mask_token = None, None
+            if mask_attention:
+                mask_patch, mask_token = generate_masks(
+                    wsi_name,
+                    wsi_path,
+                    mask_path,
+                    coordinates_path,
+                    region_size=cfg.aggregator.region_size,
+                    patch_size=cfg.aggregator.patch_size,
+                    token_size=patch_transformer.token_size,
+                    spacing=tiling_config.params.spacing,
+                    downsample=1,
+                    tissue_pixel_value=tiling_config.seg_params.tissue_pixel_value,
+                )
 
-    ########################
-    # SLIDE-LEVEL HEATMAPS #
-    ########################
+            #########################
+            # REGION-LEVEL HEATMAPS #
+            #########################
 
-    print(f"Computing slide-level heatmaps...")
+            print(f"Computing region-level heatmaps...")
 
-    attention_dir = get_slide_level_heatmaps(
-        wsi_path,
-        coordinates_dir,
-        patch_transformer,
-        region_transformer,
-        slide_transformer,
-        cfg.aggregator.patch_size,
-        transforms,
-        output_dir,
-        downscale=cfg.downscale,
-        threshold=cfg.threshold,
-        highlight=cfg.highlight,
-        cmap=custom_cmap,
-        granular=cfg.granularity.slide,
-        offset=cfg.granularity.offset.slide,
-        patch_attn_mask=mask_patch,
-        token_attn_mask=mask_token,
-        patch_device=device,
-        region_device=device,
-        slide_device=device,
-        verbose=True,
-    )
+            attention_dir = get_region_level_heatmaps(
+                wsi_path=wsi_path,
+                coordinates_path=coordinates_path,
+                patch_transformer=patch_transformer,
+                region_transformer=region_transformer,
+                patch_size=cfg.aggregator.patch_size,
+                transforms=transforms,
+                output_dir=output_subdir,
+                downscale=cfg.downscale,
+                granular=cfg.granularity.region,
+                offset=cfg.granularity.offset.region,
+                segmentation_mask_path=mask_path,
+                segmentation_parameters=tiling_config.seg_params,
+                spacing=tiling_config.params.spacing,
+                tissue_pixel_value=tiling_config.seg_params.tissue_pixel_value,
+                patch_attn_mask=mask_patch,
+                token_attn_mask=mask_token,
+                compute_patch_attention=False,
+                patch_device=device,
+                region_device=device,
+                verbose=True,
+            )
 
-    stitched_heatmap_dir = stitch_slide_heatmaps(
-        wsi_path,
-        attention_dir,
-        output_dir,
-        name="wsi",
-        spacing=tiling_config.params.spacing,
-        tolerance=tiling_config.params.tolerance,
-        patch_size=cfg.aggregator.patch_size,
-        segmentation_parameters=tiling_config.seg_params,
-        downscale=cfg.downscale,
-        cmap=custom_cmap,
-        segmentation_mask_path=mask_path,
-        restrict_to_tissue=cfg.restrict_to_tissue,
-        smoothing=False, # disable gaussian smoothing for slide-level heatmaps
-        opacity=cfg.opacity,
-        verbose=True,
-    )
+            stitched_heatmap_dir = stitch_slide_heatmaps(
+                wsi_path,
+                attention_dir,
+                output_subdir,
+                name="region",
+                spacing=tiling_config.params.spacing,
+                tolerance=tiling_config.params.tolerance,
+                patch_size=cfg.aggregator.patch_size,
+                segmentation_parameters=tiling_config.seg_params,
+                downscale=cfg.downscale,
+                cmap=custom_cmap,
+                segmentation_mask_path=mask_path,
+                opacity=cfg.opacity,
+                threshold=cfg.threshold,
+                restrict_to_tissue=cfg.restrict_to_tissue,
+                verbose=True,
+            )
 
-    if cfg.display:
-        display_stitched_heatmaps(
-            wsi_path,
-            stitched_heatmap_dir,
-            output_dir,
-            fname="wsi",
-            display_patching=True,
-            draw_grid=False,
-            cmap=custom_cmap,
-            coordinates_dir=coordinates_dir,
-            downsample=tiling_config.seg_params.downsample,
-            font_fp=cfg.font_fp,
-        )
+            if cfg.display:
+                display_stitched_heatmaps(
+                    wsi_path,
+                    stitched_heatmap_dir,
+                    output_subdir,
+                    name="region",
+                    display_patching=True,
+                    cmap=custom_cmap,
+                    coordinates_path=coordinates_path,
+                    downsample=tiling_config.seg_params.downsample,
+                    font_fp=cfg.font_fp,
+                )
 
-    ####################
-    # FACTORIZED HEATMAPS #
-    ####################
+            ########################
+            # SLIDE-LEVEL HEATMAPS #
+            ########################
 
-    print(f"Computing factorized heatmaps (gamma={cfg.gamma})")
+            print(f"Computing slide-level heatmaps...")
 
-    factorized_attention_dir = get_factorized_heatmaps(
-        wsi_path,
-        coordinates_dir,
-        patch_transformer,
-        region_transformer,
-        slide_transformer,
-        cfg.aggregator.patch_size,
-        transforms,
-        cfg.aggregator.level,
-        output_dir,
-        gamma=cfg.gamma,
-        downscale=cfg.downscale,
-        threshold=cfg.threshold,
-        cmap=custom_cmap,
-        granularity=cfg.granularity,
-        segmentation_mask_path=mask_path,
-        spacing=tiling_config.params.spacing,
-        downsample=tiling_config.seg_params.downsample,
-        tissue_pixel_value=tiling_config.seg_params.tissue_pixel_value,
-        patch_attn_mask=mask_patch,
-        token_attn_mask=mask_token,
-        compute_patch_attention=False,
-        patch_device=device,
-        region_device=device,
-        slide_device=device,
-        verbose=True,
-    )
+            attention_dir = get_slide_level_heatmaps(
+                wsi_path,
+                coordinates_path,
+                patch_transformer,
+                region_transformer,
+                slide_transformer,
+                cfg.aggregator.patch_size,
+                transforms,
+                output_subdir,
+                downscale=cfg.downscale,
+                threshold=cfg.threshold,
+                highlight=cfg.highlight,
+                cmap=custom_cmap,
+                granular=cfg.granularity.slide,
+                offset=cfg.granularity.offset.slide,
+                patch_attn_mask=mask_patch,
+                token_attn_mask=mask_token,
+                patch_device=device,
+                region_device=device,
+                slide_device=device,
+                verbose=True,
+            )
 
-    stitched_heatmap_dir = stitch_slide_heatmaps(
-        wsi_path,
-        factorized_attention_dir,
-        output_dir,
-        name="factorized",
-        spacing=tiling_config.params.spacing,
-        tolerance=tiling_config.params.tolerance,
-        patch_size=cfg.aggregator.patch_size,
-        segmentation_parameters=tiling_config.seg_params,
-        downscale=cfg.downscale,
-        cmap=custom_cmap,
-        segmentation_mask_path=mask_path,
-        restrict_to_tissue=cfg.restrict_to_tissue,
-        opacity=cfg.opacity,
-        verbose=True,
-    )
+            stitched_heatmap_dir = stitch_slide_heatmaps(
+                wsi_path,
+                attention_dir,
+                output_subdir,
+                name="wsi",
+                spacing=tiling_config.params.spacing,
+                tolerance=tiling_config.params.tolerance,
+                patch_size=cfg.aggregator.patch_size,
+                segmentation_parameters=tiling_config.seg_params,
+                downscale=cfg.downscale,
+                cmap=custom_cmap,
+                segmentation_mask_path=mask_path,
+                restrict_to_tissue=cfg.restrict_to_tissue,
+                smoothing=False, # disable gaussian smoothing for slide-level heatmaps
+                opacity=cfg.opacity,
+                verbose=True,
+            )
 
-    if cfg.display:
-        display_stitched_heatmaps(
-            wsi_path,
-            stitched_heatmap_dir,
-            output_dir,
-            fname="factorized",
-            display_patching=True,
-            draw_grid=False,
-            cmap=custom_cmap,
-            coordinates_dir=coordinates_dir,
-            downsample=tiling_config.seg_params.downsample,
-            font_fp=cfg.font_fp,
-        )
+            if cfg.display:
+                display_stitched_heatmaps(
+                    wsi_path,
+                    stitched_heatmap_dir,
+                    output_subdir,
+                    fname="wsi",
+                    display_patching=True,
+                    draw_grid=False,
+                    cmap=custom_cmap,
+                    coordinates_path=coordinates_path,
+                    downsample=tiling_config.seg_params.downsample,
+                    font_fp=cfg.font_fp,
+                )
+
+            ####################
+            # FACTORIZED HEATMAPS #
+            ####################
+
+            print(f"Computing factorized heatmaps (gamma={cfg.gamma})")
+
+            factorized_attention_dir = get_factorized_heatmaps(
+                wsi_path,
+                coordinates_path,
+                patch_transformer,
+                region_transformer,
+                slide_transformer,
+                cfg.aggregator.patch_size,
+                transforms,
+                cfg.aggregator.level,
+                output_subdir,
+                gamma=cfg.gamma,
+                downscale=cfg.downscale,
+                threshold=cfg.threshold,
+                cmap=custom_cmap,
+                granularity=cfg.granularity,
+                segmentation_mask_path=mask_path,
+                spacing=tiling_config.params.spacing,
+                downsample=tiling_config.seg_params.downsample,
+                tissue_pixel_value=tiling_config.seg_params.tissue_pixel_value,
+                patch_attn_mask=mask_patch,
+                token_attn_mask=mask_token,
+                compute_patch_attention=False,
+                patch_device=device,
+                region_device=device,
+                slide_device=device,
+                verbose=True,
+            )
+
+            stitched_heatmap_dir = stitch_slide_heatmaps(
+                wsi_path,
+                factorized_attention_dir,
+                output_subdir,
+                name="factorized",
+                spacing=tiling_config.params.spacing,
+                tolerance=tiling_config.params.tolerance,
+                patch_size=cfg.aggregator.patch_size,
+                segmentation_parameters=tiling_config.seg_params,
+                downscale=cfg.downscale,
+                cmap=custom_cmap,
+                segmentation_mask_path=mask_path,
+                restrict_to_tissue=cfg.restrict_to_tissue,
+                opacity=cfg.opacity,
+                verbose=True,
+            )
+
+            if cfg.display:
+                display_stitched_heatmaps(
+                    wsi_path,
+                    stitched_heatmap_dir,
+                    output_subdir,
+                    fname="factorized",
+                    display_patching=True,
+                    draw_grid=False,
+                    cmap=custom_cmap,
+                    coordinates_path=coordinates_path,
+                    downsample=tiling_config.seg_params.downsample,
+                    font_fp=cfg.font_fp,
+                )
 
 
 if __name__ == "__main__":

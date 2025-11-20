@@ -1,8 +1,9 @@
 model_id: "fl8qnilb"
 
 csv: "/data/temporary/clement/code/hipt/data/contribution-scores.csv"
+# csv: "/data/temporary/clement/code/hipt/data/contribution-scores-small.csv"
 
-output_dir: "output/attention-maps/${model_id}"
+output_dir: "output/contribution-maps/${model_id}"
 
 fold: 4
 level: "local"
@@ -24,13 +25,12 @@ aggregator:
   num_classes: 4
   pretrained_weights: "/data/temporary/clement/leopard/baseline/survival-multi/${model_id}/checkpoints/fold_${fold}/best.pt"
 
-display: true # whether to display stitched heatmaps from multiple attention heads side by side
+display: false # whether to display stitched heatmaps from multiple attention heads side by side
 downscale: 1
 threshold:
 highlight:
 opacity: 0.7 # set opacity for non-tissue content on stitched heatmap
 restrict_to_tissue: true
-gamma: 1.0
 font_fp: "/data/temporary/clement/code/hipt/montserrat.ttf"
 
 granularity:
