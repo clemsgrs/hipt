@@ -75,6 +75,7 @@ class LocalHIPT(BaseModel):
         dropout: float = 0.25,
         mask_attn: bool = False,
         num_register_tokens: int = 0,
+        num_heads: int = 6,
         pretrained_weights: str | None = None,
         img_size_pretrained: int | None = None,
     ):
@@ -92,6 +93,7 @@ class LocalHIPT(BaseModel):
             mask_attn=mask_attn,
             img_size_pretrained=img_size_pretrained,
             num_register_tokens=num_register_tokens,
+            num_heads=num_heads,
         )
 
         if pretrained_weights and Path(pretrained_weights).is_file():

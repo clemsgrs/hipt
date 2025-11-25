@@ -28,6 +28,7 @@ class ModelFactory:
                 dropout=options.dropout,
                 mask_attn=options.mask_attn,
                 num_register_tokens=options.num_register_tokens,
+                num_heads=options.num_heads,
                 pretrained_weights=options.pretrained_weights,
                 img_size_pretrained=options.img_size_pretrained,
             )

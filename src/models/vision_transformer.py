@@ -701,6 +701,7 @@ def vit4k_xs(
     output_embed_dim: int = 192,
     num_classes: int = 0,
     num_register_tokens: int = 0,
+    num_heads: int = 6,
     **kwargs,
 ):
     model = VisionTransformer4K(
@@ -710,7 +711,7 @@ def vit4k_xs(
         img_size=img_size,
         patch_size=patch_size,
         depth=6,
-        num_heads=6,
+        num_heads=num_heads,
         mlp_ratio=4,
         qkv_bias=True,
         norm_layer=partial(nn.LayerNorm, eps=1e-6),
