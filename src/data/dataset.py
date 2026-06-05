@@ -65,9 +65,14 @@ class ExtractedFeaturesSurvivalDataset(ExtractedFeaturesDataset):
         self.seed = self.options.seed
 
         self.df = self.prepare_data(self.options.df)
-        self.num_classes = len(
-            self.options.df.discrete_label.value_counts(dropna=True)
-        )
+        # discrete_label is only needed by the NLL path; the Cox path uses raw
+        # event_time / censored and ignores it
+        if "discrete_label" in self.options.df.columns:
+            self.num_classes = len(
+                self.options.df.discrete_label.value_counts(dropna=True)
+            )
+        else:
+            self.num_classes = 1
 
     def __getitem__(self, idx: int):
         row = self.df.loc[idx]
@@ -78,5 +83,5 @@ class ExtractedFeaturesSurvivalDataset(ExtractedFeaturesDataset):
         fp = Path(self.options.features_dir, f"{case_id}.pt")
         feature = torch.load(fp, map_location='cpu')
 
-        label = row.discrete_label
+        label = row.discrete_label if "discrete_label" in self.df.columns else -1
         return idx, feature, label, event_time, censored

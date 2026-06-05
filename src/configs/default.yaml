@@ -7,6 +7,14 @@ output_dir: "output" # output directory
 
 task: "classification" # task type: classification, regression, survival
 
+survival:
+  loss: "nll" # survival loss: "nll" (discrete-time) or "coxph" (continuous-time)
+  cox:
+    n: 48 # prediction-accumulation window size = Cox risk-set size
+    ties: "breslow" # tie handling passed to torchsurv: "breslow" or "efron"
+    event_balanced: true # guarantee at least min_events events per window
+    min_events: 1 # minimum number of events per accumulation window
+
 num_classes: 6 # number of classes for classification task
 label_name: "label"
 label_mapping:

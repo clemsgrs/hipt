@@ -1,9 +1,10 @@
+import numpy as np
 import torch
 import torch.nn as nn
 
 from pathlib import Path
 
-from src.utils.loss import NLLSurvLoss
+from src.utils.loss import NLLSurvLoss, CoxSurvLoss
 
 
 def collate_features(batch, label_type: str = "int"):
@@ -34,16 +35,94 @@ class LossFactory:
     def __init__(
         self,
         task: str,
+        survival_loss: str = "nll",
+        cox_ties: str = "breslow",
     ):
         if task == "classification":
             self.criterion = nn.CrossEntropyLoss()
         elif task == "regression":
             self.criterion = nn.MSELoss()
         elif task == "survival":
-            self.criterion = NLLSurvLoss()
+            if survival_loss == "coxph":
+                self.criterion = CoxSurvLoss(ties=cox_ties)
+            else:
+                self.criterion = NLLSurvLoss()
 
     def get_loss(self):
         return self.criterion
+
+
+class EventBalancedSampler(torch.utils.data.Sampler):
+    """Flat index sampler whose every consecutive block of ``n`` indices contains
+    at least ``min_events`` events.
+
+    Bags are forwarded one at a time (batch_size=1), so this orders the *flat*
+    stream of indices rather than returning batches. The Cox training loop slices
+    the stream into windows of size ``n``; this sampler guarantees each window has
+    events (a Cox loss needs >= 1 event to produce a gradient). It also drops the
+    trailing partial window, so ``len`` is always a multiple of ``n``.
+
+    This changes how patients are *grouped*, not which patients are seen: every
+    event and censored patient is placed exactly once per epoch (up to the dropped
+    remainder).
+    """
+
+    def __init__(
+        self,
+        censored,
+        n: int,
+        min_events: int = 1,
+        seed: int = 0,
+    ):
+        censored = torch.as_tensor(np.asarray(censored).copy()).view(-1)
+        self.event_idxs = torch.nonzero(censored == 0, as_tuple=False).view(-1).tolist()
+        self.censored_idxs = torch.nonzero(censored == 1, as_tuple=False).view(-1).tolist()
+        self.n = n
+        self.min_events = max(1, min_events)
+        self.seed = seed
+
+        n_total = len(self.event_idxs) + len(self.censored_idxs)
+        n_windows = n_total // n
+        # cap by how many windows we can give >= min_events events
+        n_windows = min(n_windows, len(self.event_idxs) // self.min_events)
+        self.num_windows = max(0, n_windows)
+
+    def set_epoch(self, epoch: int):
+        self.seed = epoch
+
+    def __iter__(self):
+        g = torch.Generator()
+        g.manual_seed(self.seed)
+
+        def shuffled(items):
+            perm = torch.randperm(len(items), generator=g).tolist()
+            return [items[i] for i in perm]
+
+        events = shuffled(self.event_idxs)
+        censored = shuffled(self.censored_idxs)
+
+        windows = [[] for _ in range(self.num_windows)]
+        ei = 0
+        # deal min_events events into each window first
+        for w in range(self.num_windows):
+            for _ in range(self.min_events):
+                windows[w].append(events[ei])
+                ei += 1
+        # fill the rest from the leftover events + all censored patients
+        pool = shuffled(events[ei:] + censored)
+        pi = 0
+        for w in range(self.num_windows):
+            while len(windows[w]) < self.n and pi < len(pool):
+                windows[w].append(pool[pi])
+                pi += 1
+
+        flat = []
+        for w in windows:
+            flat.extend(w)
+        return iter(flat)
+
+    def __len__(self):
+        return self.num_windows * self.n
 
 
 class OptimizerFactory:

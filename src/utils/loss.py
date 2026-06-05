@@ -55,3 +55,28 @@ class NLLSurvLoss(object):
             return nll_loss(hazards, S, label, c, alpha=self.alpha)
         else:
             return nll_loss(hazards, S, label, c, alpha=alpha)
+
+
+class CoxSurvLoss(object):
+    """Continuous-time Cox partial-likelihood loss.
+
+    Thin wrapper around torchsurv so we don't reimplement sorting / tie handling.
+    Expects raw risk scores (higher = higher hazard = shorter survival), the
+    observed/censoring time, and the dataset `censored` indicator (1 = censored).
+    """
+
+    def __init__(self, ties: str = "breslow"):
+        self.ties = ties
+
+    def __call__(self, risks, event_time, censored):
+        # imported lazily so the dependency is only required for the Cox path
+        from torchsurv.loss.cox import neg_partial_log_likelihood
+
+        # compute in float32 for numerical stability of the log-cumsum term
+        risks = risks.float().view(-1)
+        # dataset uses censored (1 = censored); torchsurv wants event (1 = event)
+        event = (1.0 - censored.float().view(-1)).bool()
+        time = event_time.float().view(-1)
+        return neg_partial_log_likelihood(
+            risks, event, time, ties_method=self.ties, reduction="mean"
+        )
