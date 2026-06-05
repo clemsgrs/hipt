@@ -119,154 +119,17 @@ def main(cfg: DictConfig):
     custom_cmap = plt.get_cmap("jet")
     custom_cmap.set_bad(color=(0,0,0,0))
 
-    # hyperparameters
-    k = 10
-    binarize = False    # whether to binarize contributions before stitching
-    clip = True         # clip contributions at 95th percentile
-
     #########################
     #       TILE BANK       #
     #########################
 
-    # # need to enable masking
-    # region_transformer = get_region_transformer(
-    #     state_dict=region_transformer_sd,
-    #     input_embed_dim=patch_transformer.features_dim,
-    #     region_size=cfg.aggregator.region_size,
-    #     patch_size=cfg.aggregator.patch_size,
-    #     mask_attn=True,
-    #     device=device,
-    #     verbose=False,
-    # )
-
-    # df = pd.read_csv(cfg.csv)
-    # wsi_paths = [Path(x) for x in df.wsi_path.tolist()]
-    # mask_paths = [Path(x) for x in df.mask_path.tolist()]
-    # feature_paths = [Path(x) for x in df.feature_path.tolist()]
-
-    # wsis = []
-    # contributors, protectors = [], []
-    # contributions, protections = [], []
-    # with tqdm.tqdm(
-    #     zip(wsi_paths, mask_paths, feature_paths),
-    #     desc="Building tile bank",
-    #     unit=" wsi",
-    #     leave=True,
-    # ) as t:
-    #     for wsi_path, mask_path, feature_path in t:
-
-    #         wsi_name = wsi_path.stem.replace(" ", "_")
-    #         output_subdir = output_dir / wsi_name
-    #         output_subdir.mkdir(exist_ok=True, parents=True)
-
-    #         root_dir = feature_path.parents[1]
-    #         tiling_config_file = root_dir / "config.yaml"
-    #         tiling_config = get_config_from_path(tiling_config_file)
-    #         coordinates_dir = root_dir / "coordinates"
-
-    #         tile_contributions = get_tile_contribution_scores(
-    #             wsi_path=wsi_path,
-    #             feature_path=feature_path,
-    #             region_transformer=region_transformer,
-    #             slide_transformer=slide_transformer,
-    #             classifier=classifier,
-    #         ) # (num_regions, num_tiles)
-
-    #         # k = int(round(thresh * tile_contributions.numel(),0))
-    #         tile_contributions_flat = tile_contributions.flatten()
-
-    #         # plot distribution of tile contributions
-    #         plot_distribution(
-    #             contributions=tile_contributions_flat.cpu().numpy(),
-    #             save_dir=output_subdir,
-    #             suffix="tile-raw",
-    #         )
-
-    #         topk_values, topk_indices = torch.topk(tile_contributions_flat, k=k, largest=True)
-    #         bottomk_values, bottomk_indices = torch.topk(tile_contributions_flat, k=k, largest=False)
-    #         contributors.extend(topk_indices.cpu().numpy().tolist())
-    #         protectors.extend(bottomk_indices.cpu().numpy().tolist())
-    #         contributions.extend(topk_values.cpu().numpy().tolist())
-    #         protections.extend(bottomk_values.cpu().numpy().tolist())
-    #         wsis.extend([wsi_path]*k)
-
-    #         tile_contributions = tile_contributions.cpu().numpy()
-    #         if clip:
-    #             tile_contributions = clip_contributions(tile_contributions, lower=5, upper=95)
-    #             plot_distribution(
-    #                 contributions=tile_contributions.flatten(),
-    #                 save_dir=output_subdir,
-    #                 suffix="tile-clipped",
-    #             )
-    #         tile_contributions = normalize_to_unit(tile_contributions)
-    #         plot_distribution(
-    #             contributions=tile_contributions.flatten(),
-    #             save_dir=output_subdir,
-    #             suffix="tile-normalized",
-    #         )
-
-    #         # reshape to (num_regions, npatch, npatch)
-    #         num_regions, num_tiles = tile_contributions.shape
-    #         npatch = int(np.sqrt(num_tiles))
-    #         _tile_contributions = tile_contributions.reshape(num_regions, npatch, npatch)    # (num_regions, npatch, npatch)
-
-    #         # expand each (npatch,npatch) score to a (npatch*scale, npatch*scale) tile
-    #         scale = int(cfg.aggregator.patch_size / cfg.downscale)
-    #         _tile_contributions = np.repeat(_tile_contributions, scale, axis=1)
-    #         _tile_contributions = np.repeat(_tile_contributions, scale, axis=2)
-
-    #         stitched_heatmap_dir = stitch_contribution_scores(
-    #             wsi_path=wsi_path,
-    #             contributions=_tile_contributions,
-    #             coordinates_dir=coordinates_dir,
-    #             output_dir=output_subdir,
-    #             name="tile",
-    #             spacing=tiling_config.params.spacing,
-    #             tolerance=tiling_config.params.tolerance,
-    #             patch_size=cfg.aggregator.patch_size,
-    #             segmentation_parameters=tiling_config.seg_params,
-    #             downscale=cfg.downscale,
-    #             cmap=custom_cmap,
-    #             segmentation_mask_path=mask_path,
-    #             smoothing=True,
-    #             binarize=binarize,
-    #             opacity=cfg.opacity,
-    #             threshold=True,
-    #             restrict_to_tissue=cfg.restrict_to_tissue,
-    #             verbose=True,
-    #         )
-
-    #         torch.cuda.empty_cache()
-    #         break
-
-    # df = pd.DataFrame({
-    #     "wsi_path": wsis,
-    #     "contributor_index": contributors,
-    #     "contribution_score": contributions,
-    #     "protector_index": protectors,
-    #     "protection_score": protections,
-    # })
-    # df.to_csv(output_dir / "tile-bank.csv", index=False)
-
-    # del region_transformer
-    # torch.cuda.empty_cache()
-
-    #########################
-    #      REGION BANK      #
-    #########################
-
-    # hyperparameters
-    k = 3
-    binarize = False    # whether to binarize contributions before stitching
-    clip = True         # clip contributions at 95th percentile
-
-    # need to reset masking
+    # need to enable masking
     region_transformer = get_region_transformer(
         state_dict=region_transformer_sd,
         input_embed_dim=patch_transformer.features_dim,
         region_size=cfg.aggregator.region_size,
         patch_size=cfg.aggregator.patch_size,
-        mask_attn=cfg.aggregator.mask_attn,
+        mask_attn=True,
         device=device,
         verbose=False,
     )
@@ -281,8 +144,9 @@ def main(cfg: DictConfig):
     contributions, protections = [], []
     with tqdm.tqdm(
         zip(wsi_paths, mask_paths, feature_paths),
-        desc="Building region bank",
+        desc="Building tile bank",
         unit=" wsi",
+        total=len(wsi_paths),
         leave=True,
     ) as t:
         for wsi_path, mask_path, feature_path in t:
@@ -296,58 +160,62 @@ def main(cfg: DictConfig):
             tiling_config = get_config_from_path(tiling_config_file)
             coordinates_dir = root_dir / "coordinates"
 
-            region_contributions = get_region_contribution_scores(
+            tile_contributions = get_tile_contribution_scores(
                 wsi_path=wsi_path,
                 feature_path=feature_path,
                 region_transformer=region_transformer,
                 slide_transformer=slide_transformer,
                 classifier=classifier,
-            ) # (num_regions,)
+            ) # (num_regions, num_tiles)
 
-            # plot distribution of region contributions
+            tile_contributions_flat = tile_contributions.flatten()
+
+            # plot distribution of tile contributions
             plot_distribution(
-                contributions=region_contributions.cpu().numpy(),
+                contributions=tile_contributions_flat.cpu().numpy(),
                 save_dir=output_subdir,
-                suffix="region-raw",
+                suffix="tile-raw",
             )
 
-            topk_values, topk_indices = torch.topk(region_contributions, k=k, largest=True)
-            bottomk_values, bottomk_indices = torch.topk(region_contributions, k=k, largest=False)
+            topk_values, topk_indices = torch.topk(tile_contributions_flat, k=cfg.k, largest=True)
+            bottomk_values, bottomk_indices = torch.topk(tile_contributions_flat, k=cfg.k, largest=False)
             contributors.extend(topk_indices.cpu().numpy().tolist())
             protectors.extend(bottomk_indices.cpu().numpy().tolist())
             contributions.extend(topk_values.cpu().numpy().tolist())
             protections.extend(bottomk_values.cpu().numpy().tolist())
-            wsis.extend([wsi_path]*k)
+            wsis.extend([wsi_path]*cfg.k)
 
-            region_contributions = region_contributions.cpu().numpy()
-            if clip:
-                region_contributions = clip_contributions(region_contributions, lower=5, upper=95)
+            tile_contributions = tile_contributions.cpu().numpy()
+            if cfg.clip:
+                tile_contributions = clip_contributions(tile_contributions, lower=5, upper=95)
                 plot_distribution(
-                    contributions=region_contributions,
+                    contributions=tile_contributions.flatten(),
                     save_dir=output_subdir,
-                    suffix="region-clipped",
+                    suffix="tile-clipped",
                 )
-            region_contributions = normalize_to_unit(region_contributions)
+            tile_contributions = normalize_to_unit(tile_contributions)
             plot_distribution(
-                contributions=region_contributions,
+                contributions=tile_contributions.flatten(),
                 save_dir=output_subdir,
-                suffix="region-normalized",
+                suffix="tile-normalized",
             )
 
-            # reshape to (num_regions, region_size, region_size)
-            num_regions = len(region_contributions)
-            _region_contributions = region_contributions.reshape(-1, 1, 1)             # (num_regions, 1, 1)
-            scale = int(cfg.aggregator.region_size / cfg.downscale)
+            # reshape to (num_regions, npatch, npatch)
+            num_regions, num_tiles = tile_contributions.shape
+            npatch = int(np.sqrt(num_tiles))
+            _tile_contributions = tile_contributions.reshape(num_regions, npatch, npatch)    # (num_regions, npatch, npatch)
 
-            # expand each (1,1) score to a (scale, scale) region
-            _region_contributions = np.tile(_region_contributions, (1, scale, scale))   # (num_regions, region_size, region_size) if downscale=1
+            # expand each (npatch,npatch) score to a (npatch*scale, npatch*scale) tile
+            scale = int(cfg.aggregator.patch_size / cfg.downscale)
+            _tile_contributions = np.repeat(_tile_contributions, scale, axis=1)
+            _tile_contributions = np.repeat(_tile_contributions, scale, axis=2)
 
             stitched_heatmap_dir = stitch_contribution_scores(
                 wsi_path=wsi_path,
-                contributions=_region_contributions,
+                contributions=_tile_contributions,
                 coordinates_dir=coordinates_dir,
                 output_dir=output_subdir,
-                name="region",
+                name="tile",
                 spacing=tiling_config.params.spacing,
                 tolerance=tiling_config.params.tolerance,
                 patch_size=cfg.aggregator.patch_size,
@@ -355,8 +223,8 @@ def main(cfg: DictConfig):
                 downscale=cfg.downscale,
                 cmap=custom_cmap,
                 segmentation_mask_path=mask_path,
-                smoothing=True,
-                binarize=binarize,
+                smoothing=cfg.smoothing,
+                binarize=cfg.binarize,
                 opacity=cfg.opacity,
                 threshold=False,
                 restrict_to_tissue=cfg.restrict_to_tissue,
@@ -372,7 +240,133 @@ def main(cfg: DictConfig):
         "protector_index": protectors,
         "protection_score": protections,
     })
-    df.to_csv(output_dir / "region-bank.csv", index=False)
+    df.to_csv(output_dir / "tile-bank.csv", index=False)
+
+    del region_transformer
+    torch.cuda.empty_cache()
+
+    #########################
+    #      REGION BANK      #
+    #########################
+
+    # # hyperparameters
+    # k = 3
+    # binarize = False    # whether to binarize contributions before stitching
+    # clip = True         # clip contributions at 95th percentile
+
+    # # need to reset masking
+    # region_transformer = get_region_transformer(
+    #     state_dict=region_transformer_sd,
+    #     input_embed_dim=patch_transformer.features_dim,
+    #     region_size=cfg.aggregator.region_size,
+    #     patch_size=cfg.aggregator.patch_size,
+    #     mask_attn=cfg.aggregator.mask_attn,
+    #     device=device,
+    #     verbose=False,
+    # )
+
+    # df = pd.read_csv(cfg.csv)
+    # wsi_paths = [Path(x) for x in df.wsi_path.tolist()]
+    # mask_paths = [Path(x) for x in df.mask_path.tolist()]
+    # feature_paths = [Path(x) for x in df.feature_path.tolist()]
+
+    # wsis = []
+    # contributors, protectors = [], []
+    # contributions, protections = [], []
+    # with tqdm.tqdm(
+    #     zip(wsi_paths, mask_paths, feature_paths),
+    #     desc="Building region bank",
+    #     unit=" wsi",
+    #     leave=True,
+    # ) as t:
+    #     for wsi_path, mask_path, feature_path in t:
+
+    #         wsi_name = wsi_path.stem.replace(" ", "_")
+    #         output_subdir = output_dir / wsi_name
+    #         output_subdir.mkdir(exist_ok=True, parents=True)
+
+    #         root_dir = feature_path.parents[1]
+    #         tiling_config_file = root_dir / "config.yaml"
+    #         tiling_config = get_config_from_path(tiling_config_file)
+    #         coordinates_dir = root_dir / "coordinates"
+
+    #         region_contributions = get_region_contribution_scores(
+    #             wsi_path=wsi_path,
+    #             feature_path=feature_path,
+    #             region_transformer=region_transformer,
+    #             slide_transformer=slide_transformer,
+    #             classifier=classifier,
+    #         ) # (num_regions,)
+
+    #         # plot distribution of region contributions
+    #         plot_distribution(
+    #             contributions=region_contributions.cpu().numpy(),
+    #             save_dir=output_subdir,
+    #             suffix="region-raw",
+    #         )
+
+    #         topk_values, topk_indices = torch.topk(region_contributions, k=k, largest=True)
+    #         bottomk_values, bottomk_indices = torch.topk(region_contributions, k=k, largest=False)
+    #         contributors.extend(topk_indices.cpu().numpy().tolist())
+    #         protectors.extend(bottomk_indices.cpu().numpy().tolist())
+    #         contributions.extend(topk_values.cpu().numpy().tolist())
+    #         protections.extend(bottomk_values.cpu().numpy().tolist())
+    #         wsis.extend([wsi_path]*k)
+
+    #         region_contributions = region_contributions.cpu().numpy()
+    #         if clip:
+    #             region_contributions = clip_contributions(region_contributions, lower=5, upper=95)
+    #             plot_distribution(
+    #                 contributions=region_contributions,
+    #                 save_dir=output_subdir,
+    #                 suffix="region-clipped",
+    #             )
+    #         region_contributions = normalize_to_unit(region_contributions)
+    #         plot_distribution(
+    #             contributions=region_contributions,
+    #             save_dir=output_subdir,
+    #             suffix="region-normalized",
+    #         )
+
+    #         # reshape to (num_regions, region_size, region_size)
+    #         num_regions = len(region_contributions)
+    #         _region_contributions = region_contributions.reshape(-1, 1, 1)             # (num_regions, 1, 1)
+    #         scale = int(cfg.aggregator.region_size / cfg.downscale)
+
+    #         # expand each (1,1) score to a (scale, scale) region
+    #         _region_contributions = np.tile(_region_contributions, (1, scale, scale))   # (num_regions, region_size, region_size) if downscale=1
+
+    #         stitched_heatmap_dir = stitch_contribution_scores(
+    #             wsi_path=wsi_path,
+    #             contributions=_region_contributions,
+    #             coordinates_dir=coordinates_dir,
+    #             output_dir=output_subdir,
+    #             name="region",
+    #             spacing=tiling_config.params.spacing,
+    #             tolerance=tiling_config.params.tolerance,
+    #             patch_size=cfg.aggregator.patch_size,
+    #             segmentation_parameters=tiling_config.seg_params,
+    #             downscale=cfg.downscale,
+    #             cmap=custom_cmap,
+    #             segmentation_mask_path=mask_path,
+    #             smoothing=cfg.smoothing,
+    #             binarize=cfg.binarize,
+    #             opacity=cfg.opacity,
+    #             threshold=False,
+    #             restrict_to_tissue=cfg.restrict_to_tissue,
+    #             verbose=True,
+    #         )
+
+    #         torch.cuda.empty_cache()
+
+    # df = pd.DataFrame({
+    #     "wsi_path": wsis,
+    #     "contributor_index": contributors,
+    #     "contribution_score": contributions,
+    #     "protector_index": protectors,
+    #     "protection_score": protections,
+    # })
+    # df.to_csv(output_dir / "region-bank.csv", index=False)
 
 
 if __name__ == "__main__":

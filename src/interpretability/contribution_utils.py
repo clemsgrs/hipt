@@ -204,7 +204,7 @@ def get_region_contribution_scores(
             x_wsi_wo = slide_transformer.global_rho(x_att_wo)                                               # [1, E]
             logits_wo = classifier(x_wsi_wo)                                                                # [1, b]
             risk_wo = risk_from_logits(logits_wo).squeeze()
-            contribution = risk - risk_wo                                                                   # [num_tiles]
+            contribution = risk - risk_wo
             contributions.append(contribution)
 
     contributions = torch.stack(contributions)                                          # [num_regions]
