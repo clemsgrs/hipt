@@ -1,7 +1,9 @@
 model_id: "fl8qnilb"
 
-csv: "/data/temporary/clement/code/hipt/data/contribution-scores.csv"
+# csv: "/data/temporary/clement/code/hipt/data/contribution-scores.csv"
 # csv: "/data/temporary/clement/code/hipt/data/contribution-scores-small.csv"
+# csv: "/data/temporary/clement/code/hipt/data/contribution-scores-rumc-test.csv"
+csv: "/data/temporary/clement/code/hipt/data/contribution-scores-uhc.csv"
 
 output_dir: "output/contribution-maps/${model_id}"
 
@@ -32,6 +34,11 @@ highlight:
 opacity: 0.7 # set opacity for non-tissue content on stitched heatmap
 restrict_to_tissue: true
 font_fp: "/data/temporary/clement/code/hipt/montserrat.ttf"
+
+k: 10
+clip: true
+binarize: false
+smoothing: true
 
 granularity:
   patch: false
