@@ -1,5 +1,6 @@
 import argparse
 import gc
+import logging
 import multiprocessing as mp
 import os
 import time
@@ -14,6 +15,7 @@ import wandb
 
 from src.data.dataset import DatasetOptions, ExtractedFeaturesSurvivalDataset
 from src.models import ModelFactory
+from src.models.parameter_counts import log_trainable_parameter_breakdown
 from src.utils import (
     EarlyStopping,
     LossFactory,
@@ -31,6 +33,8 @@ from src.utils import (
 )
 from src.utils import setup
 from src.utils import update_log_dict
+
+logger = logging.getLogger("hipt")
 
 
 def get_args_parser(add_help: bool = True):
@@ -161,6 +165,7 @@ def main(args):
         ).get_model()
         model.to(device)
         print(model)
+        log_trainable_parameter_breakdown(model, logger)
 
         print("Configuring optimizer & scheduler")
         model_params = filter(lambda p: p.requires_grad, model.parameters())
