@@ -8,6 +8,7 @@ torch==1.13.1
 torchvision==0.14.1
 scikit-learn
 scikit-survival
+torchsurv==0.1.6
 tqdm
 wholeslidedata<0.0.16
 opencv-python

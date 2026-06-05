@@ -18,10 +18,15 @@ from src.utils import (
     SchedulerFactory,
     compute_time,
 )
-from src.utils import inference_survival as inference
+from src.utils import (
+    inference_survival,
+    inference_coxph,
+    train_survival,
+    train_coxph,
+    tune_survival,
+    tune_coxph,
+)
 from src.utils import setup
-from src.utils import train_survival as train
-from src.utils import tune_survival as tune
 from src.utils import update_log_dict
 
 
@@ -95,19 +100,35 @@ def main(args):
     if cfg.data.test_csv:
         test_dataset = ExtractedFeaturesSurvivalDataset(test_dataset_options)
 
-    m, n = train_dataset.num_classes, tune_dataset.num_classes
-    assert (
-        m == n == cfg.num_classes
-    ), f"Either train (C={m}) or tune (C={n}) sets doesnt cover full class spectrum (C={cfg.num_classes})"
+    is_cox = cfg.survival.loss == "coxph"
+    if is_cox:
+        # Cox uses a single risk scalar head; the discrete bin spectrum is irrelevant
+        num_classes = 1
+        train = train_coxph
+        tune = tune_coxph
+        inference = inference_coxph
+    else:
+        m, n = train_dataset.num_classes, tune_dataset.num_classes
+        assert (
+            m == n == cfg.num_classes
+        ), f"Either train (C={m}) or tune (C={n}) sets doesnt cover full class spectrum (C={cfg.num_classes})"
+        num_classes = cfg.num_classes
+        train = train_survival
+        tune = tune_survival
+        inference = inference_survival
 
-    criterion = LossFactory(cfg.task).get_loss()
+    criterion = LossFactory(
+        cfg.task,
+        survival_loss=cfg.survival.loss,
+        cox_ties=cfg.survival.cox.ties,
+    ).get_loss()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     print("Initializing model")
     model = ModelFactory(
         level=cfg.model.level,
-        num_classes=cfg.num_classes,
+        num_classes=num_classes,
         options=cfg.model,
     ).get_model()
     model.to(device)
@@ -148,18 +169,33 @@ def main(args):
             if cfg.wandb.enable:
                 log_dict = {"epoch": epoch + 1}
 
-            train_results = train(
-                epoch + 1,
-                model,
-                train_dataset,
-                optimizer,
-                criterion,
-                metric_names=cfg.metrics,
-                batch_size=cfg.training.batch_size,
-                gradient_accumulation=cfg.training.gradient_accumulation,
-                num_workers=num_workers,
-                device=device,
-            )
+            if is_cox:
+                train_results = train(
+                    epoch + 1,
+                    model,
+                    train_dataset,
+                    optimizer,
+                    criterion,
+                    metric_names=cfg.metrics,
+                    n=cfg.survival.cox.n,
+                    event_balanced=cfg.survival.cox.event_balanced,
+                    min_events=cfg.survival.cox.min_events,
+                    num_workers=num_workers,
+                    device=device,
+                )
+            else:
+                train_results = train(
+                    epoch + 1,
+                    model,
+                    train_dataset,
+                    optimizer,
+                    criterion,
+                    metric_names=cfg.metrics,
+                    batch_size=cfg.training.batch_size,
+                    gradient_accumulation=cfg.training.gradient_accumulation,
+                    num_workers=num_workers,
+                    device=device,
+                )
 
             if cfg.wandb.enable:
                 update_log_dict("train", train_results, log_dict)

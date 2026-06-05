@@ -21,10 +21,15 @@ from src.utils import (
     SchedulerFactory,
     compute_time,
 )
-from src.utils import inference_survival as inference
+from src.utils import (
+    inference_survival,
+    inference_coxph,
+    train_survival,
+    train_coxph,
+    tune_survival,
+    tune_coxph,
+)
 from src.utils import setup
-from src.utils import train_survival as train
-from src.utils import tune_survival as tune
 from src.utils import update_log_dict
 
 
@@ -65,6 +70,12 @@ def main(args):
     num_workers = min(mp.cpu_count(), cfg.speed.num_workers)
     if "SLURM_JOB_CPUS_PER_NODE" in os.environ:
         num_workers = min(num_workers, int(os.environ["SLURM_JOB_CPUS_PER_NODE"]))
+
+    is_cox = cfg.survival.loss == "coxph"
+    if is_cox:
+        train, tune, inference = train_coxph, tune_coxph, inference_coxph
+    else:
+        train, tune, inference = train_survival, tune_survival, inference_survival
 
     fold_root_dir = Path(cfg.data.fold_dir)
     nfold = len([_ for _ in fold_root_dir.glob("fold*")])
@@ -124,19 +135,28 @@ def main(args):
         if test_df is not None:
             test_dataset = ExtractedFeaturesSurvivalDataset(test_dataset_options)
 
-        m, n = train_dataset.num_classes, tune_dataset.num_classes
-        assert (
-            m == n == cfg.num_classes
-        ), f"Either train (C={m}) or tune (C={n}) sets doesnt cover full class spectrum (C={cfg.num_classes})"
+        if is_cox:
+            # Cox uses a single risk scalar head; discrete bins are irrelevant
+            num_classes = 1
+        else:
+            m, n = train_dataset.num_classes, tune_dataset.num_classes
+            assert (
+                m == n == cfg.num_classes
+            ), f"Either train (C={m}) or tune (C={n}) sets doesnt cover full class spectrum (C={cfg.num_classes})"
+            num_classes = cfg.num_classes
 
-        criterion = LossFactory(cfg.task).get_loss()
+        criterion = LossFactory(
+            cfg.task,
+            survival_loss=cfg.survival.loss,
+            cox_ties=cfg.survival.cox.ties,
+        ).get_loss()
 
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         print("Initializing model")
         model = ModelFactory(
             level=cfg.model.level,
-            num_classes=cfg.num_classes,
+            num_classes=num_classes,
             options=cfg.model,
         ).get_model()
         model.to(device)
@@ -180,18 +200,33 @@ def main(args):
                 if cfg.wandb.enable:
                     log_dict = {f"train/fold_{i}/epoch": epoch + 1}
 
-                train_results = train(
-                    epoch + 1,
-                    model,
-                    train_dataset,
-                    optimizer,
-                    criterion,
-                    metric_names=cfg.metrics,
-                    batch_size=cfg.training.batch_size,
-                    gradient_accumulation=cfg.training.gradient_accumulation,
-                    num_workers=num_workers,
-                    device=device,
-                )
+                if is_cox:
+                    train_results = train(
+                        epoch + 1,
+                        model,
+                        train_dataset,
+                        optimizer,
+                        criterion,
+                        metric_names=cfg.metrics,
+                        n=cfg.survival.cox.n,
+                        event_balanced=cfg.survival.cox.event_balanced,
+                        min_events=cfg.survival.cox.min_events,
+                        num_workers=num_workers,
+                        device=device,
+                    )
+                else:
+                    train_results = train(
+                        epoch + 1,
+                        model,
+                        train_dataset,
+                        optimizer,
+                        criterion,
+                        metric_names=cfg.metrics,
+                        batch_size=cfg.training.batch_size,
+                        gradient_accumulation=cfg.training.gradient_accumulation,
+                        num_workers=num_workers,
+                        device=device,
+                    )
 
                 if cfg.wandb.enable:
                     update_log_dict(f"train/fold_{i}", train_results, log_dict, step=f"train/fold_{i}/epoch")

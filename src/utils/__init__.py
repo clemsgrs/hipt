@@ -27,4 +27,7 @@ from .survival_utils import (
     train as train_survival,
     tune as tune_survival,
     inference as inference_survival,
+    train_coxph,
+    tune_coxph,
+    inference_coxph,
 )

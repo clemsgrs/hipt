@@ -1,0 +1,69 @@
+# Example continuous-time CoxPH survival training config.
+# Mirrors src/configs/default.yaml; override paths for your dataset.
+# Run: python -m src.train.survival --config-file config/training/survival/coxph.yaml
+
+data:
+  train_csv: "/path/to/train.csv"   # needs columns: case_id, <label_name>, censored
+  tune_csv: "/path/to/tune.csv"
+  test_csv:
+
+output_dir: "output"
+
+task: "survival"
+label_name: "survival_months"       # continuous event/censoring time column
+
+survival:
+  loss: "coxph"                     # selects the Cox path (default is "nll")
+  cox:
+    n: 48                           # prediction-accumulation window = risk-set size
+    ties: "breslow"                 # "breslow" or "efron" (passed to torchsurv)
+    event_balanced: true            # guarantee >= min_events events per window
+    min_events: 1
+
+# num_classes is forced to 1 for the Cox head; this value is ignored by the Cox path
+num_classes: 1
+
+metrics:
+  - "c-index"
+
+features_dir: "/path/to/precomputed/tile/features"
+features_dim: 1024
+
+model:
+  level: "global"
+
+training:
+  nepochs: 100
+  batch_size: 1                     # bags are variable-size, always 1
+  # gradient_accumulation is ignored by the Cox path (one step per window)
+
+tuning:
+  batch_size: 1
+  tune_every: 1
+
+testing:
+  retrieve_checkpoint: "best"
+
+optim:
+  name: "adam"
+  # one optimizer step per window (~n fewer updates/epoch than NLL) -> consider a
+  # higher lr and/or more epochs than the discrete-time NLL baseline
+  lr: 0.0002
+  wd: 1e-5
+  lr_scheduler:
+    name: "step"
+    step_size: 20
+    gamma: 0.5
+
+early_stopping:
+  enable: true
+  tracking: "loss"                  # full-cohort Cox loss (deterministic across epochs)
+  min_max: "min"
+  patience: 20
+  min_epoch: 50
+
+speed:
+  num_workers: 8
+
+wandb:
+  enable: false
